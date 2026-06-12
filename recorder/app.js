@@ -250,10 +250,11 @@ function stopSession() {
 
 function newSessionMidRecording() {
   if (!confirm(`Save "${currentSession.label}" and start a new session?`)) return;
+  const mode = currentSession.mode;
   saveAndEndSession();
   // GPS keeps running — carry lastGpsFix into the next session's GPS phase
-  initSetupScreen();
-  showScreen('screen-setup');
+  selectedMode = mode;
+  goToRecordingScreen();
 }
 
 function saveAndEndSession() {
