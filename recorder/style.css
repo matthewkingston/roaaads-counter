@@ -1,0 +1,469 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+:root {
+  --bg:       #0f0f0f;
+  --surface:  #1c1c1e;
+  --border:   #2c2c2e;
+  --text:     #f2f2f7;
+  --dim:      #8e8e93;
+  --with:     #2563eb;
+  --against:  #dc2626;
+  --green:    #16a34a;
+  --stop:     #7c3aed;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+/* ── Screens ── */
+
+.screen {
+  display: none;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.screen.active {
+  display: flex;
+}
+
+#screen-recording {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* ── Shared ── */
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+header h1 {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.btn-back {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 0.95rem;
+  padding: 4px 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-primary {
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-large {
+  width: 100%;
+  padding: 18px;
+  font-size: 1.1rem;
+  border-radius: 14px;
+  margin-top: 8px;
+}
+
+/* ── Home ── */
+
+#sessions-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.empty-state {
+  color: var(--dim);
+  text-align: center;
+  padding: 56px 24px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.session-card {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.session-info { flex: 1; min-width: 0; }
+
+.session-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta {
+  color: var(--dim);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.session-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: flex-start;
+}
+
+.btn-sm {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.btn-sm.danger {
+  color: #ef4444;
+  border-color: #7f1d1d;
+}
+
+/* ── Setup ── */
+
+.form {
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.form label {
+  font-size: 0.82rem;
+  color: var(--dim);
+  margin-top: 10px;
+}
+
+.form input[type="text"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 13px 14px;
+  font-size: 0.95rem;
+  width: 100%;
+  outline: none;
+}
+
+.form input[type="text"]:focus {
+  border-color: var(--green);
+}
+
+.mode-picker {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.mode-btn {
+  flex: 1;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 16px 12px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s;
+}
+
+.mode-btn.active {
+  border-color: var(--green);
+}
+
+.mode-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.mode-desc {
+  font-size: 0.73rem;
+  color: var(--dim);
+  line-height: 1.5;
+}
+
+.mode-desc em {
+  color: var(--text);
+  font-style: normal;
+  font-weight: 600;
+}
+
+/* ── GPS phase panel ── */
+
+.gps-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 20px;
+  gap: 32px;
+}
+
+.gps-big-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.gps-big-icon {
+  font-size: 3rem;
+  line-height: 1;
+}
+
+.gps-big-text {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.gps-big-text.gps-ready { color: #22c55e; }
+.gps-big-text.gps-err   { color: #ef4444; }
+
+.gps-big-sub {
+  font-size: 0.85rem;
+  color: var(--dim);
+}
+
+.gps-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.btn-start-rec {
+  width: 100%;
+  padding: 18px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  border: none;
+  border-radius: 14px;
+  background: var(--green);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-start-rec:disabled {
+  background: var(--border);
+  color: var(--dim);
+  cursor: default;
+}
+
+/* ── Recording header ── */
+
+.rec-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.rec-label-text {
+  font-weight: 600;
+  font-size: 0.88rem;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-timer {
+  font-size: 0.82rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.gps-status {
+  font-size: 0.72rem;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+
+.gps-status.ok  { color: #22c55e; }
+.gps-status.err { color: #ef4444; }
+
+/* ── Count UI ── */
+
+#counting-panel {
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#single-ui { display: none; }
+
+.count-ui {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+  min-height: 0;
+}
+
+/* Dual */
+
+.dual-buttons {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.tap-btn {
+  border: none;
+  border-radius: 18px;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  user-select: none;
+  transition: opacity 0.08s, transform 0.08s;
+  -webkit-user-select: none;
+}
+
+.tap-btn:active {
+  opacity: 0.82;
+  transform: scale(0.97);
+}
+
+.tap-btn-with    { flex: 1; background: var(--with); }
+.tap-btn-against { flex: 1; background: var(--against); }
+
+.tap-btn-single {
+  flex: 1;
+  width: 100%;
+  background: var(--with);
+}
+
+.tap-label {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.tap-arrow {
+  font-size: 2.2rem;
+  line-height: 1;
+}
+
+.counts-row {
+  display: flex;
+  justify-content: space-around;
+  font-size: 0.95rem;
+  padding: 4px 0;
+  flex-shrink: 0;
+}
+
+.counts-row strong {
+  font-size: 1.25rem;
+}
+
+/* Single */
+
+.direction-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.toggle-label {
+  color: var(--dim);
+  font-size: 0.88rem;
+  flex-shrink: 0;
+}
+
+.toggle-btn {
+  background: var(--surface);
+  border: 2px solid var(--with);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transition: border-color 0.15s;
+}
+
+.toggle-btn.against { border-color: var(--against); }
+
+.toggle-hint {
+  font-size: 0.62rem;
+  color: var(--dim);
+  font-weight: 400;
+}
+
+/* ── Stop button ── */
+
+.btn-stop {
+  background: var(--stop);
+  border: none;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 16px;
+  margin: 0 14px 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.1s;
+}
+
+.btn-stop:active { opacity: 0.8; }

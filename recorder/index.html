@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Traffic Counter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── Home ── -->
+  <div id="screen-home" class="screen">
+    <header>
+      <h1>Traffic Counter</h1>
+      <button id="btn-new-session" class="btn-primary">+ New Session</button>
+    </header>
+    <div id="sessions-list"></div>
+    <p id="no-sessions" class="empty-state">No sessions yet.<br>Tap "+ New Session" to start.</p>
+  </div>
+
+  <!-- ── Setup ── -->
+  <div id="screen-setup" class="screen">
+    <header>
+      <button class="btn-back" id="btn-back-setup">← Back</button>
+      <h1>New Session</h1>
+    </header>
+    <div class="form">
+      <label for="session-label">Label (optional)</label>
+      <input type="text" id="session-label" placeholder="e.g. Main St northbound" autocomplete="off">
+
+      <label>Counting Mode</label>
+      <div class="mode-picker">
+        <button class="mode-btn active" data-mode="dual">
+          <span class="mode-title">Dual</span>
+          <span class="mode-desc">Two buttons<br>With &amp; Against<br><em>Both directions logged</em></span>
+        </button>
+        <button class="mode-btn" data-mode="single">
+          <span class="mode-title">Single</span>
+          <span class="mode-desc">One button + toggle<br>Switch direction manually<br><em>One direction at a time</em></span>
+        </button>
+      </div>
+
+      <button id="btn-go-to-recording" class="btn-primary btn-large">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── Recording ── -->
+  <div id="screen-recording" class="screen">
+
+    <!-- Header: always visible -->
+    <div class="rec-header">
+      <button id="btn-back-recording" class="btn-back">←</button>
+      <span id="rec-label" class="rec-label-text"></span>
+      <span id="rec-timer" class="rec-timer">00:00:00</span>
+      <span id="gps-status" class="gps-status">GPS...</span>
+    </div>
+
+    <!-- GPS phase -->
+    <div id="gps-panel" class="gps-panel">
+      <div class="gps-big-display">
+        <div id="gps-big-icon" class="gps-big-icon">&#128205;</div>
+        <div id="gps-big-text" class="gps-big-text">Not started</div>
+        <div id="gps-big-sub" class="gps-big-sub"></div>
+      </div>
+      <div class="gps-buttons">
+        <button id="btn-start-gps" class="btn-primary btn-large">Start GPS</button>
+        <button id="btn-start-recording" class="btn-start-rec btn-large" disabled>
+          Start Recording
+        </button>
+      </div>
+    </div>
+
+    <!-- Counting phase -->
+    <div id="counting-panel">
+
+      <!-- Dual mode -->
+      <div id="dual-ui" class="count-ui">
+        <div class="dual-buttons">
+          <button id="btn-with" class="tap-btn tap-btn-with">
+            <span class="tap-label">WITH</span>
+            <span class="tap-arrow">&#8593;</span>
+          </button>
+          <button id="btn-against" class="tap-btn tap-btn-against">
+            <span class="tap-label">AGAINST</span>
+            <span class="tap-arrow">&#8595;</span>
+          </button>
+        </div>
+        <div class="counts-row">
+          <span>With: <strong id="count-with-dual">0</strong></span>
+          <span>Against: <strong id="count-against-dual">0</strong></span>
+        </div>
+      </div>
+
+      <!-- Single mode -->
+      <div id="single-ui" class="count-ui">
+        <div class="direction-toggle">
+          <span class="toggle-label">Counting:</span>
+          <button id="btn-toggle-direction" class="toggle-btn">
+            <span id="toggle-current">WITH &#8593;</span>
+            <span class="toggle-hint">tap to switch</span>
+          </button>
+        </div>
+        <button id="btn-tap-single" class="tap-btn tap-btn-single">
+          <span class="tap-label">TAP CAR</span>
+          <span class="tap-arrow" id="single-tap-arrow">&#8593;</span>
+        </button>
+        <div class="counts-row">
+          <span>With: <strong id="count-with-single">0</strong></span>
+          <span>Against: <strong id="count-against-single">0</strong></span>
+          <span>Total: <strong id="count-total-single">0</strong></span>
+        </div>
+      </div>
+
+      <button id="btn-stop" class="btn-stop">&#9632; Stop</button>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
