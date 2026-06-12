@@ -458,27 +458,45 @@ function exportSelectedCSV() {
   if (selected.length === 0) return;
 
   const header = [
-    'session_id', 'road_name', 'session_mode', 'session_start', 'session_end',
-    'timestamp', 'direction', 'directionMode', 'lat', 'lng', 'gps_accuracy_m',
+    'session_id', 'session_label', 'session_mode', 'session_start', 'session_end',
+    'event_type', 'timestamp', 'direction', 'directionMode', 'lat', 'lng', 'gps_accuracy_m',
   ];
   const rows = [header];
 
   for (const session of selected) {
-    for (const e of session.events) {
-      rows.push([
-        session.id.slice(0, 8),
-        session.label,
-        session.mode,
-        session.startTime,
-        session.endTime ?? '',
-        e.timestamp,
-        e.direction,
-        e.directionMode,
-        e.nearestGps?.lat      ?? '',
-        e.nearestGps?.lng      ?? '',
-        e.nearestGps?.accuracy ?? '',
-      ].map(csvEscape));
-    }
+    const sessionMeta = [
+      session.id.slice(0, 8),
+      session.label,
+      session.mode,
+      session.startTime,
+      session.endTime ?? '',
+    ];
+
+    const carRows = session.events.map(e => [
+      ...sessionMeta,
+      'car',
+      e.timestamp,
+      e.direction,
+      e.directionMode,
+      e.nearestGps?.lat      ?? '',
+      e.nearestGps?.lng      ?? '',
+      e.nearestGps?.accuracy ?? '',
+    ]);
+
+    const gpsRows = session.gpsTrack.map(g => [
+      ...sessionMeta,
+      'gps_track',
+      g.timestamp,
+      '', '',
+      g.lat,
+      g.lng,
+      g.accuracy,
+    ]);
+
+    const merged = [...carRows, ...gpsRows]
+      .sort((a, b) => a[6].localeCompare(b[6])); // sort by timestamp col
+
+    rows.push(...merged.map(r => r.map(csvEscape)));
   }
 
   const date = new Date().toISOString().slice(0, 10);
