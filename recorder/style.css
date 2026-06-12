@@ -101,6 +101,39 @@ header h1 {
   overflow-y: auto;
 }
 
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.chk-all-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.chk-all-label input[type="checkbox"],
+.session-chk {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.batch-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .empty-state {
   color: var(--dim);
   text-align: center;
@@ -113,7 +146,6 @@ header h1 {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
 }
@@ -450,9 +482,17 @@ header h1 {
   font-weight: 400;
 }
 
-/* ── Stop button ── */
+/* ── Bottom actions (stop + new session) ── */
+
+.bottom-actions {
+  display: flex;
+  gap: 10px;
+  margin: 0 14px 18px;
+  flex-shrink: 0;
+}
 
 .btn-stop {
+  flex: 2;
   background: var(--stop);
   border: none;
   border-radius: 14px;
@@ -460,10 +500,23 @@ header h1 {
   font-size: 1rem;
   font-weight: 700;
   padding: 16px;
-  margin: 0 14px 18px;
   cursor: pointer;
-  flex-shrink: 0;
   transition: opacity 0.1s;
 }
 
 .btn-stop:active { opacity: 0.8; }
+
+.btn-new-session-rec {
+  flex: 1;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 14px 10px;
+  cursor: pointer;
+  transition: opacity 0.1s;
+}
+
+.btn-new-session-rec:active { opacity: 0.7; }

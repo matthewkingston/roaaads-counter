@@ -16,6 +16,15 @@
       <h1>Traffic Counter</h1>
       <button id="btn-new-session" class="btn-primary">+ New Session</button>
     </header>
+    <div id="batch-bar" class="batch-bar" style="display:none">
+      <label class="chk-all-label">
+        <input type="checkbox" id="chk-select-all"> Select all
+      </label>
+      <div class="batch-actions">
+        <button id="btn-export-selected" class="btn-sm" disabled>Export CSV</button>
+        <button id="btn-clear-all" class="btn-sm danger">Clear all</button>
+      </div>
+    </div>
     <div id="sessions-list"></div>
     <p id="no-sessions" class="empty-state">No sessions yet.<br>Tap "+ New Session" to start.</p>
   </div>
@@ -27,7 +36,7 @@
       <h1>New Session</h1>
     </header>
     <div class="form">
-      <label for="session-label">Label (optional)</label>
+      <label for="session-label">Road name</label>
       <input type="text" id="session-label" placeholder="e.g. Main St northbound" autocomplete="off">
 
       <label>Counting Mode</label>
@@ -113,7 +122,10 @@
         </div>
       </div>
 
-      <button id="btn-stop" class="btn-stop">&#9632; Stop</button>
+      <div class="bottom-actions">
+        <button id="btn-new-session-rec" class="btn-new-session-rec">&#8635; New Session</button>
+        <button id="btn-stop" class="btn-stop">&#9632; Stop</button>
+      </div>
     </div>
 
   </div>

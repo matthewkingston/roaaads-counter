@@ -12,6 +12,7 @@ let lastTrackTimestamp = 0;
 let timerInterval = null;
 let selectedMode = 'dual';
 let singleDirection = 'with';
+let selectedIds = new Set();
 
 // ── Storage ────────────────────────────────────────────────────────────────
 
@@ -41,8 +42,15 @@ function renderSessions() {
   const empty = document.getElementById('no-sessions');
   list.innerHTML = '';
 
+  // Remove any selectedIds that no longer exist
+  const existingIds = new Set(sessions.map(s => s.id));
+  for (const id of selectedIds) {
+    if (!existingIds.has(id)) selectedIds.delete(id);
+  }
+
   if (sessions.length === 0) {
     empty.style.display = 'block';
+    updateBatchBar();
     return;
   }
   empty.style.display = 'none';
@@ -55,10 +63,12 @@ function renderSessions() {
     const duration     = session.endTime
       ? formatDuration(new Date(session.endTime) - new Date(session.startTime))
       : 'in progress';
+    const isChecked = selectedIds.has(session.id) ? 'checked' : '';
 
     const card = document.createElement('div');
     card.className = 'session-card';
     card.innerHTML = `
+      <input type="checkbox" class="session-chk" data-id="${session.id}" ${isChecked}>
       <div class="session-info">
         <div class="session-title">${escapeHtml(session.label)}</div>
         <div class="session-meta">
@@ -67,26 +77,64 @@ function renderSessions() {
         </div>
       </div>
       <div class="session-actions">
-        <button class="btn-sm" data-action="json" data-id="${session.id}">JSON</button>
-        <button class="btn-sm" data-action="csv"  data-id="${session.id}">CSV</button>
         <button class="btn-sm danger" data-action="del" data-id="${session.id}">&#10005;</button>
       </div>`;
     list.appendChild(card);
   });
+
+  updateBatchBar();
 }
+
+function updateBatchBar() {
+  const bar       = document.getElementById('batch-bar');
+  const exportBtn = document.getElementById('btn-export-selected');
+  const selectAll = document.getElementById('chk-select-all');
+
+  if (sessions.length === 0) {
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = 'flex';
+
+  const count = selectedIds.size;
+  exportBtn.disabled   = count === 0;
+  exportBtn.textContent = count > 0 ? `Export CSV (${count})` : 'Export CSV';
+  selectAll.checked       = count > 0 && count === sessions.length;
+  selectAll.indeterminate = count > 0 && count < sessions.length;
+}
+
+document.getElementById('sessions-list').addEventListener('change', e => {
+  const chk = e.target.closest('.session-chk');
+  if (!chk) return;
+  if (chk.checked) selectedIds.add(chk.dataset.id);
+  else selectedIds.delete(chk.dataset.id);
+  updateBatchBar();
+});
 
 document.getElementById('sessions-list').addEventListener('click', e => {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
-  const { action, id } = btn.dataset;
-  if (action === 'json') exportJSON(id);
-  if (action === 'csv')  exportCSV(id);
-  if (action === 'del')  deleteSession(id);
+  if (btn.dataset.action === 'del') deleteSession(btn.dataset.id);
+});
+
+document.getElementById('chk-select-all').addEventListener('change', e => {
+  if (e.target.checked) sessions.forEach(s => selectedIds.add(s.id));
+  else selectedIds.clear();
+  renderSessions();
 });
 
 function deleteSession(id) {
   if (!confirm('Delete this session?')) return;
   sessions = sessions.filter(s => s.id !== id);
+  selectedIds.delete(id);
+  saveSessions();
+  renderSessions();
+}
+
+function clearAllSessions() {
+  if (!confirm(`Delete all ${sessions.length} session${sessions.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+  sessions = [];
+  selectedIds.clear();
   saveSessions();
   renderSessions();
 }
@@ -117,18 +165,29 @@ function goToRecordingScreen() {
     label: document.getElementById('session-label').value.trim() || new Date().toLocaleString(),
     mode: selectedMode,
   };
-  lastGpsFix = null;
   lastTrackTimestamp = 0;
 
-  // Reset GPS panel UI
-  setGPSPhaseUI('idle');
-  document.getElementById('btn-start-gps').disabled = false;
-  document.getElementById('btn-start-gps').textContent = 'Start GPS';
-  document.getElementById('btn-start-recording').disabled = true;
+  // If GPS is already running (came from New Session mid-recording), show current state
+  if (gpsWatchId !== null) {
+    document.getElementById('btn-start-gps').disabled = true;
+    document.getElementById('btn-start-gps').textContent = 'GPS Active';
+    if (lastGpsFix) {
+      setGPSPhaseUI('ready', lastGpsFix.accuracy);
+      document.getElementById('btn-start-recording').disabled = false;
+    } else {
+      setGPSPhaseUI('acquiring');
+      document.getElementById('btn-start-recording').disabled = true;
+    }
+  } else {
+    lastGpsFix = null;
+    setGPSPhaseUI('idle');
+    document.getElementById('btn-start-gps').disabled = false;
+    document.getElementById('btn-start-gps').textContent = 'Start GPS';
+    document.getElementById('btn-start-recording').disabled = true;
+  }
+
   document.getElementById('rec-label').textContent = pendingConfig.label;
   document.getElementById('rec-timer').textContent = '00:00:00';
-
-  // Show GPS panel, hide counting panel and timer
   document.getElementById('gps-panel').style.display      = 'flex';
   document.getElementById('counting-panel').style.display = 'none';
   document.getElementById('rec-timer').style.display      = 'none';
@@ -157,7 +216,6 @@ function handleStartRecording() {
     events: [],
   };
 
-  // Snapshot current GPS fix as the first track point
   if (lastGpsFix) {
     currentSession.gpsTrack.push({ ...lastGpsFix });
     lastTrackTimestamp = Date.now();
@@ -175,7 +233,6 @@ function handleStartRecording() {
     document.getElementById(id).textContent = '0';
   });
 
-  // Switch to counting panel
   document.getElementById('gps-panel').style.display      = 'none';
   document.getElementById('counting-panel').style.display = 'flex';
   document.getElementById('rec-timer').style.display      = 'inline';
@@ -186,14 +243,26 @@ function handleStartRecording() {
 
 function stopSession() {
   if (!confirm('Stop recording and save session?')) return;
+  saveAndEndSession();
+  stopGPS();
+  renderSessions();
+  showScreen('screen-home');
+}
+
+function newSessionMidRecording() {
+  if (!confirm(`Save "${currentSession.label}" and start a new session?`)) return;
+  saveAndEndSession();
+  // GPS keeps running — carry lastGpsFix into the next session's GPS phase
+  initSetupScreen();
+  showScreen('screen-setup');
+}
+
+function saveAndEndSession() {
   currentSession.endTime = new Date().toISOString();
   stopTimer();
-  stopGPS();
   sessions.push(currentSession);
   saveSessions();
   currentSession = null;
-  renderSessions();
-  showScreen('screen-home');
 }
 
 function cancelRecording() {
@@ -220,11 +289,11 @@ function isRecentFix(fix) {
 function updateCounts() {
   const w = currentSession.events.filter(e => e.direction === 'with').length;
   const a = currentSession.events.filter(e => e.direction === 'against').length;
-  document.getElementById('count-with-dual').textContent     = w;
-  document.getElementById('count-against-dual').textContent  = a;
-  document.getElementById('count-with-single').textContent   = w;
+  document.getElementById('count-with-dual').textContent      = w;
+  document.getElementById('count-against-dual').textContent   = a;
+  document.getElementById('count-with-single').textContent    = w;
   document.getElementById('count-against-single').textContent = a;
-  document.getElementById('count-total-single').textContent  = w + a;
+  document.getElementById('count-total-single').textContent   = w + a;
 }
 
 // ── GPS ────────────────────────────────────────────────────────────────────
@@ -262,13 +331,10 @@ function onGPSSuccess(pos) {
   lastGpsFix = fix;
   setGPSStatus('ok', fix.accuracy);
 
-  // GPS phase: enable Start Recording on first fix
-  const startRecBtn = document.getElementById('btn-start-recording');
-  if (startRecBtn && startRecBtn.disabled) {
-    startRecBtn.disabled = false;
+  // GPS phase: update UI and enable Start Recording on first fix
+  if (document.getElementById('gps-panel').style.display !== 'none') {
     setGPSPhaseUI('ready', fix.accuracy);
-  } else if (document.getElementById('gps-panel').style.display !== 'none') {
-    setGPSPhaseUI('ready', fix.accuracy);
+    document.getElementById('btn-start-recording').disabled = false;
   }
 
   // Counting phase: append to track at interval
@@ -281,7 +347,7 @@ function onGPSSuccess(pos) {
   }
 }
 
-function onGPSError(err) {
+function onGPSError() {
   setGPSStatus('error');
   if (document.getElementById('gps-panel').style.display !== 'none') {
     setGPSPhaseUI('error');
@@ -321,7 +387,7 @@ function setGPSPhaseUI(state, accuracy) {
     text.className   = 'gps-big-text';
   } else if (state === 'ready') {
     icon.textContent = '✅';
-    text.textContent = `Position locked`;
+    text.textContent = 'Position locked';
     sub.textContent  = accuracy != null ? `±${accuracy}m accuracy` : '';
     text.className   = 'gps-big-text gps-ready';
   } else if (state === 'error') {
@@ -374,40 +440,51 @@ function toggleSingleDirection() {
 
 function updateSingleUI() {
   const isWith = singleDirection === 'with';
-  document.getElementById('btn-toggle-direction').className = `toggle-btn${isWith ? '' : ' against'}`;
-  document.getElementById('toggle-current').textContent    = isWith ? 'WITH ↑' : 'AGAINST ↓';
-  document.getElementById('single-tap-arrow').textContent  = isWith ? '↑' : '↓';
-  document.getElementById('btn-tap-single').style.background = isWith ? 'var(--with)' : 'var(--against)';
+  document.getElementById('btn-toggle-direction').className    = `toggle-btn${isWith ? '' : ' against'}`;
+  document.getElementById('toggle-current').textContent        = isWith ? 'WITH ↑' : 'AGAINST ↓';
+  document.getElementById('single-tap-arrow').textContent      = isWith ? '↑' : '↓';
+  document.getElementById('btn-tap-single').style.background   = isWith ? 'var(--with)' : 'var(--against)';
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────
 
-function exportJSON(id) {
-  const session = sessions.find(s => s.id === id);
-  if (!session) return;
-  downloadFile(
-    `traffic_${session.id.slice(0, 8)}.json`,
-    JSON.stringify(session, null, 2),
-    'application/json'
-  );
+function csvEscape(val) {
+  const s = String(val ?? '');
+  return s.includes(',') || s.includes('"') || s.includes('\n')
+    ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function exportCSV(id) {
-  const session = sessions.find(s => s.id === id);
-  if (!session) return;
-  const rows = [
-    ['timestamp', 'direction', 'directionMode', 'lat', 'lng', 'gps_accuracy_m'],
-    ...session.events.map(e => [
-      e.timestamp,
-      e.direction,
-      e.directionMode,
-      e.nearestGps?.lat       ?? '',
-      e.nearestGps?.lng       ?? '',
-      e.nearestGps?.accuracy  ?? '',
-    ]),
+function exportSelectedCSV() {
+  const selected = sessions.filter(s => selectedIds.has(s.id));
+  if (selected.length === 0) return;
+
+  const header = [
+    'session_id', 'road_name', 'session_mode', 'session_start', 'session_end',
+    'timestamp', 'direction', 'directionMode', 'lat', 'lng', 'gps_accuracy_m',
   ];
+  const rows = [header];
+
+  for (const session of selected) {
+    for (const e of session.events) {
+      rows.push([
+        session.id.slice(0, 8),
+        session.label,
+        session.mode,
+        session.startTime,
+        session.endTime ?? '',
+        e.timestamp,
+        e.direction,
+        e.directionMode,
+        e.nearestGps?.lat      ?? '',
+        e.nearestGps?.lng      ?? '',
+        e.nearestGps?.accuracy ?? '',
+      ].map(csvEscape));
+    }
+  }
+
+  const date = new Date().toISOString().slice(0, 10);
   downloadFile(
-    `traffic_${session.id.slice(0, 8)}.csv`,
+    `traffic_${date}.csv`,
     rows.map(r => r.join(',')).join('\n'),
     'text/csv'
   );
@@ -442,12 +519,16 @@ document.getElementById('btn-back-setup').addEventListener('click', () => {
   showScreen('screen-home');
 });
 
+document.getElementById('btn-export-selected').addEventListener('click', exportSelectedCSV);
+document.getElementById('btn-clear-all').addEventListener('click', clearAllSessions);
+
 document.getElementById('btn-go-to-recording').addEventListener('click', goToRecordingScreen);
 document.getElementById('btn-back-recording').addEventListener('click', cancelRecording);
 
 document.getElementById('btn-start-gps').addEventListener('click', handleStartGPS);
 document.getElementById('btn-start-recording').addEventListener('click', handleStartRecording);
 document.getElementById('btn-stop').addEventListener('click', stopSession);
+document.getElementById('btn-new-session-rec').addEventListener('click', newSessionMidRecording);
 
 document.getElementById('btn-with').addEventListener('click', () => recordTap('with'));
 document.getElementById('btn-against').addEventListener('click', () => recordTap('against'));
