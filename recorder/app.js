@@ -142,7 +142,6 @@ function clearAllSessions() {
 // ── Setup ──────────────────────────────────────────────────────────────────
 
 function initSetupScreen() {
-  document.getElementById('session-label').value = '';
   selectedMode = 'dual';
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === 'dual');
@@ -162,7 +161,7 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
 
 function goToRecordingScreen() {
   pendingConfig = {
-    label: document.getElementById('session-label').value.trim() || new Date().toLocaleString(),
+    label: new Date().toLocaleString(),
     mode: selectedMode,
   };
   lastTrackTimestamp = 0;
