@@ -33,6 +33,8 @@ POPULATION_API = (
 DZ_BOUNDARY_FILE    = "simulation/dz2021/DZ2021.geojson"
 GRAPH_PATH          = "simulation/newtownards_consolidated.graphml"
 WORKPLACE_DATA_FILE = "data/census-2021-apwp001.xlsx"
+POPULATION_CACHE    = "data/cache_nisra_population.csv"
+POI_CACHE           = "data/cache_osm_pois.geojson"
 
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
@@ -49,13 +51,19 @@ HIGHWAY_STYLE = {
 
 # ── 1. Download population data ────────────────────────────────────────────────
 
-print("Fetching NISRA mid-2021 DZ population …")
-req = urllib.request.Request(POPULATION_API, headers={"User-Agent": "Mozilla/5.0"})
-with urllib.request.urlopen(req, timeout=30) as r:
-    pop_csv = r.read().decode("utf-8-sig")
-
-from io import StringIO
-pop_df = pd.read_csv(StringIO(pop_csv))
+import os as _os
+if _os.path.exists(POPULATION_CACHE):
+    print(f"Loading NISRA population from cache ({POPULATION_CACHE}) …")
+    pop_df = pd.read_csv(POPULATION_CACHE)
+else:
+    print("Fetching NISRA mid-2021 DZ population …")
+    req = urllib.request.Request(POPULATION_API, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        pop_csv = r.read().decode("utf-8-sig")
+    from io import StringIO
+    pop_df = pd.read_csv(StringIO(pop_csv))
+    pop_df.to_csv(POPULATION_CACHE, index=False)
+    print(f"  Cached → {POPULATION_CACHE}")
 # Filter to 2021 only; exclude the aggregate NI-total row (code N92000002)
 pop_df = pop_df[
     (pop_df["TLIST(A1)"] == 2021) &
@@ -177,7 +185,6 @@ dz_final["workplace_pop"] = dz_final["workplace_pop"].fillna(0)
 wp_lookup = dz_final.set_index("DZ2021_cd")["workplace_pop"]
 print(f"  Study area workplace pop: {int(dz_final['workplace_pop'].sum()):,}")
 
-print("Downloading OSM POIs (amenity / shop / office) …")
 
 EXCLUDE_AMENITY = {
     "parking", "parking_space", "parking_entrance", "fuel",
@@ -186,7 +193,14 @@ EXCLUDE_AMENITY = {
     "shelter", "telephone",
 }
 
-pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
+if _os.path.exists(POI_CACHE):
+    print(f"Loading OSM POIs from cache ({POI_CACHE}) …")
+    pois_raw = gpd.read_file(POI_CACHE)
+else:
+    print("Downloading OSM POIs (amenity / shop / office) …")
+    pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
+    pois_raw.to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
+    print(f"  Cached → {POI_CACHE}")
 
 # Filter out low-trip-generating amenity types
 if "amenity" in pois_raw.columns:
