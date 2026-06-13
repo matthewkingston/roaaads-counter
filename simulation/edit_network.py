@@ -13,8 +13,8 @@ graph and the raw graph, then overwrites the saved GraphML files.
 
 import osmnx as ox
 
-CONS_PATH = "model/newtownards_consolidated.graphml"
-RAW_PATH  = "model/newtownards_network.graphml"
+CONS_PATH = "simulation/newtownards_consolidated.graphml"
+RAW_PATH  = "simulation/newtownards_network.graphml"
 
 # ── Consolidated graph ─────────────────────────────────────────────────────────
 

@@ -24,14 +24,14 @@ import pyproj
 
 CENTRE    = (54.5933779, -5.6960935)
 RADIUS_M  = 3000
-OUT_DIR   = "model"
+OUT_DIR   = "simulation"
 
 POPULATION_API = (
     "https://ws-data.nisra.gov.uk/public/api.restful/"
     "PxStat.Data.Cube_API.ReadDataset/MYE01T011/CSV/1.0/en/"
 )
-DZ_BOUNDARY_FILE    = "model/dz2021/DZ2021.geojson"
-GRAPH_PATH          = "model/newtownards_consolidated.graphml"
+DZ_BOUNDARY_FILE    = "simulation/dz2021/DZ2021.geojson"
+GRAPH_PATH          = "simulation/newtownards_consolidated.graphml"
 WORKPLACE_DATA_FILE = "data/census-2021-apwp001.xlsx"
 
 HIGHWAY_STYLE = {

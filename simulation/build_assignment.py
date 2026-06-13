@@ -32,10 +32,10 @@ COUNT_SITES = [
     {"label": "site 444, A20 Portaferry Road","node":  92, "links": None,                     "observed":  7_282},
 ]
 
-OUT_DIR        = "model"
-WEIGHTS_FILE   = "model/node_weights.json"
-CONS_GRAPH     = "model/newtownards_consolidated.graphml"
-RAW_GRAPH      = "model/newtownards_network.graphml"
+OUT_DIR        = "simulation"
+WEIGHTS_FILE   = "simulation/node_weights.json"
+CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
+RAW_GRAPH      = "simulation/newtownards_network.graphml"
 
 # ── Load node weights ────────────────────────────────────────────────────────────
 

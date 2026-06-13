@@ -10,9 +10,9 @@ Output: model/newtownards_map.html  (self-contained, open in any browser)
 import osmnx as ox
 import folium
 
-RAW_GRAPH_PATH  = "model/newtownards_network.graphml"
-CONS_GRAPH_PATH = "model/newtownards_consolidated.graphml"
-OUT_PATH        = "model/newtownards_map.html"
+RAW_GRAPH_PATH  = "simulation/newtownards_network.graphml"
+CONS_GRAPH_PATH = "simulation/newtownards_consolidated.graphml"
+OUT_PATH        = "simulation/newtownards_map.html"
 
 HIGHWAY_STYLE = {
     "motorway":      {"color": "#e8684a", "weight": 5},

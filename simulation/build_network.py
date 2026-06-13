@@ -18,7 +18,7 @@ import geopandas as gpd
 CENTRE    = (54.5933779, -5.6960935)
 RADIUS_M  = 3000
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
-OUT_DIR   = "model"
+OUT_DIR   = "simulation"
 
 # ── 1. Download ────────────────────────────────────────────────────────────────
 
