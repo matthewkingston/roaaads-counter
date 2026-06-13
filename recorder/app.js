@@ -101,6 +101,9 @@ function updateBatchBar() {
   exportBtn.textContent = count > 0 ? `Export CSV (${count})` : 'Export CSV';
   selectAll.checked       = count > 0 && count === sessions.length;
   selectAll.indeterminate = count > 0 && count < sessions.length;
+  const deleteBtn = document.getElementById('btn-delete-selected');
+  deleteBtn.disabled    = count === 0;
+  deleteBtn.textContent = count > 0 ? `Delete selected (${count})` : 'Delete selected';
 }
 
 document.getElementById('sessions-list').addEventListener('change', e => {
@@ -131,9 +134,11 @@ function deleteSession(id) {
   renderSessions();
 }
 
-function clearAllSessions() {
-  if (!confirm(`Delete all ${sessions.length} session${sessions.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
-  sessions = [];
+function deleteSelectedSessions() {
+  const count = selectedIds.size;
+  if (count === 0) return;
+  if (!confirm(`Delete ${count} selected session${count !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+  sessions = sessions.filter(s => !selectedIds.has(s.id));
   selectedIds.clear();
   saveSessions();
   renderSessions();
@@ -538,7 +543,7 @@ document.getElementById('btn-back-setup').addEventListener('click', () => {
 });
 
 document.getElementById('btn-export-selected').addEventListener('click', exportSelectedCSV);
-document.getElementById('btn-clear-all').addEventListener('click', clearAllSessions);
+document.getElementById('btn-delete-selected').addEventListener('click', deleteSelectedSessions);
 
 document.getElementById('btn-go-to-recording').addEventListener('click', goToRecordingScreen);
 document.getElementById('btn-back-recording').addEventListener('click', cancelRecording);
