@@ -199,7 +199,8 @@ if _os.path.exists(POI_CACHE):
 else:
     print("Downloading OSM POIs (amenity / shop / office) …")
     pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
-    pois_raw.to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
+    _save_cols = [c for c in ["amenity", "shop", "office"] if c in pois_raw.columns]
+    pois_raw[_save_cols + ["geometry"]].to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
     print(f"  Cached → {POI_CACHE}")
 
 # Filter out low-trip-generating amenity types
