@@ -2,10 +2,13 @@
 Surgical edits to the road network model.
 
 Deletions requested (all at study-area boundary):
-  Cons 91  (OSM 138036003)   — dead-end stub, Portaferry Road 91↔92 link
-  Cons 115 (OSM 181111983)   — Andersons Hill terminus
-  Cons 118 (OSM 181112908 + 537845355) — Ballybarnes Road terminus cluster
-  Cons 767 (OSM 548735778)   — Drumhirk Way terminus
+  Cons 91  (OSM 138036003)               — dead-end stub, Portaferry Road 91↔92 link
+  Cons 115 (OSM 181111983)               — Andersons Hill terminus
+  Cons 118 (OSM 181112908 + 537845355)   — Ballybarnes Road terminus cluster
+  Cons 616 (OSM 469938721)               — Ballyalton Road stub beyond boundary node 617
+  Cons 732 (OSM 6457073140 + 6457073138) — Bangor Road residential bypass; makes 731
+                                           the clean trunk boundary node
+  Cons 767 (OSM 548735778)               — Drumhirk Way terminus
 
 Removes the nodes and all their incident edges from both the consolidated
 graph and the raw graph, then overwrites the saved GraphML files.
@@ -21,11 +24,14 @@ RAW_PATH  = "simulation/newtownards_network.graphml"
 G_cons = ox.load_graphml(CONS_PATH)
 print(f"Consolidated before: {G_cons.number_of_nodes()} nodes, {G_cons.number_of_edges()} edges")
 
-CONS_NODES_TO_REMOVE = [91, 115, 118, 767]
+CONS_NODES_TO_REMOVE = [91, 115, 118, 616, 732, 767]
 for n in CONS_NODES_TO_REMOVE:
-    edges_removed = list(G_cons.edges(n)) + list(G_cons.in_edges(n))
-    print(f"  Removing cons node {n} ({len(edges_removed)} incident edges)")
-    G_cons.remove_node(n)
+    if n in G_cons.nodes:
+        edges_removed = list(G_cons.edges(n)) + list(G_cons.in_edges(n))
+        print(f"  Removing cons node {n} ({len(edges_removed)} incident edges)")
+        G_cons.remove_node(n)
+    else:
+        print(f"  Cons node {n}: already absent, skipping")
 
 print(f"Consolidated after:  {G_cons.number_of_nodes()} nodes, {G_cons.number_of_edges()} edges")
 ox.save_graphml(G_cons, CONS_PATH)
@@ -40,6 +46,9 @@ RAW_NODES_TO_REMOVE = [
     181111983,           # cons 115 — Andersons Hill / Ballybarnes Road
     181112908,           # cons 118 — Ballybarnes Road cluster
     537845355,           # cons 118 — Ballybarnes Road cluster (merged node)
+    469938721,           # cons 616 — Ballyalton Road stub
+    6457073140,          # cons 732 — Bangor Road residential bypass (merged node)
+    6457073138,          # cons 732 — Bangor Road residential bypass (merged node)
     548735778,           # cons 767 — Drumhirk Way
 ]
 for n in RAW_NODES_TO_REMOVE:
