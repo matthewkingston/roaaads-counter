@@ -16,7 +16,7 @@ flows on the map.
 Usage:
   python3 simulation/build_assignment.py
 
-Tunable parameters: W_BIZ, MU, SIGMA, ALPHA, COUNT_SITES (see Config section).
+Tunable parameters: K, W_BIZ, MU, SIGMA, ALPHA, COUNT_SITES (see Config section).
 """
 
 import json, math, time, os
@@ -26,13 +26,14 @@ from collections import defaultdict
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 
+K      = 1.73   # global flow scale factor
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
 MU     = 7.5    # lognormal shift; peak at exp(MU − ALPHA×SIGMA²) = exp(5.5) ≈ 245 s ≈ 4 min
 SIGMA  = 1.0    # lognormal spread in log-time space
 ALPHA  = 2.0    # power-law tail exponent
 OFFSCREEN_SPEED_MS = 80_000 / 3600   # 80 km/h — assumed speed for off-network boundary legs
 
-# Traffic count sites used for least-squares calibration of K.
+# Traffic count sites used in goodness_of_fit().
 # links: list of directed (u,v) pairs to sum for AADT; None → use cordon_flow(node).
 # Bangor Road is a dual carriageway so we sum the two named directed links explicitly.
 COUNT_SITES = [
@@ -220,19 +221,13 @@ def goodness_of_fit():
     return chi2, n
 
 
-raw_flows   = [site_raw_flow(s) for s in COUNT_SITES]
-numerator   = sum(f * s["observed"] for f, s in zip(raw_flows, COUNT_SITES))
-denominator = sum(f * f             for f      in raw_flows)
-K = numerator / denominator if denominator > 0 else 1.0
+link_flow = {k: v * K for k, v in link_flow.items()}
 
-print(f"\nLeast-squares calibration across {len(COUNT_SITES)} sites  →  K = {K:.6f}")
+raw_flows = [site_raw_flow(s) for s in COUNT_SITES]
+print(f"\nOfficial count sites  (K = {K})")
 print(f"  {'Site':<45s}  {'Modelled':>9s}  {'Observed':>9s}  {'Ratio':>6s}")
 for f, s in zip(raw_flows, COUNT_SITES):
-    modelled = f * K
-    print(f"  {s['label']:<45s}  {modelled:>9,.0f}  {s['observed']:>9,}  {modelled/s['observed']:>6.2f}")
-
-# Apply K
-link_flow = {k: v * K for k, v in link_flow.items()}
+    print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
 goodness_of_fit()
 
@@ -245,4 +240,4 @@ with open(flows_path, "w") as f:
         "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
     }, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}")
-print(f"Parameters: W_BIZ={W_BIZ}  MU={MU}  SIGMA={SIGMA}  ALPHA={ALPHA}  K={K:.6f}")
+print(f"Parameters: K={K}  W_BIZ={W_BIZ}  MU={MU}  SIGMA={SIGMA}  ALPHA={ALPHA}")
