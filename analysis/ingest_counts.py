@@ -171,7 +171,9 @@ for sid, data in sessions.items():
                 against_count = total_count = None
             elif dirs == {"against"}:
                 with_count = total_count = None
-            # dirs == {"with", "against"}: both present despite single mode → treat as dual
+            else:
+                # Both directions present in single mode → ambiguous, discard
+                with_count = against_count = total_count = None
 
         gps_pts = data["gps"]
         if gps_pts:
