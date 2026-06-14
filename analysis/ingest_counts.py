@@ -19,16 +19,30 @@ from collections import defaultdict
 from datetime import datetime
 
 import osmnx as ox
+import pytz
 from pyproj import Transformer
 from shapely.geometry import Point
 
-COUNTS_DIR     = "data/counts"
-PROCESSED_FILE = "data/counts_processed.json"
-CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
+COUNTS_DIR       = "data/counts"
+PROCESSED_FILE   = "data/counts_processed.json"
+CONS_GRAPH       = "simulation/newtownards_consolidated.graphml"
+HOURLY_FRACTIONS = "analysis/hourly_fractions.csv"
+
+LOCAL_TZ = pytz.timezone("Europe/London")
 
 
 def parse_iso(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+# ── Load hourly fraction profile ─────────────────────────────────────────────
+
+hourly_fracs = {}  # (day_of_week, hour) → (mean_fraction, std_fraction)
+with open(HOURLY_FRACTIONS, newline="") as f:
+    for row in csv.DictReader(f):
+        dow  = int(row["day_of_week"])
+        hour = int(row["hour"].split(":")[0])
+        hourly_fracs[(dow, hour)] = (float(row["mean_fraction"]), float(row["std_fraction"]))
 
 
 # ── Load all raw CSVs ────────────────────────────────────────────────────────
@@ -147,6 +161,7 @@ if needs_snap:
 new_count         = 0
 snap_count        = 0
 uncertainty_count = 0
+aadt_count        = 0
 
 for sid, data in sessions.items():
     is_new = sid not in processed["sessions"]
@@ -223,6 +238,29 @@ for sid, data in sessions.items():
                   f"RMSE={rmse_m}m")
         snap_count += 1
 
+    # AADT estimation via hourly fraction profile
+    if processed["sessions"][sid].get("aadt_method") != "hourly_fraction_v1":
+        rec  = processed["sessions"][sid]
+        T    = rec["duration_s"]
+        dt_l = parse_iso(rec["start_utc"]).astimezone(LOCAL_TZ)
+        mean_f, std_f = hourly_fracs[(dt_l.weekday(), dt_l.hour)]
+
+        def _aadt(n, sigma_n):
+            if n is None:
+                return None, None
+            k      = 3600.0 / (T * mean_f)
+            aadt   = round(n * k)
+            sigma  = round(k * math.sqrt(sigma_n ** 2 + (n * std_f / mean_f) ** 2))
+            return aadt, sigma
+
+        rec["with_aadt"],    rec["with_aadt_uncertainty"]    = _aadt(rec["with_count"],    rec["with_uncertainty"])
+        rec["against_aadt"], rec["against_aadt_uncertainty"] = _aadt(rec["against_count"], rec["against_uncertainty"])
+        rec["total_aadt"],   rec["total_aadt_uncertainty"]   = _aadt(rec["total_count"],   rec["total_uncertainty"])
+        rec["hourly_fraction"]     = round(mean_f, 6)
+        rec["hourly_fraction_std"] = round(std_f,  6)
+        rec["aadt_method"]         = "hourly_fraction_v1"
+        aadt_count += 1
+
 # ── Save ─────────────────────────────────────────────────────────────────────
 
 with open(PROCESSED_FILE, "w") as f:
@@ -231,5 +269,5 @@ with open(PROCESSED_FILE, "w") as f:
 already_present = len(processed["sessions"]) - new_count
 total = len(processed["sessions"])
 print(f"{new_count} new session(s) added, {already_present} already present, "
-      f"{snap_count} snapped, {uncertainty_count} uncertainty fields added, {total} total")
+      f"{snap_count} snapped, {uncertainty_count} uncertainty, {aadt_count} AADT estimated, {total} total")
 print(f"Saved → {PROCESSED_FILE}")
