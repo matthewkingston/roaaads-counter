@@ -10,17 +10,18 @@ Fast path (recommended): load precomputed paths from simulation/newtownards_path
 Slow fallback: if the paths cache is absent, runs NetworkX Dijkstra (~10s).
 Re-run build_paths.py whenever the road network or external zone coordinates change.
 
+Outputs newtownards_flows.json; run build_demographics.py afterwards to see
+flows on the map.
+
 Usage:
-  python3 simulation/build_assignment.py           # full run with map
-  python3 simulation/build_assignment.py --no-map  # skip map, < 1s with cache
+  python3 simulation/build_assignment.py
 
 Tunable parameters: W_BIZ, MU, SIGMA, ALPHA, COUNT_SITES (see Config section).
 """
 
-import json, math, time, os, sys
+import json, math, time, os
 import numpy as np
 import osmnx as ox
-import folium
 from collections import defaultdict
 
 # ── Config ──────────────────────────────────────────────────────────────────────
@@ -42,10 +43,7 @@ COUNT_SITES = [
 OUT_DIR      = "simulation"
 WEIGHTS_FILE = "simulation/node_weights.json"
 CONS_GRAPH   = "simulation/newtownards_consolidated.graphml"
-RAW_GRAPH    = "simulation/newtownards_network.graphml"
 PATHS_CACHE  = "simulation/newtownards_paths.npz"
-
-build_map = "--no-map" not in sys.argv
 
 # ── Load node weights ────────────────────────────────────────────────────────────
 
@@ -202,82 +200,3 @@ with open(flows_path, "w") as f:
     }, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}")
 print(f"Parameters: W_BIZ={W_BIZ}  MU={MU}  SIGMA={SIGMA}  ALPHA={ALPHA}  K={K:.6f}")
-
-if not build_map:
-    sys.exit(0)
-
-# ── Build assignment map ──────────────────────────────────────────────────────────
-
-print("\nBuilding assignment map …")
-G_raw = ox.load_graphml(RAW_GRAPH)
-CENTRE = (54.5933779, -5.6960935)
-m = folium.Map(location=list(CENTRE), zoom_start=14, tiles="CartoDB positron")
-
-all_flows = sorted(f for f in link_flow.values() if f > 0)
-if all_flows:
-    p10_idx = max(0, int(len(all_flows) * 0.10))
-    p90_idx = min(len(all_flows) - 1, int(len(all_flows) * 0.90))
-    log_min = math.log10(max(all_flows[p10_idx], 1))
-    log_max = math.log10(max(all_flows[p90_idx], 1))
-else:
-    log_min, log_max = 0.0, 1.0
-
-def flow_color(flow):
-    if flow <= 0:
-        return "#cccccc"
-    t = (math.log10(max(flow, 1)) - log_min) / max(log_max - log_min, 1e-6)
-    t = max(0.0, min(1.0, t))
-    if t < 0.33:
-        r = 0; g = int(180 * (t / 0.33)); b = int(200 * (1 - t / 0.33))
-    elif t < 0.66:
-        s = (t - 0.33) / 0.33; r = int(220 * s); g = 180; b = 0
-    else:
-        s = (t - 0.66) / 0.34; r = 220 + int(35 * s); g = int(180 * (1 - s)); b = 0
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-def flow_weight(flow):
-    if flow <= 0:
-        return 1
-    t = (math.log10(max(flow, 1)) - log_min) / max(log_max - log_min, 1e-6)
-    return 1 + 7 * max(0.0, min(1.0, t))
-
-import pyproj
-transformer = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
-
-flow_fg = folium.FeatureGroup(name="Estimated link flows (AADT)", show=True)
-for u, v, data in G.edges(data=True):
-    flow = link_flow.get((u, v), 0) + link_flow.get((v, u), 0)
-    geom = data.get("geometry")
-    if geom and hasattr(geom, "coords"):
-        coords = [transformer.transform(x, y)[::-1] for x, y in geom.coords]
-    else:
-        ud, vd = G.nodes[u], G.nodes[v]
-        lon_u, lat_u = transformer.transform(float(ud["x"]), float(ud["y"]))
-        lon_v, lat_v = transformer.transform(float(vd["x"]), float(vd["y"]))
-        coords = [(lat_u, lon_u), (lat_v, lon_v)]
-    name = data.get("name", "")
-    length = float(data.get("length", 0))
-    folium.PolyLine(
-        coords, color=flow_color(flow), weight=flow_weight(flow), opacity=0.85,
-        tooltip=f"{name or 'link'} ({u}→{v})<br>est. AADT: {flow:,.0f}<br>length: {length:.0f}m",
-    ).add_to(flow_fg)
-flow_fg.add_to(m)
-
-bn_fg = folium.FeatureGroup(name="Boundary nodes", show=True)
-for node_id in boundary_node_ids:
-    if node_id not in G.nodes:
-        continue
-    nd = G.nodes[node_id]
-    lon, lat = transformer.transform(float(nd["x"]), float(nd["y"]))
-    cf = cordon_flow(node_id) * K
-    folium.RegularPolygonMarker(
-        location=[lat, lon], number_of_sides=4, radius=7, rotation=45,
-        color="#e05c00", fill=True, fill_color="#ff7c20", fill_opacity=0.9, weight=2,
-        tooltip=f"<b>Node {node_id}</b> [boundary]<br>est. cordon AADT: {cf:,.0f}",
-    ).add_to(bn_fg)
-bn_fg.add_to(m)
-
-folium.LayerControl(collapsed=False).add_to(m)
-out_path = f"{OUT_DIR}/newtownards_assignment_map.html"
-m.save(out_path)
-print(f"Saved: {out_path}")
