@@ -1,0 +1,207 @@
+"""
+Ingest raw walking traffic count CSVs into a processed sessions file.
+
+Reads all CSVs from data/counts/, extracts one record per session, and
+writes data/counts_processed.json. Idempotent: existing session_ids are
+skipped (and already-snapped sessions are skipped) so new data files can
+be added and this script re-run safely.
+
+Each session is matched to exactly one road link in the simulation network
+using a GPS-accuracy-weighted least-squares fit, then the observer's
+direction of travel is used to assign directed "with" and "against" links.
+
+Usage:
+  python3 analysis/ingest_counts.py
+"""
+
+import csv, glob, json, math, os
+from collections import defaultdict
+from datetime import datetime
+
+import osmnx as ox
+from pyproj import Transformer
+from shapely.geometry import Point
+
+COUNTS_DIR     = "data/counts"
+PROCESSED_FILE = "data/counts_processed.json"
+CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
+
+
+def parse_iso(s):
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+# ── Load all raw CSVs ────────────────────────────────────────────────────────
+
+# sessions[sid]["gps"] = [(lat, lng, accuracy_m), ...]
+sessions = defaultdict(lambda: {"meta": None, "gps": [], "cars": [], "files": set()})
+
+csv_files = sorted(glob.glob(f"{COUNTS_DIR}/*.csv"))
+if not csv_files:
+    print(f"No CSV files found in {COUNTS_DIR}/")
+    raise SystemExit(1)
+
+for path in csv_files:
+    filename = os.path.basename(path)
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            sid = row["session_id"]
+            sessions[sid]["files"].add(filename)
+            if sessions[sid]["meta"] is None:
+                sessions[sid]["meta"] = {
+                    "label":     row["session_label"],
+                    "mode":      row["session_mode"],
+                    "start_utc": row["session_start"],
+                    "end_utc":   row["session_end"],
+                }
+            if row["event_type"] == "gps_track":
+                sessions[sid]["gps"].append((
+                    float(row["lat"]),
+                    float(row["lng"]),
+                    float(row["gps_accuracy_m"]),
+                ))
+            elif row["event_type"] == "car":
+                sessions[sid]["cars"].append(row["direction"])
+
+print(f"Read {len(csv_files)} file(s), found {len(sessions)} unique session(s)")
+
+# ── Load existing processed file ─────────────────────────────────────────────
+
+if os.path.exists(PROCESSED_FILE):
+    with open(PROCESSED_FILE) as f:
+        processed = json.load(f)
+else:
+    processed = {"sessions": {}}
+
+# ── Load graph and build undirected edge geometry list ───────────────────────
+
+needs_snap = [
+    sid for sid, data in sessions.items()
+    if sid not in processed["sessions"] or "matched_link_with" not in processed["sessions"][sid]
+]
+
+if needs_snap:
+    print(f"Loading graph for link snapping ({len(needs_snap)} session(s) to snap) …")
+    G = ox.load_graphml(CONS_GRAPH)
+
+    to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
+
+    # Deduplicated undirected edges: (u, v, geom) with u < v
+    seen_pairs = set()
+    edge_geoms = []
+    for u, v, edata in G.edges(data=True):
+        pair = (min(u, v), max(u, v))
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        edge_geoms.append((pair[0], pair[1], edata["geometry"]))
+
+    print(f"  {len(edge_geoms)} unique undirected links")
+
+    def snap_to_link(gps_pts):
+        """
+        gps_pts: list of (lat, lng, accuracy_m)
+        Returns (link_with, link_against, rmse_m) where link_with/against are [u, v].
+        """
+        utm_pts = []
+        weights = []
+        for lat, lng, acc in gps_pts:
+            e, n = to_utm.transform(lng, lat)
+            utm_pts.append(Point(e, n))
+            weights.append(1.0 / (acc * acc))
+
+        total_w = sum(weights)
+
+        # Find best undirected edge by weighted SSE
+        best_u, best_v, best_geom = None, None, None
+        best_wsse = float("inf")
+        for u, v, geom in edge_geoms:
+            wsse = sum(w * pt.distance(geom) ** 2 for pt, w in zip(utm_pts, weights))
+            if wsse < best_wsse:
+                best_wsse = wsse
+                best_u, best_v, best_geom = u, v, geom
+
+        rmse_m = math.sqrt(best_wsse / total_w) if total_w > 0 else None
+
+        # Determine observer direction: vector from first to last UTM point
+        obs_dx = utm_pts[-1].x - utm_pts[0].x
+        obs_dy = utm_pts[-1].y - utm_pts[0].y
+
+        # Edge direction: from linestring start to end
+        coords = list(best_geom.coords)
+        edge_dx = coords[-1][0] - coords[0][0]
+        edge_dy = coords[-1][1] - coords[0][1]
+
+        dot = obs_dx * edge_dx + obs_dy * edge_dy
+        if dot >= 0:
+            link_with    = [best_u, best_v]
+            link_against = [best_v, best_u]
+        else:
+            link_with    = [best_v, best_u]
+            link_against = [best_u, best_v]
+
+        return link_with, link_against, round(rmse_m, 1) if rmse_m is not None else None
+
+# ── Process new sessions and snap ────────────────────────────────────────────
+
+new_count  = 0
+snap_count = 0
+
+for sid, data in sessions.items():
+    is_new = sid not in processed["sessions"]
+
+    if is_new:
+        meta = data["meta"]
+        start = parse_iso(meta["start_utc"])
+        end   = parse_iso(meta["end_utc"])
+        duration_s = (end - start).total_seconds()
+
+        with_count    = sum(1 for d in data["cars"] if d == "with")
+        against_count = sum(1 for d in data["cars"] if d == "against")
+
+        gps_pts = data["gps"]
+        if gps_pts:
+            centroid_lat = sum(p[0] for p in gps_pts) / len(gps_pts)
+            centroid_lng = sum(p[1] for p in gps_pts) / len(gps_pts)
+        else:
+            centroid_lat = centroid_lng = None
+
+        processed["sessions"][sid] = {
+            "session_id":    sid,
+            "label":         meta["label"],
+            "mode":          meta["mode"],
+            "start_utc":     meta["start_utc"],
+            "end_utc":       meta["end_utc"],
+            "duration_s":    round(duration_s, 1),
+            "with_count":    with_count,
+            "against_count": against_count,
+            "total_count":   with_count + against_count,
+            "centroid_lat":  round(centroid_lat, 6) if centroid_lat is not None else None,
+            "centroid_lng":  round(centroid_lng, 6) if centroid_lng is not None else None,
+            "source_files":  sorted(data["files"]),
+        }
+        new_count += 1
+
+    # Snap if new or previously processed without snapping
+    if "matched_link_with" not in processed["sessions"][sid]:
+        gps_pts = data["gps"]
+        if gps_pts:
+            link_with, link_against, rmse_m = snap_to_link(gps_pts)
+            processed["sessions"][sid]["matched_link_with"]    = link_with
+            processed["sessions"][sid]["matched_link_against"] = link_against
+            processed["sessions"][sid]["match_rmse_m"]         = rmse_m
+            print(f"  {sid}  link {link_with[0]}→{link_with[1]} "
+                  f"(against: {link_against[0]}→{link_against[1]})  "
+                  f"RMSE={rmse_m}m")
+        snap_count += 1
+
+# ── Save ─────────────────────────────────────────────────────────────────────
+
+with open(PROCESSED_FILE, "w") as f:
+    json.dump(processed, f, indent=2)
+
+already_present = len(processed["sessions"]) - new_count
+total = len(processed["sessions"])
+print(f"{new_count} new session(s) added, {already_present} already present, "
+      f"{snap_count} snapped, {total} total")
+print(f"Saved → {PROCESSED_FILE}")
