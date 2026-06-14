@@ -10,7 +10,7 @@ Outputs:
   model/newtownards_map.html              — updated map (overwrites previous)
 """
 
-import json, urllib.request
+import json, sys, urllib.request
 import geopandas as gpd
 import pandas as pd
 import osmnx as ox
@@ -48,6 +48,54 @@ HIGHWAY_STYLE = {
     "unclassified":  {"color": "#bbbbbb", "weight": 1},
     "living_street": {"color": "#dddddd", "weight": 1},
 }
+
+# ── External zone weights for boundary nodes ───────────────────────────────────
+# Each boundary node represents an external destination. Population and workplace
+# demand are drawn from that destination, scaled by a damping factor for nodes
+# that are secondary routes to the same place.
+# centroid (lat, lon) is where the destination sits in the real world — used
+# for gravity-model distance calculations instead of the boundary node position.
+# Node 180 (local access) has no external centroid and keeps its own position.
+
+EXTERNAL_ZONES = {
+    #  node: (name,                    lat,      lon,     pop,  workplace, damping)
+     47: ("Donaghadee",           54.6408, -5.5328,  35_000,    7_000, 1.0),  # eastern Ards catchment
+     65: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 1.0),
+     92: ("Lower Ards Peninsula", 54.4892, -5.5283,  20_000,    4_000, 1.0),  # whole lower Ards peninsula
+     97: ("Belfast",              54.5973, -5.9301, 340_000,  180_000, 1.0),
+     98: ("Bangor",               54.6536, -5.6697,  62_000,   20_000, 0.3),
+     99: ("Holywood",             54.6322, -5.8325,  12_000,    4_000, 0.5),
+    119: ("Belfast",              54.5973, -5.9301, 340_000,  180_000, 0.3),
+    180: (None,                   None,    None,         50,        0, 1.0),
+    617: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
+    618: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
+    620: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
+    731: ("Bangor",               54.6536, -5.6697,  62_000,   20_000, 1.0),
+    748: ("Millisle",             54.6015, -5.5031,   3_000,      500, 1.0),
+    749: ("Millisle",             54.6015, -5.5031,   3_000,      500, 0.5),
+}
+
+# ── Fast path: --zones-only ────────────────────────────────────────────────────
+# Patches only boundary node entries in node_weights.json. Skips all internal
+# population processing and map building. Use when only pop/workplace/damping
+# values in EXTERNAL_ZONES have changed (not lat/lon).
+
+if "--zones-only" in sys.argv:
+    import os as _os
+    weights_path = f"{OUT_DIR}/node_weights.json"
+    with open(weights_path) as f:
+        w = json.load(f)
+    print("Updating external zone weights …")
+    for node_id, (name, lat, lon, pop, workplace, damping) in EXTERNAL_ZONES.items():
+        w["node_population"][str(node_id)]      = pop * damping
+        w["node_business_demand"][str(node_id)] = workplace * damping
+        zone = name or "local access"
+        print(f"  Node {node_id:4d}  {zone:<22}  pop={pop * damping:>8.0f}  workplace={workplace * damping:>8.0f}  damping={damping}")
+    with open(weights_path, "w") as f:
+        json.dump(w, f)
+    print(f"Saved {len(EXTERNAL_ZONES)} boundary nodes → {weights_path}")
+    print("Next: python3 simulation/build_assignment.py")
+    sys.exit(0)
 
 # ── 1. Download population data ────────────────────────────────────────────────
 
@@ -237,33 +285,6 @@ for dz_code, nodes_in_dz in dz_to_nodes.items():
 active_biz_nodes = sum(1 for v in node_business_demand.values() if v > 0)
 total_biz = sum(node_business_demand.values())
 print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
-
-# ── External zone weights for boundary nodes ───────────────────────────────────
-# Each boundary node represents an external destination. Population and workplace
-# demand are drawn from that destination, scaled by a damping factor for nodes
-# that are secondary routes to the same place.
-# centroid (lat, lon) is where the destination sits in the real world — used
-# later for gravity-model distance calculations instead of the boundary node's
-# actual position. Node 180 (local access) has no external centroid and keeps
-# its own network position.
-
-EXTERNAL_ZONES = {
-    #  node: (name,                    lat,      lon,     pop,  workplace, damping)
-     47: ("Donaghadee",           54.6408, -5.5328,  35_000,    7_000, 1.0),  # eastern Ards catchment
-     65: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 1.0),
-     92: ("Lower Ards Peninsula", 54.4892, -5.5283,  20_000,    4_000, 1.0),  # whole lower Ards peninsula
-     97: ("Belfast",              54.5973, -5.9301, 340_000,  180_000, 1.0),
-     98: ("Bangor",               54.6536, -5.6697,  62_000,   20_000, 0.3),
-     99: ("Holywood",             54.6322, -5.8325,  12_000,    4_000, 0.5),
-    119: ("Belfast",              54.5973, -5.9301, 340_000,  180_000, 0.3),
-    180: (None,                   None,    None,         50,        0, 1.0),
-    617: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
-    618: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
-    620: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
-    731: ("Bangor",               54.6536, -5.6697,  62_000,   20_000, 1.0),
-    748: ("Millisle",             54.6015, -5.5031,   3_000,      500, 1.0),
-    749: ("Millisle",             54.6015, -5.5031,   3_000,      500, 0.5),
-}
 
 # node_id → effective UTM centroid used for gravity-model distances:
 #   internal nodes  → their own network coordinates
