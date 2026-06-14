@@ -59,6 +59,21 @@ node_business_demand = {int(k): v for k, v in weights["node_business_demand"].it
 node_effective_utm   = {int(k): (v[0], v[1]) for k, v in weights["node_effective_utm"].items()}
 boundary_node_ids    = set(weights["boundary_node_ids"])
 
+TUNED_PARAMS = "simulation/tuned_params.json"
+if os.path.exists(TUNED_PARAMS):
+    with open(TUNED_PARAMS) as f:
+        _tp = json.load(f)
+    K     = _tp.get("K",     K)
+    W_BIZ = _tp.get("W_BIZ", W_BIZ)
+    MU    = _tp.get("MU",    MU)
+    SIGMA = _tp.get("SIGMA", SIGMA)
+    ALPHA = _tp.get("ALPHA", ALPHA)
+    for _nid, _val in _tp.get("external_node_pop", {}).items():
+        node_population[int(_nid)] = _val
+    for _nid, _val in _tp.get("external_node_biz", {}).items():
+        node_business_demand[int(_nid)] = _val
+    print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}]")
+
 # ── Assignment ───────────────────────────────────────────────────────────────────
 
 link_flow = {}   # (u, v) → raw (pre-K) flow
