@@ -55,6 +55,8 @@ if not csv_files:
     print(f"No CSV files found in {COUNTS_DIR}/")
     raise SystemExit(1)
 
+seen_rows = set()  # (session_id, event_type, timestamp) — deduplicates sessions across files
+
 for path in csv_files:
     filename = os.path.basename(path)
     with open(path, newline="") as f:
@@ -68,6 +70,10 @@ for path in csv_files:
                     "start_utc": row["session_start"],
                     "end_utc":   row["session_end"],
                 }
+            row_key = (sid, row["event_type"], row["timestamp"])
+            if row_key in seen_rows:
+                continue
+            seen_rows.add(row_key)
             if row["event_type"] == "gps_track":
                 sessions[sid]["gps"].append((
                     float(row["lat"]),
