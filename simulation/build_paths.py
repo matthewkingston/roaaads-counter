@@ -5,13 +5,15 @@ Run this once after any network change (build_network.py or edit_network.py).
 Produces simulation/newtownards_paths.npz, which build_assignment.py loads
 to avoid re-running Dijkstra on every parameter-tuning iteration.
 
-od_dist in the cache stores effective travel time in seconds: network travel
-time (from edge travel_time attributes) plus the boundary offscreen leg
-converted at OFFSCREEN_SPEED_MS.
+od_dist in the cache stores generalised cost (seconds × road-class factor):
+edge travel time multiplied by HIGHWAY_COST_FACTOR, plus the boundary
+offscreen leg converted at OFFSCREEN_SPEED_MS. This means major roads appear
+shorter than minor roads of equal length, biasing route choice toward them.
 
 Cache must be regenerated when:
   - The road network changes (newtownards_consolidated.graphml is updated)
   - External zone coordinates (lat/lon) change in build_demographics.py EXTERNAL_ZONES
+  - HIGHWAY_COST_FACTOR values change
 
 Does NOT need regenerating for changes to W_BIZ, MU, SIGMA, ALPHA, node
 populations, damping factors, or count site values.
@@ -27,6 +29,22 @@ CONS_GRAPH          = "simulation/newtownards_consolidated.graphml"
 WEIGHTS_FILE        = "simulation/node_weights.json"
 PATHS_CACHE         = "simulation/newtownards_paths.npz"
 OFFSCREEN_SPEED_MS  = 80_000 / 3600   # 80 km/h in m/s — assumed speed for off-network boundary legs
+
+# Multipliers applied to edge travel time before Dijkstra.
+# < 1 favours that road class; > 1 penalises it.
+# Changing these values requires re-running build_paths.py and re-tuning.
+HIGHWAY_COST_FACTOR = {
+    "trunk":         0.67,
+    "trunk_link":    0.67,
+    "primary":       0.67,
+    "primary_link":  0.67,
+    "secondary":     1.0,
+    "tertiary":      1.0,
+    "tertiary_link": 1.0,
+    "residential":   1.2,
+    "unclassified":  1.2,
+    "living_street": 1.2,
+}
 
 # ── Load graph and weights ───────────────────────────────────────────────────────
 
@@ -64,7 +82,11 @@ link_list  = []
 link_to_idx = {}
 
 for u, v, edata in G.edges(data=True):
-    cost = float(edata.get("travel_time", 1.0))
+    ht = edata.get("highway", "unclassified")
+    if isinstance(ht, list):
+        ht = ht[0]
+    factor = HIGHWAY_COST_FACTOR.get(ht, 1.0)
+    cost = float(edata.get("travel_time", 1.0)) * factor
     i, j = node_to_idx[u], node_to_idx[v]
     rows.append(i); cols.append(j); data.append(cost)
     lnk = (u, v)

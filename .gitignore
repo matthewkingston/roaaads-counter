@@ -12,3 +12,7 @@ simulation/dz2021/DZ2021.geojson
 # Downloaded/cached data (regenerated automatically on first run)
 data/cache_*
 cache/
+
+# Large reference data files — kept locally but not committed
+data/*.ods
+data/*.xlsx

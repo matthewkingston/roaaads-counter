@@ -34,7 +34,7 @@ refine rather than restart.
 | File | Role |
 |------|------|
 | `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. |
-| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes. |
+| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. |
 | `simulation/build_assignment.py` | Gravity model + all-or-nothing assignment. Loads `tuned_params.json` automatically if present. Prints χ²/N goodness-of-fit table. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization and city→node groupings. Edit this to change the prior for external zone populations. |
@@ -42,7 +42,7 @@ refine rather than restart.
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
 | `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
-| `analysis/hourly_fractions.csv` | NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
+| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
@@ -53,6 +53,13 @@ refine rather than restart.
 `data/counts_processed.json`, `data/link_aadt.json`,
 `simulation/tuning_history.jsonl` — committed so history is preserved.
 `simulation/tuner_config.json` — committed as source config (gitignore exception).
+`analysis/hourly_fractions.csv` — committed as source data (single authoritative version).
+
+### Large reference data (gitignored, kept locally only)
+`data/*.ods`, `data/*.xlsx` — too large to commit; keep a local copy for reference.
+Currently present: `data/2023-northern-ireland-traffic-count-data-in-ods-format.ods`
+(the 3 AADT values already in use are hardcoded in `tune_assignment.py` — no
+further data from this file is needed) and `data/census-2021-apwp001.xlsx`.
 
 ---
 

@@ -359,11 +359,25 @@ type_order = [
 ]
 all_types = type_order + [t for t in by_type if t not in type_order]
 
-roads_fg = folium.FeatureGroup(name="Roads (by type)", show=False)
+ROAD_TYPE_LABELS = {
+    "trunk":         "Roads · trunk",
+    "trunk_link":    "Roads · trunk (links)",
+    "primary":       "Roads · primary",
+    "primary_link":  "Roads · primary (links)",
+    "secondary":     "Roads · secondary",
+    "tertiary":      "Roads · tertiary",
+    "tertiary_link": "Roads · tertiary (links)",
+    "residential":   "Roads · residential",
+    "unclassified":  "Roads · unclassified",
+    "living_street": "Roads · living street",
+}
 for htype in all_types:
     edges = by_type.get(htype)
-    if not edges: continue
+    if not edges:
+        continue
     style = HIGHWAY_STYLE.get(htype, {"color": "#aaaaaa", "weight": 1})
+    label = ROAD_TYPE_LABELS.get(htype, f"Roads · {htype}")
+    fg = folium.FeatureGroup(name=label, show=False)
     for u, v, data in edges:
         geom = data.get("geometry")
         if geom and hasattr(geom, "coords"):
@@ -372,12 +386,15 @@ for htype in all_types:
             ud, vd = G_raw.nodes[u], G_raw.nodes[v]
             coords = [(ud["y"], ud["x"]), (vd["y"], vd["x"])]
         name = data.get("name", "")
+        if isinstance(name, list):
+            name = name[0]
+        length = float(data.get("length", 0))
         folium.PolyLine(
             coords, color=style["color"], weight=style["weight"],
             opacity=0.7,
-            tooltip=f"{name or htype} · {float(data.get('length',0)):.0f}m",
-        ).add_to(roads_fg)
-roads_fg.add_to(m)
+            tooltip=f"{name or '(unnamed)'} [{htype}] · {length:.0f}m",
+        ).add_to(fg)
+    fg.add_to(m)
 
 # 5b. Classify nodes as boundary (in/out flow) vs interior.
 #
