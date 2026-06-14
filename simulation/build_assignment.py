@@ -41,10 +41,11 @@ COUNT_SITES = [
     {"label": "site 444, A20 Portaferry Road","node":  92, "links": None,                     "observed":  7_282},
 ]
 
-OUT_DIR      = "simulation"
-WEIGHTS_FILE = "simulation/node_weights.json"
-CONS_GRAPH   = "simulation/newtownards_consolidated.graphml"
-PATHS_CACHE  = "simulation/newtownards_paths.npz"
+OUT_DIR        = "simulation"
+WEIGHTS_FILE   = "simulation/node_weights.json"
+CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
+PATHS_CACHE    = "simulation/newtownards_paths.npz"
+LINK_AADT_FILE = "data/link_aadt.json"
 
 # ── Load node weights ────────────────────────────────────────────────────────────
 
@@ -179,6 +180,46 @@ def site_raw_flow(site):
         return sum(link_flow.get(lnk, 0) for lnk in site["links"])
     return cordon_flow(site["node"])
 
+def goodness_of_fit():
+    """
+    Chi-squared goodness of fit against all count data (Gaussian uncertainties assumed).
+
+    Official sites: ±10% of observed AADT.
+    Walking counts: uncertainties from link_aadt.json (inverse-variance combined).
+
+    Called after K is applied so link_flow is already scaled.
+    """
+    rows = []
+    chi2 = 0.0
+
+    for s in COUNT_SITES:
+        mod = site_raw_flow(s)
+        obs = s["observed"]
+        sig = 0.10 * obs
+        z   = (mod - obs) / sig
+        chi2 += z * z
+        rows.append(("official", s["label"], obs, sig, mod, z))
+
+    if os.path.exists(LINK_AADT_FILE):
+        with open(LINK_AADT_FILE) as f:
+            link_aadt = json.load(f)["links"]
+        for key, entry in sorted(link_aadt.items()):
+            u, v = map(int, key.split(","))
+            mod  = link_flow.get((u, v), 0.0)
+            obs  = entry["aadt"]
+            sig  = entry["aadt_uncertainty"]
+            z    = (mod - obs) / sig
+            chi2 += z * z
+            rows.append(("walking", f"{u}→{v}", obs, sig, mod, z))
+
+    n = len(rows)
+    print(f"\nGoodness of fit  χ² = {chi2:.2f}  ({n} observations,  χ²/N = {chi2/n:.2f})")
+    print(f"  {'Source':<10s}  {'Label':<42s}  {'Obs':>7s}  {'σ':>6s}  {'Model':>7s}  {'z':>6s}")
+    for src, lbl, obs, sig, mod, z in rows:
+        print(f"  {src:<10s}  {lbl:<42s}  {obs:>7,.0f}  {sig:>6,.0f}  {mod:>7,.0f}  {z:>+.2f}")
+    return chi2, n
+
+
 raw_flows   = [site_raw_flow(s) for s in COUNT_SITES]
 numerator   = sum(f * s["observed"] for f, s in zip(raw_flows, COUNT_SITES))
 denominator = sum(f * f             for f      in raw_flows)
@@ -192,6 +233,8 @@ for f, s in zip(raw_flows, COUNT_SITES):
 
 # Apply K
 link_flow = {k: v * K for k, v in link_flow.items()}
+
+goodness_of_fit()
 
 # ── Serialise flows ───────────────────────────────────────────────────────────────
 
