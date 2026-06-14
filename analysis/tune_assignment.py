@@ -289,11 +289,13 @@ if os.path.exists(TUNED_PARAMS):
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
 
+# Clamp to a safe minimum before log-transform (guards against degenerate prior runs)
+_LOG_MIN = 1e-4
 log_p0 = np.array([
-    math.log(grav_start["W_BIZ"]),
-    math.log(grav_start["MU"]),
-    math.log(grav_start["SIGMA"]),
-    math.log(grav_start["ALPHA"]),
+    math.log(max(grav_start["W_BIZ"], _LOG_MIN)),
+    math.log(max(grav_start["MU"],    _LOG_MIN)),
+    math.log(max(grav_start["SIGMA"], _LOG_MIN)),
+    math.log(max(grav_start["ALPHA"], _LOG_MIN)),
 ], dtype=np.float64)
 
 log_ref = None
