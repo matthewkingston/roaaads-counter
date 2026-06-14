@@ -96,7 +96,7 @@ plus all directed walking-count links from `link_aadt.json`.
 - Site 508: A48 Donaghadee Road — 10,792 AADT
 - Site 444: A20 Portaferry Road — 7,282 AADT
 
-**Walking counts:** 2 CSV files, 25 total observations covering 22 directed links.
+**Walking counts:** 3 CSV files, 63 total observations covering 60 directed links.
 
 ---
 
@@ -109,8 +109,8 @@ plus all directed walking-count links from `link_aadt.json`.
 | 2026-06-14 | full | 25 | 24 | 0.98 |
 | 2026-06-14 | full | 25 | 24 | **0.90** ← current |
 
-Current best: χ²/N = 0.90. All three official sites within 0.05σ.
-Persistent mild outliers: links `10→12` (z≈−2.6) and `19→739` (z≈−2.4).
+Current best: χ²/N = 0.90 (pre-routing-fix, 25 obs). Re-tune pending with updated
+routing (Hardford Link reclassified, factor ×0.75) and expanded dataset (63 obs).
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
