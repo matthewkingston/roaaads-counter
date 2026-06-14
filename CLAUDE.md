@@ -102,15 +102,16 @@ plus all directed walking-count links from `link_aadt.json`.
 
 ## Tuning History
 
-| Date | Stage | N obs | N params | χ²/N |
-|------|-------|-------|----------|------|
-| 2026-06-14 | gravity | 15 | 4 | 5.72 |
-| 2026-06-14 | gravity | 25 | 4 | 3.97 |
-| 2026-06-14 | full | 25 | 24 | 0.98 |
-| 2026-06-14 | full | 25 | 24 | **0.90** ← current |
+| Date | Stage | N obs | N params | χ²/N | Notes |
+|------|-------|-------|----------|------|-------|
+| 2026-06-14 | gravity | 15 | 4 | 5.72 | |
+| 2026-06-14 | gravity | 25 | 4 | 3.97 | |
+| 2026-06-14 | full | 25 | 24 | 0.98 | |
+| 2026-06-14 | full | 25 | 24 | 0.90 | |
+| 2026-06-14 | full | 62 | 24 | **0.956** ← current | road-class routing, Hardford Link primary, excl 161→160 |
 
-Current best: χ²/N = 0.90 (pre-routing-fix, 25 obs). Re-tune pending with updated
-routing (Hardford Link reclassified, factor ×0.75) and expanded dataset (63 obs).
+Current best: χ²/N = 0.956 (62 obs). Official sites: 507 z=−1.07, 508 z=+0.15, 444 z=−0.07.
+Persistent outliers: `18→21` (z=−2.13), `33→30` (z=+2.64), `282→159` (z=−1.74), `71→11` (z=−1.85).
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
