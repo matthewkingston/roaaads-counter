@@ -23,7 +23,10 @@
         418,
         419
       ],
-      "match_rmse_m": 3.8
+      "match_rmse_m": 3.8,
+      "with_uncertainty": 0.0,
+      "against_uncertainty": 0.0,
+      "total_uncertainty": 0.0
     },
     "8611420e": {
       "session_id": "8611420e",
@@ -48,7 +51,10 @@
         18,
         20
       ],
-      "match_rmse_m": 15.0
+      "match_rmse_m": 15.0,
+      "with_uncertainty": 2.646,
+      "against_uncertainty": 3.606,
+      "total_uncertainty": 4.472
     },
     "a53b4064": {
       "session_id": "a53b4064",
@@ -73,7 +79,10 @@
         144,
         143
       ],
-      "match_rmse_m": 5.0
+      "match_rmse_m": 5.0,
+      "with_uncertainty": 2.449,
+      "against_uncertainty": 2.0,
+      "total_uncertainty": 3.162
     },
     "e0e99295": {
       "session_id": "e0e99295",
@@ -98,7 +107,10 @@
         18,
         20
       ],
-      "match_rmse_m": 2.9
+      "match_rmse_m": 2.9,
+      "with_uncertainty": 0.0,
+      "against_uncertainty": 1.0,
+      "total_uncertainty": 1.0
     },
     "0dda12dd": {
       "session_id": "0dda12dd",
@@ -123,7 +135,10 @@
         12,
         10
       ],
-      "match_rmse_m": 27.6
+      "match_rmse_m": 27.6,
+      "with_uncertainty": 3.162,
+      "against_uncertainty": 2.449,
+      "total_uncertainty": 4.0
     },
     "fd190c10": {
       "session_id": "fd190c10",
@@ -148,7 +163,10 @@
         110,
         68
       ],
-      "match_rmse_m": 3.8
+      "match_rmse_m": 3.8,
+      "with_uncertainty": 2.236,
+      "against_uncertainty": 1.414,
+      "total_uncertainty": 2.646
     },
     "de9ade9d": {
       "session_id": "de9ade9d",
@@ -173,7 +191,10 @@
         68,
         110
       ],
-      "match_rmse_m": 6.8
+      "match_rmse_m": 6.8,
+      "with_uncertainty": 2.0,
+      "against_uncertainty": 2.0,
+      "total_uncertainty": 2.828
     },
     "50b95b49": {
       "session_id": "50b95b49",
@@ -198,7 +219,10 @@
         15,
         16
       ],
-      "match_rmse_m": 91.4
+      "match_rmse_m": 91.4,
+      "with_uncertainty": 3.317,
+      "against_uncertainty": 3.606,
+      "total_uncertainty": 4.899
     },
     "bf841b3e": {
       "session_id": "bf841b3e",
@@ -223,7 +247,10 @@
         16,
         15
       ],
-      "match_rmse_m": 78.4
+      "match_rmse_m": 78.4,
+      "with_uncertainty": 2.828,
+      "against_uncertainty": 2.236,
+      "total_uncertainty": 3.606
     }
   }
 }
