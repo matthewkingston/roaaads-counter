@@ -33,9 +33,9 @@
     },
     "Holywood": {
       "nodes": [99],
-      "ref_pop": 12000,
-      "ref_wp": 4000,
-      "dampings": {"99": 0.5}
+      "ref_pop": 3600,
+      "ref_wp": 1200,
+      "dampings": {"99": 1.0}
     },
     "Millisle": {
       "nodes": [748, 749],
