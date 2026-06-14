@@ -1,13 +1,16 @@
 """
-Compute the typical hourly traffic distribution from the 2023 NI count dataset,
+Compute AADT-normalised hourly traffic fractions from the 2023 NI count dataset,
 broken down by day of the week.
 
-For each site and each day of the week, calculates the fraction of daily
-traffic occurring each hour. Reports mean and sample std across all valid
-sites for that day, giving one figure ± uncertainty per (day, hour).
+For each site the divisor is the site's own weekly average daily traffic
+(weekly total / 7), so fractions carry day-of-week volume information.
+A fraction f[D, H] means: "hour H on day D carries fraction f of AADT."
 
 Usage:
   python3 analysis/hourly_fractions.py
+
+Conversion formula:
+  AADT = observed_count / (mean_fraction[D, H] * (duration_s / 3600))
 """
 
 import numpy as np
@@ -41,12 +44,17 @@ for name in xl.sheet_names:
     if block.shape[0] != 24:
         continue
 
+    # Weekly average daily traffic for this site (divisor for AADT normalisation)
+    weekly_total = block.values.astype(float).sum()
+    if weekly_total <= 0 or np.isnan(weekly_total):
+        continue
+    aadt = weekly_total / 7.0
+
     for day_idx, col in enumerate(block.columns):
         counts = block[col].values.astype(float)
-        total  = counts.sum()
-        if total <= 0 or np.isnan(total):
+        if np.isnan(counts).any():
             continue
-        fractions_by_day[day_idx].append(counts / total)
+        fractions_by_day[day_idx].append(counts / aadt)
 
 hours = [f"{h:02d}:00" for h in range(24)]
 
@@ -60,11 +68,12 @@ for day_idx, day_name in enumerate(DAY_NAMES):
     mean_f = arr.mean(axis=0)
     std_f  = arr.std(axis=0, ddof=1) if N > 1 else np.zeros(24)
 
-    print(f"\n{day_name}  ({N} sites)\n{'Hour':<7}  {'Mean %':>8}  {'Std %':>7}")
-    print("-" * 28)
+    day_total = mean_f.sum()   # should equal day_volume / AADT for this day
+    print(f"\n{day_name}  ({N} sites, day/AADT ratio={day_total:.3f})")
+    print(f"{'Hour':<7}  {'Mean %AADT':>10}  {'Std %AADT':>9}")
+    print("-" * 32)
     for h, (m, s) in enumerate(zip(mean_f, std_f)):
-        print(f"{hours[h]:<7}  {m*100:8.3f}%  {s*100:7.3f}%")
-    print(f"Sum: {mean_f.sum():.6f}")
+        print(f"{hours[h]:<7}  {m*100:10.3f}%  {s*100:9.3f}%")
 
     for h in range(24):
         rows.append({
