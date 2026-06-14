@@ -133,5 +133,5 @@ LowerArds ref_pop raised to 33,000 after stage-2 tuning converged to 33,575
 
 ## Worktree Convention
 
-Background/parallel work is done in `.claude/worktrees/` and cherry-picked to
-`main` after review. The current active branch is `lognormal-decay`.
+Background/parallel Claude work is done in `.claude/worktrees/` and
+cherry-picked to `main` after review. All work is on `main`.
