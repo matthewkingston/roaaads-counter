@@ -144,8 +144,9 @@ if needs_snap:
 
 # ── Process new sessions and snap ────────────────────────────────────────────
 
-new_count  = 0
-snap_count = 0
+new_count         = 0
+snap_count        = 0
+uncertainty_count = 0
 
 for sid, data in sessions.items():
     is_new = sid not in processed["sessions"]
@@ -158,6 +159,19 @@ for sid, data in sessions.items():
 
         with_count    = sum(1 for d in data["cars"] if d == "with")
         against_count = sum(1 for d in data["cars"] if d == "against")
+        total_count   = with_count + against_count
+
+        if meta["mode"] == "single":
+            # Determine which direction was being recorded from car events.
+            # If no cars observed we can't tell → discard all counts (null).
+            dirs = {d for d in data["cars"]}
+            if not dirs:
+                with_count = against_count = total_count = None
+            elif dirs == {"with"}:
+                against_count = total_count = None
+            elif dirs == {"against"}:
+                with_count = total_count = None
+            # dirs == {"with", "against"}: both present despite single mode → treat as dual
 
         gps_pts = data["gps"]
         if gps_pts:
@@ -175,12 +189,24 @@ for sid, data in sessions.items():
             "duration_s":    round(duration_s, 1),
             "with_count":    with_count,
             "against_count": against_count,
-            "total_count":   with_count + against_count,
+            "total_count":   total_count,
             "centroid_lat":  round(centroid_lat, 6) if centroid_lat is not None else None,
             "centroid_lng":  round(centroid_lng, 6) if centroid_lng is not None else None,
             "source_files":  sorted(data["files"]),
         }
         new_count += 1
+
+    # Jeffreys-prior Poisson uncertainty: sqrt(N + 0.5); null if count is null.
+    # Gives non-zero uncertainty for N=0; converges to sqrt(N) for large N.
+    if processed["sessions"][sid].get("uncertainty_method") != "jeffreys":
+        rec = processed["sessions"][sid]
+        def _u(n):
+            return round(math.sqrt(n + 0.5), 3) if n is not None else None
+        rec["with_uncertainty"]    = _u(rec["with_count"])
+        rec["against_uncertainty"] = _u(rec["against_count"])
+        rec["total_uncertainty"]   = _u(rec["total_count"])
+        rec["uncertainty_method"]  = "jeffreys"
+        uncertainty_count += 1
 
     # Snap if new or previously processed without snapping
     if "matched_link_with" not in processed["sessions"][sid]:
@@ -203,5 +229,5 @@ with open(PROCESSED_FILE, "w") as f:
 already_present = len(processed["sessions"]) - new_count
 total = len(processed["sessions"])
 print(f"{new_count} new session(s) added, {already_present} already present, "
-      f"{snap_count} snapped, {total} total")
+      f"{snap_count} snapped, {uncertainty_count} uncertainty fields added, {total} total")
 print(f"Saved → {PROCESSED_FILE}")
