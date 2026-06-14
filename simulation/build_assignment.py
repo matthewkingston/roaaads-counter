@@ -14,7 +14,7 @@ Usage:
   python3 simulation/build_assignment.py           # full run with map
   python3 simulation/build_assignment.py --no-map  # skip map, < 1s with cache
 
-Tunable parameters: W_BIZ, ALPHA, COUNT_SITES (see Config section).
+Tunable parameters: W_BIZ, MU, SIGMA, ALPHA, COUNT_SITES (see Config section).
 """
 
 import json, math, time, os, sys
@@ -26,7 +26,9 @@ from collections import defaultdict
 # ── Config ──────────────────────────────────────────────────────────────────────
 
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
-ALPHA  = 2.0    # gravity distance decay exponent
+MU     = 9.6    # lognormal shift; peak at exp(MU − ALPHA×SIGMA²) = exp(7.6) ≈ 2000m
+SIGMA  = 1.0    # lognormal spread in log-distance space
+ALPHA  = 2.0    # power-law tail exponent (far-field decay, matches former 1/d² model)
 
 # Traffic count sites used for least-squares calibration of K.
 # links: list of directed (u,v) pairs to sum for AADT; None → use cordon_flow(node).
@@ -84,8 +86,9 @@ if os.path.exists(PATHS_CACHE):
     total_weight = w_vec.sum()
     print(f"  {len(node_ids_arr)} nodes  total weight {total_weight:,.0f}  (W_BIZ={W_BIZ})")
 
-    # Gravity flow for every OD pair
-    t_ij = w_vec[od_src] * w_vec[od_dst] / (od_dist ** ALPHA)
+    # Gravity flow for every OD pair — lognormal × power-law decay
+    ln_d = np.log(od_dist)
+    t_ij = w_vec[od_src] * w_vec[od_dst] * np.exp(-0.5 * ((ln_d - MU) / SIGMA) ** 2) / od_dist ** ALPHA
 
     # Accumulate onto links
     N_links = len(link_u)
@@ -156,7 +159,7 @@ else:
                     + boundary_offscreen.get(source, 0))
             if dist < 1.0:
                 continue
-            t_ij = w_i * w_j / (dist ** ALPHA)
+            t_ij = w_i * w_j * math.exp(-0.5 * ((math.log(dist) - MU) / SIGMA) ** 2) / dist ** ALPHA
             for u, v in zip(path[:-1], path[1:]):
                 lf[(u, v)] += t_ij
         if (idx + 1) % 100 == 0:
@@ -194,11 +197,11 @@ link_flow = {k: v * K for k, v in link_flow.items()}
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
 with open(flows_path, "w") as f:
     json.dump({
-        "W_BIZ": W_BIZ, "ALPHA": ALPHA, "K": K,
+        "W_BIZ": W_BIZ, "MU": MU, "SIGMA": SIGMA, "ALPHA": ALPHA, "K": K,
         "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
     }, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}")
-print(f"Parameters: W_BIZ={W_BIZ}  ALPHA={ALPHA}  K={K:.6f}")
+print(f"Parameters: W_BIZ={W_BIZ}  MU={MU}  SIGMA={SIGMA}  ALPHA={ALPHA}  K={K:.6f}")
 
 if not build_map:
     sys.exit(0)
