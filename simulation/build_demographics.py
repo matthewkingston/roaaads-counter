@@ -97,220 +97,245 @@ if "--zones-only" in sys.argv:
     print("Next: python3 simulation/build_assignment.py")
     sys.exit(0)
 
-# ── 1. Download population data ────────────────────────────────────────────────
+# ── Fast path: --map-only ──────────────────────────────────────────────────────
+# Rebuilds only the map HTML, reusing node_weights.json and
+# newtownards_demographics.geojson written by a prior full run.
+# Use after retuning (build_assignment.py already updates the flows).
 
-import os as _os
-if _os.path.exists(POPULATION_CACHE):
-    print(f"Loading NISRA population from cache ({POPULATION_CACHE}) …")
-    pop_df = pd.read_csv(POPULATION_CACHE)
+if "--map-only" in sys.argv:
+    import os as _os
+    print("--map-only: loading saved outputs …")
+    transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
+    transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+    centre_utm_x, centre_utm_y = transformer_to_utm.transform(CENTRE[1], CENTRE[0])
+    print("Loading graph …")
+    G_cons = ox.load_graphml(GRAPH_PATH)
+    node_ids = list(G_cons.nodes())
+    node_coords_utm = [(G_cons.nodes[n]["x"], G_cons.nodes[n]["y"]) for n in node_ids]
+    print("Loading node weights …")
+    with open(f"{OUT_DIR}/node_weights.json") as _f:
+        _w = json.load(_f)
+    node_population      = {int(k): v for k, v in _w["node_population"].items()}
+    node_business_demand = {int(k): v for k, v in _w["node_business_demand"].items()}
+    print("Loading DZ boundaries …")
+    dz_final = gpd.read_file(f"{OUT_DIR}/newtownards_demographics.geojson")
+    print(f"  {len(dz_final)} Data Zones · {len(node_ids)} nodes")
+
 else:
-    print("Fetching NISRA mid-2021 DZ population …")
-    req = urllib.request.Request(POPULATION_API, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        pop_csv = r.read().decode("utf-8-sig")
-    from io import StringIO
-    pop_df = pd.read_csv(StringIO(pop_csv))
-    pop_df.to_csv(POPULATION_CACHE, index=False)
-    print(f"  Cached → {POPULATION_CACHE}")
-# Filter to 2021 only; exclude the aggregate NI-total row (code N92000002)
-pop_df = pop_df[
-    (pop_df["TLIST(A1)"] == 2021) &
-    (pop_df["DZ2021"].str.startswith("N20"))
-][["DZ2021", "Data Zones", "VALUE"]].rename(
-    columns={"DZ2021": "DZ2021_cd", "Data Zones": "DZ2021_nm", "VALUE": "population"}
-)
-print(f"  {len(pop_df)} Data Zones, NI total pop: {pop_df['population'].sum():,}")
+    # ── 1. Download population data ────────────────────────────────────────────
 
-# ── 2. Load boundaries and join population ─────────────────────────────────────
+    import os as _os
+    if _os.path.exists(POPULATION_CACHE):
+        print(f"Loading NISRA population from cache ({POPULATION_CACHE}) …")
+        pop_df = pd.read_csv(POPULATION_CACHE)
+    else:
+        print("Fetching NISRA mid-2021 DZ population …")
+        req = urllib.request.Request(POPULATION_API, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            pop_csv = r.read().decode("utf-8-sig")
+        from io import StringIO
+        pop_df = pd.read_csv(StringIO(pop_csv))
+        pop_df.to_csv(POPULATION_CACHE, index=False)
+        print(f"  Cached → {POPULATION_CACHE}")
+    # Filter to 2021 only; exclude the aggregate NI-total row (code N92000002)
+    pop_df = pop_df[
+        (pop_df["TLIST(A1)"] == 2021) &
+        (pop_df["DZ2021"].str.startswith("N20"))
+    ][["DZ2021", "Data Zones", "VALUE"]].rename(
+        columns={"DZ2021": "DZ2021_cd", "Data Zones": "DZ2021_nm", "VALUE": "population"}
+    )
+    print(f"  {len(pop_df)} Data Zones, NI total pop: {pop_df['population'].sum():,}")
 
-print("Loading DZ boundaries …")
-dz = gpd.read_file(DZ_BOUNDARY_FILE)  # EPSG:4326
-dz = dz.merge(pop_df[["DZ2021_cd", "population"]], on="DZ2021_cd", how="left")
+    # ── 2. Load boundaries and join population ─────────────────────────────────
 
-# ── 3. Clip to study circle & estimate population ──────────────────────────────
+    print("Loading DZ boundaries …")
+    dz = gpd.read_file(DZ_BOUNDARY_FILE)  # EPSG:4326
+    dz = dz.merge(pop_df[["DZ2021_cd", "population"]], on="DZ2021_cd", how="left")
 
-print("Clipping Data Zones to study circle …")
+    # ── 3. Clip to study circle & estimate population ──────────────────────────
 
-transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
-transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+    print("Clipping Data Zones to study circle …")
 
-# Work in UTM throughout for accurate area calculations
-dz_utm = dz.to_crs("EPSG:32630")
-centre_utm_x, centre_utm_y = transformer_to_utm.transform(CENTRE[1], CENTRE[0])
-study_circle = Point(centre_utm_x, centre_utm_y).buffer(RADIUS_M)
+    transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
+    transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
 
-dz_intersect = dz_utm[dz_utm.geometry.intersects(study_circle)].copy()
-dz_intersect["area_original_m2"] = dz_intersect.geometry.area
+    # Work in UTM throughout for accurate area calculations
+    dz_utm = dz.to_crs("EPSG:32630")
+    centre_utm_x, centre_utm_y = transformer_to_utm.transform(CENTRE[1], CENTRE[0])
+    study_circle = Point(centre_utm_x, centre_utm_y).buffer(RADIUS_M)
 
-# Hard clip to circle
-dz_intersect = dz_intersect.copy()
-dz_intersect["geometry"] = dz_intersect.geometry.intersection(study_circle)
-dz_intersect["area_clipped_m2"] = dz_intersect.geometry.area
-dz_intersect["area_pct"] = dz_intersect["area_clipped_m2"] / dz_intersect["area_original_m2"]
+    dz_intersect = dz_utm[dz_utm.geometry.intersects(study_circle)].copy()
+    dz_intersect["area_original_m2"] = dz_intersect.geometry.area
 
-# Population scaled by area fraction (constant density assumption)
-dz_intersect["pop_estimated"] = (
-    dz_intersect["population"] * dz_intersect["area_pct"]
-).round().astype("Int64")
+    # Hard clip to circle
+    dz_intersect = dz_intersect.copy()
+    dz_intersect["geometry"] = dz_intersect.geometry.intersection(study_circle)
+    dz_intersect["area_clipped_m2"] = dz_intersect.geometry.area
+    dz_intersect["area_pct"] = dz_intersect["area_clipped_m2"] / dz_intersect["area_original_m2"]
 
-print(f"  {len(dz_intersect)} DZs intersect circle before node filter")
+    # Population scaled by area fraction (constant density assumption)
+    dz_intersect["pop_estimated"] = (
+        dz_intersect["population"] * dz_intersect["area_pct"]
+    ).round().astype("Int64")
 
-# ── 4. Filter to DZs with road nodes inside ───────────────────────────────────
+    print(f"  {len(dz_intersect)} DZs intersect circle before node filter")
 
-print("Filtering to DZs containing road nodes …")
-G_cons = ox.load_graphml(GRAPH_PATH)
+    # ── 4. Filter to DZs with road nodes inside ───────────────────────────────
 
-# Consolidated graph nodes already have x/y in EPSG:32630 (UTM)
-node_ids = list(G_cons.nodes())
-node_coords_utm = [(G_cons.nodes[n]["x"], G_cons.nodes[n]["y"]) for n in node_ids]
+    print("Filtering to DZs containing road nodes …")
+    G_cons = ox.load_graphml(GRAPH_PATH)
 
-# Spatial join: which clipped DZs contain at least one junction node?
-node_gdf = gpd.GeoDataFrame(
-    {"node_id": node_ids},
-    geometry=[Point(x, y) for x, y in node_coords_utm],
-    crs="EPSG:32630",
-)
-joined = gpd.sjoin(node_gdf, dz_intersect[["DZ2021_cd", "geometry"]], how="inner", predicate="within")
-dzs_with_nodes = set(joined["DZ2021_cd"])
+    # Consolidated graph nodes already have x/y in EPSG:32630 (UTM)
+    node_ids = list(G_cons.nodes())
+    node_coords_utm = [(G_cons.nodes[n]["x"], G_cons.nodes[n]["y"]) for n in node_ids]
 
-dz_final = dz_intersect[dz_intersect["DZ2021_cd"].isin(dzs_with_nodes)].copy()
-n_dropped = len(dz_intersect) - len(dz_final)
-print(f"  Dropped {n_dropped} DZs with no road nodes inside clipped area")
-print(f"  Kept {len(dz_final)} DZs, estimated pop: {dz_final['pop_estimated'].sum():,}")
+    # Spatial join: which clipped DZs contain at least one junction node?
+    node_gdf = gpd.GeoDataFrame(
+        {"node_id": node_ids},
+        geometry=[Point(x, y) for x, y in node_coords_utm],
+        crs="EPSG:32630",
+    )
+    joined = gpd.sjoin(node_gdf, dz_intersect[["DZ2021_cd", "geometry"]], how="inner", predicate="within")
+    dzs_with_nodes = set(joined["DZ2021_cd"])
 
-# Save clipped DZs (convert back to WGS84 for GeoJSON)
-dz_final.to_crs("EPSG:4326").to_file(f"{OUT_DIR}/newtownards_demographics.geojson", driver="GeoJSON")
+    dz_final = dz_intersect[dz_intersect["DZ2021_cd"].isin(dzs_with_nodes)].copy()
+    n_dropped = len(dz_intersect) - len(dz_final)
+    print(f"  Dropped {n_dropped} DZs with no road nodes inside clipped area")
+    print(f"  Kept {len(dz_final)} DZs, estimated pop: {dz_final['pop_estimated'].sum():,}")
 
-# ── Road-length-weighted population per node ───────────────────────────────────
-# For each node within a DZ, sum outgoing edge lengths as its "road weight".
-# Each node receives: DZ_pop_estimated × (node_road_length / total_DZ_road_length)
+    # Save clipped DZs (convert back to WGS84 for GeoJSON)
+    dz_final.to_crs("EPSG:4326").to_file(f"{OUT_DIR}/newtownards_demographics.geojson", driver="GeoJSON")
 
-print("Computing road-length-weighted node populations …")
+    # ── Road-length-weighted population per node ───────────────────────────────
+    # For each node within a DZ, sum outgoing edge lengths as its "road weight".
+    # Each node receives: DZ_pop_estimated × (node_road_length / total_DZ_road_length)
 
-# Sum of outgoing edge lengths for every node in the consolidated graph
-node_road_length = {
-    n: sum(float(d.get("length", 0)) for _, _, d in G_cons.out_edges(n, data=True))
-    for n in node_ids
-}
+    print("Computing road-length-weighted node populations …")
 
-# joined maps each node to its DZ; build dz_code → [node_id, ...] lookup
-dz_to_nodes = joined.groupby("DZ2021_cd")["node_id"].apply(list).to_dict()
+    # Sum of outgoing edge lengths for every node in the consolidated graph
+    node_road_length = {
+        n: sum(float(d.get("length", 0)) for _, _, d in G_cons.out_edges(n, data=True))
+        for n in node_ids
+    }
 
-node_population = {}   # node_id → float population share
-pop_lookup = dz_final.set_index("DZ2021_cd")["pop_estimated"]
+    # joined maps each node to its DZ; build dz_code → [node_id, ...] lookup
+    dz_to_nodes = joined.groupby("DZ2021_cd")["node_id"].apply(list).to_dict()
 
-for dz_code, nodes_in_dz in dz_to_nodes.items():
-    dz_pop = float(pop_lookup.get(dz_code, 0) or 0)
-    total_len = sum(node_road_length[n] for n in nodes_in_dz)
-    for n in nodes_in_dz:
-        if total_len > 0:
-            node_population[n] = dz_pop * node_road_length[n] / total_len
-        else:
-            node_population[n] = dz_pop / len(nodes_in_dz)
+    node_population = {}   # node_id → float population share
+    pop_lookup = dz_final.set_index("DZ2021_cd")["pop_estimated"]
 
-assigned = sum(1 for v in node_population.values() if v > 0)
-print(f"  {assigned} nodes assigned population (of {len(node_ids)} total)")
+    for dz_code, nodes_in_dz in dz_to_nodes.items():
+        dz_pop = float(pop_lookup.get(dz_code, 0) or 0)
+        total_len = sum(node_road_length[n] for n in nodes_in_dz)
+        for n in nodes_in_dz:
+            if total_len > 0:
+                node_population[n] = dz_pop * node_road_length[n] / total_len
+            else:
+                node_population[n] = dz_pop / len(nodes_in_dz)
 
-# ── OSM POI download + workplace population allocation ─────────────────────────
-# OSM POIs (amenity / shop / office) are snapped to their nearest consolidated
-# node and used as spatial weights within each DZ.
-# NISRA Census 2021 workplace population (APWP001) provides the DZ control total;
-# each node's business demand = DZ_workplace_pop × (node_POI_count / DZ_POI_count).
-# Fallback for DZs with no POIs: equal distribution among nodes.
+    assigned = sum(1 for v in node_population.values() if v > 0)
+    print(f"  {assigned} nodes assigned population (of {len(node_ids)} total)")
 
-print("Loading NISRA Census 2021 workplace population (APWP001) …")
-wp_df = pd.read_excel(WORKPLACE_DATA_FILE, sheet_name="DZ", header=5)
-wp_df = wp_df[["Geography Code", "Workplace population"]].rename(
-    columns={"Geography Code": "DZ2021_cd", "Workplace population": "workplace_pop"}
-)
-wp_df = wp_df[wp_df["DZ2021_cd"].astype(str).str.startswith("N20")].copy()
-wp_df["workplace_pop"] = pd.to_numeric(wp_df["workplace_pop"], errors="coerce").fillna(0)
-print(f"  {len(wp_df)} DZs · NI total workplace pop: {int(wp_df['workplace_pop'].sum()):,}")
+    # ── OSM POI download + workplace population allocation ─────────────────────
+    # OSM POIs (amenity / shop / office) are snapped to their nearest consolidated
+    # node and used as spatial weights within each DZ.
+    # NISRA Census 2021 workplace population (APWP001) provides the DZ control total;
+    # each node's business demand = DZ_workplace_pop × (node_POI_count / DZ_POI_count).
+    # Fallback for DZs with no POIs: equal distribution among nodes.
 
-# Join to dz_final so we only keep study-area DZs
-dz_final = dz_final.merge(wp_df[["DZ2021_cd", "workplace_pop"]], on="DZ2021_cd", how="left")
-dz_final["workplace_pop"] = dz_final["workplace_pop"].fillna(0)
-wp_lookup = dz_final.set_index("DZ2021_cd")["workplace_pop"]
-print(f"  Study area workplace pop: {int(dz_final['workplace_pop'].sum()):,}")
+    print("Loading NISRA Census 2021 workplace population (APWP001) …")
+    wp_df = pd.read_excel(WORKPLACE_DATA_FILE, sheet_name="DZ", header=5)
+    wp_df = wp_df[["Geography Code", "Workplace population"]].rename(
+        columns={"Geography Code": "DZ2021_cd", "Workplace population": "workplace_pop"}
+    )
+    wp_df = wp_df[wp_df["DZ2021_cd"].astype(str).str.startswith("N20")].copy()
+    wp_df["workplace_pop"] = pd.to_numeric(wp_df["workplace_pop"], errors="coerce").fillna(0)
+    print(f"  {len(wp_df)} DZs · NI total workplace pop: {int(wp_df['workplace_pop'].sum()):,}")
+
+    # Join to dz_final so we only keep study-area DZs
+    dz_final = dz_final.merge(wp_df[["DZ2021_cd", "workplace_pop"]], on="DZ2021_cd", how="left")
+    dz_final["workplace_pop"] = dz_final["workplace_pop"].fillna(0)
+    wp_lookup = dz_final.set_index("DZ2021_cd")["workplace_pop"]
+    print(f"  Study area workplace pop: {int(dz_final['workplace_pop'].sum()):,}")
 
 
-EXCLUDE_AMENITY = {
-    "parking", "parking_space", "parking_entrance", "fuel",
-    "atm", "vending_machine", "post_box", "waste_basket",
-    "bench", "bicycle_parking", "recycling", "toilets",
-    "shelter", "telephone",
-}
+    EXCLUDE_AMENITY = {
+        "parking", "parking_space", "parking_entrance", "fuel",
+        "atm", "vending_machine", "post_box", "waste_basket",
+        "bench", "bicycle_parking", "recycling", "toilets",
+        "shelter", "telephone",
+    }
 
-if _os.path.exists(POI_CACHE):
-    print(f"Loading OSM POIs from cache ({POI_CACHE}) …")
-    pois_raw = gpd.read_file(POI_CACHE)
-else:
-    print("Downloading OSM POIs (amenity / shop / office) …")
-    pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
-    _save_cols = [c for c in ["amenity", "shop", "office"] if c in pois_raw.columns]
-    pois_raw[_save_cols + ["geometry"]].to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
-    print(f"  Cached → {POI_CACHE}")
+    if _os.path.exists(POI_CACHE):
+        print(f"Loading OSM POIs from cache ({POI_CACHE}) …")
+        pois_raw = gpd.read_file(POI_CACHE)
+    else:
+        print("Downloading OSM POIs (amenity / shop / office) …")
+        pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
+        _save_cols = [c for c in ["amenity", "shop", "office"] if c in pois_raw.columns]
+        pois_raw[_save_cols + ["geometry"]].to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
+        print(f"  Cached → {POI_CACHE}")
 
-# Filter out low-trip-generating amenity types
-if "amenity" in pois_raw.columns:
-    mask = pois_raw["amenity"].isna() | ~pois_raw["amenity"].isin(EXCLUDE_AMENITY)
-    pois_raw = pois_raw[mask]
+    # Filter out low-trip-generating amenity types
+    if "amenity" in pois_raw.columns:
+        mask = pois_raw["amenity"].isna() | ~pois_raw["amenity"].isin(EXCLUDE_AMENITY)
+        pois_raw = pois_raw[mask]
 
-# Normalise all geometries to points (polygon/linestring features → centroid)
-pois_utm = pois_raw.to_crs("EPSG:32630").copy()
-pois_utm["geometry"] = pois_utm.geometry.centroid
-print(f"  {len(pois_utm)} POIs after filtering")
+    # Normalise all geometries to points (polygon/linestring features → centroid)
+    pois_utm = pois_raw.to_crs("EPSG:32630").copy()
+    pois_utm["geometry"] = pois_utm.geometry.centroid
+    print(f"  {len(pois_utm)} POIs after filtering")
 
-# Snap each POI to its nearest consolidated node
-kdtree = cKDTree(node_coords_utm)
-poi_coords = [(geom.x, geom.y) for geom in pois_utm.geometry]
-_, nearest_indices = kdtree.query(poi_coords)
-pois_utm["nearest_node"] = [node_ids[int(i)] for i in nearest_indices]
+    # Snap each POI to its nearest consolidated node
+    kdtree = cKDTree(node_coords_utm)
+    poi_coords = [(geom.x, geom.y) for geom in pois_utm.geometry]
+    _, nearest_indices = kdtree.query(poi_coords)
+    pois_utm["nearest_node"] = [node_ids[int(i)] for i in nearest_indices]
 
-# POI count per node
-node_poi_count = pois_utm.groupby("nearest_node").size().to_dict()
+    # POI count per node
+    node_poi_count = pois_utm.groupby("nearest_node").size().to_dict()
 
-# Allocate workplace population to nodes within each DZ by POI weight
-node_business_demand = {}
-for dz_code, nodes_in_dz in dz_to_nodes.items():
-    dz_wp = float(wp_lookup.get(dz_code, 0) or 0)
-    poi_weights = {n: node_poi_count.get(n, 0) for n in nodes_in_dz}
-    total_pois = sum(poi_weights.values())
-    for n in nodes_in_dz:
-        if total_pois > 0:
-            node_business_demand[n] = dz_wp * poi_weights[n] / total_pois
-        else:
-            node_business_demand[n] = dz_wp / len(nodes_in_dz)
+    # Allocate workplace population to nodes within each DZ by POI weight
+    node_business_demand = {}
+    for dz_code, nodes_in_dz in dz_to_nodes.items():
+        dz_wp = float(wp_lookup.get(dz_code, 0) or 0)
+        poi_weights = {n: node_poi_count.get(n, 0) for n in nodes_in_dz}
+        total_pois = sum(poi_weights.values())
+        for n in nodes_in_dz:
+            if total_pois > 0:
+                node_business_demand[n] = dz_wp * poi_weights[n] / total_pois
+            else:
+                node_business_demand[n] = dz_wp / len(nodes_in_dz)
 
-active_biz_nodes = sum(1 for v in node_business_demand.values() if v > 0)
-total_biz = sum(node_business_demand.values())
-print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
+    active_biz_nodes = sum(1 for v in node_business_demand.values() if v > 0)
+    total_biz = sum(node_business_demand.values())
+    print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
 
-# node_id → effective UTM centroid used for gravity-model distances:
-#   internal nodes  → their own network coordinates
-#   boundary nodes  → external destination centroid (or own coords for node 180)
-node_effective_utm = {n: (float(x), float(y)) for n, (x, y) in zip(node_ids, node_coords_utm)}
+    # node_id → effective UTM centroid used for gravity-model distances:
+    #   internal nodes  → their own network coordinates
+    #   boundary nodes  → external destination centroid (or own coords for node 180)
+    node_effective_utm = {n: (float(x), float(y)) for n, (x, y) in zip(node_ids, node_coords_utm)}
 
-print("Assigning external zone weights to boundary nodes …")
-for node_id, (name, lat, lon, pop, workplace, damping) in EXTERNAL_ZONES.items():
-    node_population[node_id]      = pop * damping
-    node_business_demand[node_id] = workplace * damping
-    if lat is not None:
-        cx, cy = transformer_to_utm.transform(lon, lat)
-        node_effective_utm[node_id] = (cx, cy)
-    zone = name or "local access"
-    print(f"  Node {node_id:4d}  {zone:<22}  pop={pop * damping:>8.0f}  workplace={workplace * damping:>8.0f}  damping={damping}")
+    print("Assigning external zone weights to boundary nodes …")
+    for node_id, (name, lat, lon, pop, workplace, damping) in EXTERNAL_ZONES.items():
+        node_population[node_id]      = pop * damping
+        node_business_demand[node_id] = workplace * damping
+        if lat is not None:
+            cx, cy = transformer_to_utm.transform(lon, lat)
+            node_effective_utm[node_id] = (cx, cy)
+        zone = name or "local access"
+        print(f"  Node {node_id:4d}  {zone:<22}  pop={pop * damping:>8.0f}  workplace={workplace * damping:>8.0f}  damping={damping}")
 
-# ── Serialise node weights for assignment script ───────────────────────────────
-weights_path = f"{OUT_DIR}/node_weights.json"
-with open(weights_path, "w") as f:
-    json.dump({
-        "node_population":      {str(k): v for k, v in node_population.items()},
-        "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
-        "node_effective_utm":   {str(k): list(v) for k, v in node_effective_utm.items()},
-        "boundary_node_ids":    list(EXTERNAL_ZONES.keys()),
-    }, f)
-print(f"Saved node weights → {weights_path}")
+    # ── Serialise node weights for assignment script ───────────────────────────
+    weights_path = f"{OUT_DIR}/node_weights.json"
+    with open(weights_path, "w") as f:
+        json.dump({
+            "node_population":      {str(k): v for k, v in node_population.items()},
+            "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
+            "node_effective_utm":   {str(k): list(v) for k, v in node_effective_utm.items()},
+            "boundary_node_ids":    list(EXTERNAL_ZONES.keys()),
+        }, f)
+    print(f"Saved node weights → {weights_path}")
 
 # ── 5. Build map ───────────────────────────────────────────────────────────────
 
@@ -530,7 +555,7 @@ if _os.path.exists(_flows_path):
         if geom and hasattr(geom, "coords"):
             _coords = [_tr_flow.transform(x, y)[::-1] for x, y in geom.coords]
         else:
-            ud, vd = G.nodes[u], G.nodes[v]
+            ud, vd = G_cons.nodes[u], G_cons.nodes[v]
             lon_u, lat_u = _tr_flow.transform(float(ud["x"]), float(ud["y"]))
             lon_v, lat_v = _tr_flow.transform(float(vd["x"]), float(vd["y"]))
             _coords = [(lat_u, lon_u), (lat_v, lon_v)]
@@ -554,5 +579,5 @@ out_path = f"{OUT_DIR}/newtownards_map.html"
 m.save(out_path)
 total_node_pop = sum(node_population.values())
 print(f"\nSaved: {out_path}")
-print(f"  {len(dz_final)} Data Zones · est. pop range {pop_min:.0f}–{pop_max:.0f}")
+print(f"  {len(dz_plot)} Data Zones · est. pop range {pop_min:.0f}–{pop_max:.0f}")
 print(f"  {len(node_population)} nodes with population assigned · total {total_node_pop:.0f}")
