@@ -27,9 +27,10 @@ from collections import defaultdict
 # ── Config ──────────────────────────────────────────────────────────────────────
 
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
-MU     = 9.6    # lognormal shift; peak at exp(MU − ALPHA×SIGMA²) = exp(7.6) ≈ 2000m
-SIGMA  = 1.0    # lognormal spread in log-distance space
-ALPHA  = 2.0    # power-law tail exponent (far-field decay, matches former 1/d² model)
+MU     = 7.5    # lognormal shift; peak at exp(MU − ALPHA×SIGMA²) = exp(5.5) ≈ 245 s ≈ 4 min
+SIGMA  = 1.0    # lognormal spread in log-time space
+ALPHA  = 2.0    # power-law tail exponent
+OFFSCREEN_SPEED_MS = 80_000 / 3600   # 80 km/h — assumed speed for off-network boundary legs
 
 # Traffic count sites used for least-squares calibration of K.
 # links: list of directed (u,v) pairs to sum for AADT; None → use cordon_flow(node).
@@ -69,7 +70,7 @@ if os.path.exists(PATHS_CACHE):
     node_ids_arr = cache["node_ids"]          # int32 (N,)
     od_src       = cache["od_src"]            # int32 (P,)  source node index
     od_dst       = cache["od_dst"]            # int32 (P,)  target node index
-    od_dist      = cache["od_dist"].astype(np.float64)  # (P,) effective distance
+    od_dist      = cache["od_dist"].astype(np.float64)  # (P,) effective travel time (seconds)
     pair_idx     = cache["pair_idx"]          # int32 (E,)  which OD pair
     link_idx     = cache["link_idx"]          # int32 (E,)  which link
     link_u       = cache["link_u"]            # int32 (L,)
@@ -110,6 +111,8 @@ else:
 
     print("Loading consolidated graph …")
     G = ox.load_graphml(CONS_GRAPH)
+    G = ox.speed.add_edge_speeds(G)
+    G = ox.speed.add_edge_travel_times(G)
     node_ids = list(G.nodes())
     print(f"  {len(node_ids)} nodes  {G.number_of_edges()} edges")
 
@@ -126,10 +129,10 @@ else:
         nd = G.nodes[nid]
         nx_pos, ny_pos = float(nd["x"]), float(nd["y"])
         cx, cy = node_effective_utm[nid]
-        boundary_offscreen[nid] = math.sqrt((nx_pos - cx) ** 2 + (ny_pos - cy) ** 2)
+        boundary_offscreen[nid] = math.sqrt((nx_pos - cx) ** 2 + (ny_pos - cy) ** 2) / OFFSCREEN_SPEED_MS
 
     for nid, extra in boundary_offscreen.items():
-        print(f"  Node {nid:4d}  offscreen leg: {extra/1000:.1f} km")
+        print(f"  Node {nid:4d}  offscreen leg: {extra:.0f} s")
 
     print("Running assignment …")
     t0 = time.time()
@@ -141,7 +144,7 @@ else:
             continue
         src_is_boundary = source in boundary_node_ids
         try:
-            lengths, paths = nx.single_source_dijkstra(G, source, weight="length")
+            lengths, paths = nx.single_source_dijkstra(G, source, weight="travel_time")
         except Exception:
             continue
         for target, path in paths.items():

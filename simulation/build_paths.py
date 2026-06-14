@@ -1,16 +1,20 @@
 """
-Precompute all-pairs shortest paths for the Newtownards road network.
+Precompute all-pairs shortest-time paths for the Newtownards road network.
 
 Run this once after any network change (build_network.py or edit_network.py).
 Produces simulation/newtownards_paths.npz, which build_assignment.py loads
 to avoid re-running Dijkstra on every parameter-tuning iteration.
 
+od_dist in the cache stores effective travel time in seconds: network travel
+time (from edge travel_time attributes) plus the boundary offscreen leg
+converted at OFFSCREEN_SPEED_MS.
+
 Cache must be regenerated when:
   - The road network changes (newtownards_consolidated.graphml is updated)
   - External zone coordinates (lat/lon) change in build_demographics.py EXTERNAL_ZONES
 
-Does NOT need regenerating for changes to W_BIZ, ALPHA, node populations,
-damping factors, or count site values.
+Does NOT need regenerating for changes to W_BIZ, MU, SIGMA, ALPHA, node
+populations, damping factors, or count site values.
 """
 
 import json, math, time, os
@@ -19,14 +23,17 @@ import osmnx as ox
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 
-CONS_GRAPH   = "simulation/newtownards_consolidated.graphml"
-WEIGHTS_FILE = "simulation/node_weights.json"
-PATHS_CACHE  = "simulation/newtownards_paths.npz"
+CONS_GRAPH          = "simulation/newtownards_consolidated.graphml"
+WEIGHTS_FILE        = "simulation/node_weights.json"
+PATHS_CACHE         = "simulation/newtownards_paths.npz"
+OFFSCREEN_SPEED_MS  = 80_000 / 3600   # 80 km/h in m/s — assumed speed for off-network boundary legs
 
 # ── Load graph and weights ───────────────────────────────────────────────────────
 
 print("Loading graph …")
 G = ox.load_graphml(CONS_GRAPH)
+G = ox.speed.add_edge_speeds(G)
+G = ox.speed.add_edge_travel_times(G)
 node_ids = list(G.nodes())
 n = len(node_ids)
 node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
@@ -47,7 +54,7 @@ for nid in boundary_node_ids:
     nd = G.nodes[nid]
     nx_pos, ny_pos = float(nd["x"]), float(nd["y"])
     cx, cy = node_effective_utm[nid]
-    boundary_offscreen[nid] = math.sqrt((nx_pos - cx) ** 2 + (ny_pos - cy) ** 2)
+    boundary_offscreen[nid] = math.sqrt((nx_pos - cx) ** 2 + (ny_pos - cy) ** 2) / OFFSCREEN_SPEED_MS
 
 # ── Build scipy sparse adjacency matrix ──────────────────────────────────────────
 
@@ -57,9 +64,9 @@ link_list  = []
 link_to_idx = {}
 
 for u, v, edata in G.edges(data=True):
-    length = float(edata.get("length", 1.0))
+    cost = float(edata.get("travel_time", 1.0))
     i, j = node_to_idx[u], node_to_idx[v]
-    rows.append(i); cols.append(j); data.append(length)
+    rows.append(i); cols.append(j); data.append(cost)
     lnk = (u, v)
     if lnk not in link_to_idx:
         link_to_idx[lnk] = len(link_list)
