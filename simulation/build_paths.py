@@ -34,10 +34,10 @@ OFFSCREEN_SPEED_MS  = 80_000 / 3600   # 80 km/h in m/s — assumed speed for off
 # < 1 favours that road class; > 1 penalises it.
 # Changing these values requires re-running build_paths.py and re-tuning.
 HIGHWAY_COST_FACTOR = {
-    "trunk":         0.75,
-    "trunk_link":    0.75,
-    "primary":       0.75,
-    "primary_link":  0.75,
+    "trunk":         0.67,
+    "trunk_link":    0.67,
+    "primary":       0.67,
+    "primary_link":  0.67,
     "secondary":     1.0,
     "tertiary":      1.0,
     "tertiary_link": 1.0,

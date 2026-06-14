@@ -146,11 +146,19 @@ for s in COUNT_SITES:
         float(s["observed"]), 0.10 * s["observed"]
     ))
 
+# Links excluded from calibration (retained in link_aadt.json but not used as
+# tuning observations). Directed: (u, v) only excludes that direction.
+EXCLUDE_LINKS = {
+    (161, 160),  # too-short count, likely distorted by traffic light timing
+}
+
 if os.path.exists(LINK_AADT):
     with open(LINK_AADT) as f:
         link_aadt_data = json.load(f)["links"]
     for key, entry in sorted(link_aadt_data.items()):
         u, v = map(int, key.split(","))
+        if (u, v) in EXCLUDE_LINKS:
+            continue
         observations.append((
             "walking", (u, v), None,
             float(entry["aadt"]), float(entry["aadt_uncertainty"])
