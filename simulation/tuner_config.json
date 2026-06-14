@@ -15,8 +15,8 @@
     },
     "LowerArds": {
       "nodes": [92],
-      "ref_pop": 20000,
-      "ref_wp": 4000,
+      "ref_pop": 33000,
+      "ref_wp": 5000,
       "dampings": {"92": 1.0}
     },
     "Belfast": {
