@@ -27,7 +27,16 @@
       "with_uncertainty": 0.707,
       "against_uncertainty": 0.707,
       "total_uncertainty": 0.707,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 0,
+      "with_aadt_uncertainty": 236,
+      "against_aadt": 0,
+      "against_aadt_uncertainty": 236,
+      "total_aadt": 0,
+      "total_aadt_uncertainty": 236,
+      "hourly_fraction": 0.068603,
+      "hourly_fraction_std": 0.008002,
+      "aadt_method": "hourly_fraction_v1"
     },
     "8611420e": {
       "session_id": "8611420e",
@@ -56,7 +65,16 @@
       "with_uncertainty": 2.739,
       "against_uncertainty": 3.674,
       "total_uncertainty": 4.528,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 3570,
+      "with_aadt_uncertainty": 1458,
+      "against_aadt": 6630,
+      "against_aadt_uncertainty": 2027,
+      "total_aadt": 10199,
+      "total_aadt_uncertainty": 2598,
+      "hourly_fraction": 0.068603,
+      "hourly_fraction_std": 0.008002,
+      "aadt_method": "hourly_fraction_v1"
     },
     "a53b4064": {
       "session_id": "a53b4064",
@@ -85,7 +103,16 @@
       "with_uncertainty": 2.55,
       "against_uncertainty": 2.121,
       "total_uncertainty": 3.24,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 2210,
+      "with_aadt_uncertainty": 974,
+      "against_aadt": 1473,
+      "against_aadt_uncertainty": 800,
+      "total_aadt": 3683,
+      "total_aadt_uncertainty": 1268,
+      "hourly_fraction": 0.068603,
+      "hourly_fraction_std": 0.008002,
+      "aadt_method": "hourly_fraction_v1"
     },
     "e0e99295": {
       "session_id": "e0e99295",
@@ -114,7 +141,16 @@
       "with_uncertainty": 0.707,
       "against_uncertainty": 1.225,
       "total_uncertainty": 1.225,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 0,
+      "with_aadt_uncertainty": 888,
+      "against_aadt": 1256,
+      "against_aadt_uncertainty": 1551,
+      "total_aadt": 1256,
+      "total_aadt_uncertainty": 1551,
+      "hourly_fraction": 0.032748,
+      "hourly_fraction_std": 0.00509,
+      "aadt_method": "hourly_fraction_v1"
     },
     "0dda12dd": {
       "session_id": "0dda12dd",
@@ -143,7 +179,16 @@
       "with_uncertainty": 3.24,
       "against_uncertainty": 2.55,
       "total_uncertainty": 4.062,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 9316,
+      "with_aadt_uncertainty": 3348,
+      "against_aadt": 5590,
+      "against_aadt_uncertainty": 2530,
+      "total_aadt": 14906,
+      "total_aadt_uncertainty": 4437,
+      "hourly_fraction": 0.032748,
+      "hourly_fraction_std": 0.00509,
+      "aadt_method": "hourly_fraction_v1"
     },
     "fd190c10": {
       "session_id": "fd190c10",
@@ -172,7 +217,16 @@
       "with_uncertainty": 2.345,
       "against_uncertainty": 1.581,
       "total_uncertainty": 2.739,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 4742,
+      "with_aadt_uncertainty": 2340,
+      "against_aadt": 1897,
+      "against_aadt_uncertainty": 1527,
+      "total_aadt": 6639,
+      "total_aadt_uncertainty": 2790,
+      "hourly_fraction": 0.024924,
+      "hourly_fraction_std": 0.003819,
+      "aadt_method": "hourly_fraction_v1"
     },
     "de9ade9d": {
       "session_id": "de9ade9d",
@@ -201,7 +255,16 @@
       "with_uncertainty": 2.121,
       "against_uncertainty": 2.121,
       "total_uncertainty": 2.915,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 3870,
+      "with_aadt_uncertainty": 2136,
+      "against_aadt": 3870,
+      "against_aadt_uncertainty": 2136,
+      "total_aadt": 7740,
+      "total_aadt_uncertainty": 3059,
+      "hourly_fraction": 0.024924,
+      "hourly_fraction_std": 0.003819,
+      "aadt_method": "hourly_fraction_v1"
     },
     "50b95b49": {
       "session_id": "50b95b49",
@@ -230,7 +293,16 @@
       "with_uncertainty": 3.391,
       "against_uncertainty": 3.674,
       "total_uncertainty": 4.95,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 2783,
+      "with_aadt_uncertainty": 958,
+      "against_aadt": 3289,
+      "against_aadt_uncertainty": 1057,
+      "total_aadt": 6072,
+      "total_aadt_uncertainty": 1560,
+      "hourly_fraction": 0.024924,
+      "hourly_fraction_std": 0.003819,
+      "aadt_method": "hourly_fraction_v1"
     },
     "bf841b3e": {
       "session_id": "bf841b3e",
@@ -259,7 +331,16 @@
       "with_uncertainty": 2.915,
       "against_uncertainty": 2.345,
       "total_uncertainty": 3.674,
-      "uncertainty_method": "jeffreys"
+      "uncertainty_method": "jeffreys",
+      "with_aadt": 2890,
+      "with_aadt_uncertainty": 1142,
+      "against_aadt": 1806,
+      "against_aadt_uncertainty": 891,
+      "total_aadt": 4695,
+      "total_aadt_uncertainty": 1510,
+      "hourly_fraction": 0.024924,
+      "hourly_fraction_std": 0.003819,
+      "aadt_method": "hourly_fraction_v1"
     }
   }
 }
