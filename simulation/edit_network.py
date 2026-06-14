@@ -10,6 +10,11 @@ Deletions requested (all at study-area boundary):
                                            the clean trunk boundary node
   Cons 767 (OSM 548735778)               — Drumhirk Way terminus
 
+Highway type overrides:
+  Hardford Link (cons 18↔21, 21↔68)     — reclassified tertiary → primary; it carries
+                                           primary-route traffic levels and was being
+                                           systematically under-routed as tertiary.
+
 Removes the nodes and all their incident edges from both the consolidated
 graph and the raw graph, then overwrites the saved GraphML files.
 """
@@ -32,6 +37,14 @@ for n in CONS_NODES_TO_REMOVE:
         G_cons.remove_node(n)
     else:
         print(f"  Cons node {n}: already absent, skipping")
+
+# Reclassify Hardford Link edges as primary
+for u, v in [(18, 21), (21, 18), (21, 68), (68, 21)]:
+    if G_cons.has_edge(u, v):
+        for key in G_cons[u][v]:
+            old = G_cons[u][v][key].get("highway", "?")
+            G_cons[u][v][key]["highway"] = "primary"
+            print(f"  Hardford Link cons {u}→{v}: {old} → primary")
 
 print(f"Consolidated after:  {G_cons.number_of_nodes()} nodes, {G_cons.number_of_edges()} edges")
 ox.save_graphml(G_cons, CONS_PATH)
@@ -58,6 +71,17 @@ for n in RAW_NODES_TO_REMOVE:
         G_raw.remove_node(n)
     else:
         print(f"  Raw node {n}: already absent, skipping")
+
+# Reclassify Hardford Link edges as primary (match by name)
+changed = 0
+for u, v, key, data in G_raw.edges(data=True, keys=True):
+    name = data.get("name", "")
+    if isinstance(name, list):
+        name = name[0] if name else ""
+    if name == "Hardford Link":
+        G_raw[u][v][key]["highway"] = "primary"
+        changed += 1
+print(f"  Hardford Link raw edges reclassified: {changed} (tertiary → primary)")
 
 print(f"Raw after:  {G_raw.number_of_nodes()} nodes, {G_raw.number_of_edges()} edges")
 ox.save_graphml(G_raw, RAW_PATH)

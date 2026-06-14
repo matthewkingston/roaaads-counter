@@ -34,7 +34,7 @@ refine rather than restart.
 | File | Role |
 |------|------|
 | `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. |
-| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. |
+| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.75, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. |
 | `simulation/build_assignment.py` | Gravity model + all-or-nothing assignment. Loads `tuned_params.json` automatically if present. Prints χ²/N goodness-of-fit table. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization and city→node groupings. Edit this to change the prior for external zone populations. |
