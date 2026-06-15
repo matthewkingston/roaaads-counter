@@ -140,7 +140,8 @@ Persistent outliers from last full tune: `18→21` (z=−2.20), `33→30` (z=+2.
 
 New outliers in latest gravity run (per-session, Woodbury; need full re-tune before interpreting):
 `636↔628` Comber Road (z≈−5.4/−5.2 multiple sessions), `719↔325` Messines Road (z≈−6.1/−5.3),
-`328↔326` Comber Road (z≈−4.5/−3.7), `22→159` (z=−2.84, model=0 — routing issue).
+`328↔326` Comber Road (z≈−4.5/−3.7).
+`22→159` (model=0) was a data error (snap direction bug, fixed 2026-06-15): now recorded as 159→22.
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
@@ -156,6 +157,11 @@ New outliers in latest gravity run (per-session, Woodbury; need full re-tune bef
   stage 1 run with fixed external zone weights will show inflated χ²/N and
   spurious outliers at boundary sites (esp. site 508). A full 24-param re-tune
   is needed to restore fit quality.
+- **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` stored canonical
+  `(min(u,v), max(u,v))` indices in `edge_geoms` instead of the actual directed
+  `(u, v)`. For one-way roads where u > v (e.g. 159→22), the dot-product sign was
+  correct but `link_with` was flipped. Fix: store `(u, v)` not `(pair[0], pair[1])`.
+  Only `f56b2ce4` was materially affected — re-snapped from 22→159 to 159→22.
 - The Woodbury correction accounts for within-slot correlated uncertainty: all observations
   in the same `(weekday, hour)` slot share the same NI-average hourly fraction, so their
   fractional AADT uncertainty is perfectly correlated. The correction is O(B_slot) per slot

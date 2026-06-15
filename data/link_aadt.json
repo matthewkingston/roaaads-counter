@@ -645,24 +645,6 @@
         }
       ]
     },
-    "22,159": {
-      "aadt": 6281,
-      "aadt_uncertainty": 2213,
-      "n_observations": 1,
-      "observations": [
-        {
-          "session_id": "f56b2ce4",
-          "direction": "with",
-          "aadt": 6281,
-          "aadt_uncertainty": 2213,
-          "time_slot": [
-            0,
-            15
-          ],
-          "frac_rel_std": 0.083171
-        }
-      ]
-    },
     "23,295": {
       "aadt": 7195,
       "aadt_uncertainty": 2582,
@@ -1447,6 +1429,24 @@
             20
           ],
           "frac_rel_std": 0.154203
+        }
+      ]
+    },
+    "159,22": {
+      "aadt": 6281,
+      "aadt_uncertainty": 2213,
+      "n_observations": 1,
+      "observations": [
+        {
+          "session_id": "f56b2ce4",
+          "direction": "with",
+          "aadt": 6281,
+          "aadt_uncertainty": 2213,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },

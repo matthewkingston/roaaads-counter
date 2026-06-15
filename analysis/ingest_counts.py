@@ -106,7 +106,9 @@ if needs_snap:
 
     to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
 
-    # Deduplicated undirected edges: (u, v, geom) with u < v
+    # Deduplicated undirected edges: store actual (u, v) so geometry direction
+    # matches best_u/best_v in snap_to_link (fixes direction flip on one-way
+    # roads where u > v).
     seen_pairs = set()
     edge_geoms = []
     for u, v, edata in G.edges(data=True):
@@ -114,7 +116,7 @@ if needs_snap:
         if pair in seen_pairs:
             continue
         seen_pairs.add(pair)
-        edge_geoms.append((pair[0], pair[1], edata["geometry"]))
+        edge_geoms.append((u, v, edata["geometry"]))
 
     print(f"  {len(edge_geoms)} unique undirected links")
 

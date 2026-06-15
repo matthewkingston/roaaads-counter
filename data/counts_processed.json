@@ -965,15 +965,6 @@
       "against_uncertainty": 3.24,
       "total_uncertainty": null,
       "uncertainty_method": "jeffreys",
-      "matched_link_with": [
-        159,
-        157
-      ],
-      "matched_link_against": [
-        157,
-        159
-      ],
-      "match_rmse_m": 10.9,
       "with_aadt": null,
       "with_aadt_uncertainty": null,
       "against_aadt": 16143,
@@ -987,7 +978,16 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_with": [
+        159,
+        157
+      ],
+      "matched_link_against": [
+        157,
+        159
+      ],
+      "match_rmse_m": 10.9
     },
     "b3437a3b": {
       "session_id": "b3437a3b",
@@ -1008,15 +1008,6 @@
       "against_uncertainty": 3.937,
       "total_uncertainty": null,
       "uncertainty_method": "jeffreys",
-      "matched_link_with": [
-        298,
-        84
-      ],
-      "matched_link_against": [
-        84,
-        298
-      ],
-      "match_rmse_m": 23.6,
       "with_aadt": null,
       "with_aadt_uncertainty": null,
       "against_aadt": 11718,
@@ -1030,7 +1021,16 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_with": [
+        298,
+        84
+      ],
+      "matched_link_against": [
+        84,
+        298
+      ],
+      "match_rmse_m": 23.6
     },
     "5bcd75b5": {
       "session_id": "5bcd75b5",
@@ -3158,15 +3158,6 @@
       "against_uncertainty": null,
       "total_uncertainty": null,
       "uncertainty_method": "jeffreys",
-      "matched_link_with": [
-        22,
-        159
-      ],
-      "matched_link_against": [
-        159,
-        22
-      ],
-      "match_rmse_m": 3.9,
       "with_aadt": 6281,
       "with_aadt_uncertainty": 2213,
       "against_aadt": null,
@@ -3180,7 +3171,16 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_with": [
+        159,
+        22
+      ],
+      "matched_link_against": [
+        22,
+        159
+      ],
+      "match_rmse_m": 3.9
     },
     "219245fa": {
       "session_id": "219245fa",
