@@ -16,6 +16,7 @@ Node 180 (pop=50, wp=0) is excluded from stage 2 — too small to tune.
 Results:
   simulation/tuned_params.json   best params from this run (read by build_assignment.py)
   simulation/tuning_history.jsonl  appended record of every run
+  simulation/gravity_model_curve.png  kernel shape plot
 
 Usage:
   python3 analysis/tune_assignment.py
@@ -34,9 +35,11 @@ import scipy.optimize
 PATHS_CACHE  = "simulation/newtownards_paths.npz"
 WEIGHTS_FILE = "simulation/node_weights.json"
 TUNER_CONFIG = "simulation/tuner_config.json"
+LINKS_GEO    = "simulation/newtownards_links.geojson"
 LINK_AADT    = "data/link_aadt.json"
 TUNED_PARAMS = "simulation/tuned_params.json"
 HISTORY_FILE = "simulation/tuning_history.jsonl"
+CURVE_PNG    = "simulation/gravity_model_curve.png"
 
 COUNT_SITES = [
     {"label": "site 507, A21 Bangor Road",     "node": 731, "links": [(731,730),(730,731)], "observed": 21_202},
@@ -67,6 +70,19 @@ if tag is None:
         tag = "untagged"
 
 print(f"Stage: {stage}  tag: {tag}")
+
+# ── Load previous best from history ──────────────────────────────────────────
+
+prev_chi2_per_n = None
+prev_tag        = None
+if os.path.exists(HISTORY_FILE):
+    with open(HISTORY_FILE) as _hf:
+        _lines = [ln for ln in _hf if ln.strip()]
+    if _lines:
+        _last = json.loads(_lines[-1])
+        prev_chi2_per_n = _last.get("chi2_per_n")
+        prev_tag        = _last.get("tag", "")
+        print(f"Previous run:  χ²/N={prev_chi2_per_n:.4f}  (tag={prev_tag})")
 
 # ── Load paths cache ──────────────────────────────────────────────────────────
 
@@ -105,6 +121,23 @@ node_biz_full = {int(k): v for k, v in wdata["node_business_demand"].items()}
 # Precomputed base weight arrays (used in stage 1 and as fallback in stage 2)
 base_w_pop = np.array([node_pop_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 base_w_biz = np.array([node_biz_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+
+# ── Load street names for links ───────────────────────────────────────────────
+
+link_name = {}
+if os.path.exists(LINKS_GEO):
+    with open(LINKS_GEO) as _f:
+        _geo = json.load(_f)
+    for _feat in _geo["features"]:
+        _p = _feat["properties"]
+        _name = _p.get("name") or ""
+        if _name:
+            link_name[(int(_p["u"]), int(_p["v"]))] = _name
+
+
+def _link_label(u, v):
+    name = link_name.get((u, v), "")
+    return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
 # ── Load tuner config ─────────────────────────────────────────────────────────
 
@@ -280,8 +313,8 @@ def objective(log_params, log_ref=None):
 
     if eval_count[0] % 20 == 0:
         elapsed = time.time() - t0
-        print(f"  {eval_count[0]:4d}  χ²={chi2:.2f}  χ²/N={chi2/n_obs:.2f}"
-              f"  K={K:.4f}  best={best['chi2']:.2f}  ({elapsed:.0f}s)")
+        print(f"  {eval_count[0]:4d}  χ²={chi2:.2f}  χ²/N={chi2/n_obs:.3f}"
+              f"  best={best['chi2']/n_obs:.3f}  ({elapsed:.0f}s)")
 
     return chi2
 
@@ -329,7 +362,7 @@ else:
 # ── Run optimization ──────────────────────────────────────────────────────────
 
 print(f"\nRunning Powell's method (λ={lam}) …")
-print(f"  {'eval':>4s}  χ²        χ²/N    K        best     elapsed")
+print(f"  {'eval':>4s}  χ²/N(curr)  χ²/N(best)  elapsed")
 
 # Evaluate initial point
 objective(log_p0, log_ref)
@@ -397,20 +430,54 @@ chi2_per_n = chi2 / n_obs
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
-print(f"  K={K:.4f}  W_BIZ={W_BIZ:.4f}  MU={MU:.4f}  SIGMA={SIGMA:.4f}  ALPHA={ALPHA:.4f}")
-print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.3f}  (target ~1.0)")
+print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  MU={MU:.4f}  SIGMA={SIGMA:.4f}  ALPHA={ALPHA:.4f}")
+print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  (target ~1.0)")
+if prev_chi2_per_n is not None:
+    delta = chi2_per_n - prev_chi2_per_n
+    direction = "improvement" if delta < 0 else "regression"
+    print(f"  vs previous ({prev_tag}):  Δχ²/N={delta:+.4f}  ({direction})")
 
-# ── Print goodness-of-fit table ───────────────────────────────────────────────
+# ── City parameter delta table (full stage) ───────────────────────────────────
 
-print(f"\n  {'Source':<10s}  {'Label':<42s}  {'Obs':>7s}  {'σ':>6s}  {'Model':>7s}  {'z':>6s}")
+if stage == "full":
+    print(f"\n  {'City':<12}  {'ref_pop':>10}  {'tuned_pop':>10}  {'Δpop%':>7}  "
+          f"{'ref_wp':>8}  {'tuned_wp':>8}  {'Δwp%':>7}")
+    for city_name, city_cfg in city_list:
+        rp = city_cfg["ref_pop"]
+        tp = city_pops_out[city_name]
+        rw = city_cfg["ref_wp"]
+        tw = city_wps_out[city_name]
+        dp = 100.0 * (tp - rp) / rp
+        dw = 100.0 * (tw - rw) / rw if rw > 0 else float("nan")
+        print(f"  {city_name:<12}  {rp:>10,.0f}  {tp:>10,.0f}  {dp:>+7.1f}%  "
+              f"{rw:>8,.0f}  {tw:>8,.0f}  {dw:>+7.1f}%")
+
+# ── Goodness-of-fit table (sorted by |z|) ────────────────────────────────────
+
+fit_rows = []
 for i_obs, (kind, target, links, obs, sig) in enumerate(observations):
     if kind == "official":
         lbl = next(s["label"] for s in COUNT_SITES if s["node"] == target)
     else:
-        lbl = f"{target[0]}→{target[1]}"
+        lbl = _link_label(target[0], target[1])
     mod = K * m_arr[i_obs]
-    z   = (mod - obs) / sig
-    print(f"  {kind:<10s}  {lbl:<42s}  {obs:>7,.0f}  {sig:>6,.0f}  {mod:>7,.0f}  {z:>+.2f}")
+    z   = resid[i_obs]
+    fit_rows.append((kind, lbl, obs, sig, mod, z))
+
+fit_rows.sort(key=lambda r: abs(r[5]), reverse=True)
+
+LABEL_W = 52
+print(f"\n  {'':1s}  {'Src':<8}  {'Label':<{LABEL_W}}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}")
+for kind, lbl, obs, sig, mod, z in fit_rows:
+    marker = "*" if abs(z) > 2 else " "
+    print(f"  {marker} {kind:<8}  {lbl:<{LABEL_W}}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}")
+
+abs_z      = [abs(r[5]) for r in fit_rows]
+mean_abs_z = sum(abs_z) / len(abs_z)
+n_out2     = sum(1 for a in abs_z if a > 2)
+n_out3     = sum(1 for a in abs_z if a > 3)
+print(f"\n  n={len(fit_rows)}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_abs_z:.2f}"
+      f"  |z|>2: {n_out2}  |z|>3: {n_out3}")
 
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 
@@ -436,6 +503,42 @@ with open(TUNED_PARAMS, "w") as f:
     json.dump(tuned, f, indent=2)
 print(f"\nSaved → {TUNED_PARAMS}")
 
+# ── Gravity model kernel plot ─────────────────────────────────────────────────
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    d_sec  = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
+    d_min  = d_sec / 60.0
+    kernel = K * np.exp(-0.5 * ((np.log(d_sec) - MU) / SIGMA) ** 2) / d_sec ** ALPHA
+
+    d_peak_sec = math.exp(MU - ALPHA * SIGMA ** 2)
+    k_peak     = K * math.exp(-0.5 * ((math.log(d_peak_sec) - MU) / SIGMA) ** 2) / d_peak_sec ** ALPHA
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(d_min, kernel, linewidth=1.8)
+    ax.axvline(d_peak_sec / 60.0, color="r", linestyle="--", alpha=0.7,
+               label=f"peak  {d_peak_sec/60.0:.1f} min  ({k_peak:.3e})")
+    ax.set_xlabel("Travel time (minutes)")
+    ax.set_ylabel("K · exp(−½((ln d − μ)/σ)²) / d^α")
+    ax.set_title(
+        f"Gravity kernel  "
+        f"MU={MU:.3f}  SIGMA={SIGMA:.3f}  ALPHA={ALPHA:.3f}  K={K:.3e}\n"
+        f"stage={stage}  χ²/N={chi2_per_n:.4f}  tag={tag}"
+    )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.legend()
+    ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(CURVE_PNG, dpi=150)
+    plt.close(fig)
+    print(f"Saved → {CURVE_PNG}")
+except Exception as _e:
+    print(f"Warning: could not save gravity curve plot ({_e})")
+
 # ── Append to tuning history ──────────────────────────────────────────────────
 
 history_entry = {
@@ -454,12 +557,16 @@ history_entry = {
     "ALPHA": round(ALPHA, 6),
     "observations": [
         {
-            "kind":     obs[0],
-            "target":   list(obs[1]) if isinstance(obs[1], tuple) else obs[1],
-            "observed": obs[3],
-            "sigma":    round(obs[4], 1),
+            "kind":     observations[i_obs][0],
+            "target":   (list(observations[i_obs][1])
+                         if isinstance(observations[i_obs][1], tuple)
+                         else observations[i_obs][1]),
+            "observed": observations[i_obs][3],
+            "sigma":    round(observations[i_obs][4], 1),
+            "model":    round(float(K * m_arr[i_obs]), 1),
+            "z":        round(float(resid[i_obs]), 3),
         }
-        for obs in observations
+        for i_obs in range(n_obs)
     ],
 }
 

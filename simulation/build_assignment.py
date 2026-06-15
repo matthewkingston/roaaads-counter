@@ -26,6 +26,7 @@ from collections import defaultdict
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 
+
 K      = 1.73   # global flow scale factor
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
 MU     = 7.5    # lognormal shift; peak at exp(MU − ALPHA×SIGMA²) = exp(5.5) ≈ 245 s ≈ 4 min
@@ -48,6 +49,7 @@ TUNER_CONFIG   = "simulation/tuner_config.json"
 CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
 PATHS_CACHE    = "simulation/newtownards_paths.npz"
 LINK_AADT_FILE = "data/link_aadt.json"
+LINKS_GEO      = "simulation/newtownards_links.geojson"
 
 # ── Load node weights ────────────────────────────────────────────────────────────
 
@@ -84,6 +86,23 @@ if os.path.exists(TUNED_PARAMS):
     for _nid, _val in _tp.get("external_node_biz", {}).items():
         node_business_demand[int(_nid)] = _val
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}]")
+
+# ── Load street names for links ──────────────────────────────────────────────────
+
+_link_name = {}
+if os.path.exists(LINKS_GEO):
+    with open(LINKS_GEO) as _f:
+        _geo = json.load(_f)
+    for _feat in _geo["features"]:
+        _p = _feat["properties"]
+        _n = _p.get("name") or ""
+        if _n:
+            _link_name[(int(_p["u"]), int(_p["v"]))] = _n
+
+
+def _link_label(u, v):
+    name = _link_name.get((u, v), "")
+    return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
 # ── Assignment ───────────────────────────────────────────────────────────────────
 
@@ -209,14 +228,7 @@ def site_raw_flow(site):
     return cordon_flow(site["node"])
 
 def goodness_of_fit():
-    """
-    Chi-squared goodness of fit against all count data (Gaussian uncertainties assumed).
-
-    Official sites: ±10% of observed AADT.
-    Walking counts: uncertainties from link_aadt.json (inverse-variance combined).
-
-    Called after K is applied so link_flow is already scaled.
-    """
+    """Chi-squared goodness of fit against all count data, sorted by |z|."""
     rows = []
     chi2 = 0.0
 
@@ -238,13 +250,25 @@ def goodness_of_fit():
             sig  = entry["aadt_uncertainty"]
             z    = (mod - obs) / sig
             chi2 += z * z
-            rows.append(("walking", f"{u}→{v}", obs, sig, mod, z))
+            rows.append(("walking", _link_label(u, v), obs, sig, mod, z))
 
+    rows.sort(key=lambda r: abs(r[5]), reverse=True)
     n = len(rows)
-    print(f"\nGoodness of fit  χ² = {chi2:.2f}  ({n} observations,  χ²/N = {chi2/n:.2f})")
-    print(f"  {'Source':<10s}  {'Label':<42s}  {'Obs':>7s}  {'σ':>6s}  {'Model':>7s}  {'z':>6s}")
-    for src, lbl, obs, sig, mod, z in rows:
-        print(f"  {src:<10s}  {lbl:<42s}  {obs:>7,.0f}  {sig:>6,.0f}  {mod:>7,.0f}  {z:>+.2f}")
+    chi2_per_n = chi2 / n
+
+    LABEL_W = 52
+    print(f"\nGoodness of fit  χ²={chi2:.2f}  n={n}  χ²/N={chi2_per_n:.4f}")
+    print(f"  {'':1s}  {'Src':<8}  {'Label':<{LABEL_W}}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}")
+    for kind, lbl, obs, sig, mod, z in rows:
+        marker = "*" if abs(z) > 2 else " "
+        print(f"  {marker} {kind:<8}  {lbl:<{LABEL_W}}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}")
+
+    abs_z      = [abs(r[5]) for r in rows]
+    mean_abs_z = sum(abs_z) / len(abs_z)
+    n_out2     = sum(1 for a in abs_z if a > 2)
+    n_out3     = sum(1 for a in abs_z if a > 3)
+    print(f"\n  n={n}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_abs_z:.2f}"
+          f"  |z|>2: {n_out2}  |z|>3: {n_out3}")
     return chi2, n
 
 
