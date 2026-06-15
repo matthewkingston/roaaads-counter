@@ -44,7 +44,7 @@ refine rather than restart.
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise MU/SIGMA/ALPHA/W_BIZ toward physically plausible values (prevents K-drift pathology). Initial guess for MU calibrated so peak = exp(MU − ALPHA·SIGMA²) ≈ 300 s (5 min) at default ALPHA=2, SIGMA=1. Edit to change external zone priors, allowed through routes, or gravity anchors. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Uses individual per-session observations from `link_aadt.json` (not per-link aggregates). Applies Woodbury correction for within-slot correlated uncertainty. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
 | `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
 
@@ -95,12 +95,18 @@ Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
 Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds.
 
 ### K: analytical calibration
-At each optimizer evaluation, K is set analytically to minimise χ²:
-`K = Σ(model_i × obs_i / σ_i²) / Σ(model_i² / σ_i²)`
+At each optimizer evaluation, K is set analytically to minimise the Woodbury-corrected χ².
+For unslotted (official) observations: standard weighted formula.
+For each time slot s: Woodbury rank-1 correction removes the shared fractional mode.
+The combined formula is: `K = B / A` where A and B accumulate both contributions.
 
 ### Goodness of fit
-`χ²/N` (mean squared z-score, target ~1.0). Three official AADT sites (±10%)
-plus all directed walking-count links from `link_aadt.json`.
+`χ²/N` (mean squared z-score, target ~1.0). Three official AADT sites (±10%) plus
+all per-session walking-count observations from `link_aadt.json` observations lists.
+Woodbury correction: observations sharing the same `(weekday, hour)` time slot have
+correlated AADT uncertainty (same hourly fraction draw). The Woodbury matrix identity
+on the rank-1 covariance removes this double-counting without cost.
+`N_eff = N − N_slots` is printed as a diagnostic (each slot loses one effective df).
 
 ---
 
@@ -111,7 +117,7 @@ plus all directed walking-count links from `link_aadt.json`.
 - Site 508: A48 Donaghadee Road — 10,792 AADT
 - Site 444: A20 Portaferry Road — 7,282 AADT
 
-**Walking counts:** 4 CSV files, 109 observations covering 107 directed links.
+**Walking counts:** 4 CSV files, 81 sessions, 159 individual session-direction observations across 107 directed links. The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
 
 ---
 
@@ -125,15 +131,16 @@ plus all directed walking-count links from `link_aadt.json`.
 | 2026-06-14 | full | 25 | 24 | 0.90 | |
 | 2026-06-14 | full | 62 | 24 | 0.956 | road-class routing, Hardford Link primary, excl 161→160 |
 | 2026-06-15 | full | 62 | 24 | **0.895** | + through routes (6 city pairs); refs updated |
-| 2026-06-15 | gravity | 109 | 4 | 2.346 | + 4th count session (107 directed links); full re-tune pending |
+| 2026-06-15 | gravity | 109 | 4 | 2.346 | + 4th count session (107 directed links); per-link agg, no Woodbury |
+| 2026-06-15 | gravity | 161 | 4 | **2.00** | Woodbury correction; per-session obs (N_eff=151, 10 slots); full re-tune pending |
 
 Current best full-tune: χ²/N = 0.895 (62 obs, through routes, excl 161→160).
 Official sites: 507 z=−0.85, 508 z=−0.10, 444 z=−0.15.
-Persistent outliers: `18→21` (z=−2.20), `33→30` (z=+2.52), `282→159` (z=−1.70), `71→11` (z=−1.96).
+Persistent outliers from last full tune: `18→21` (z=−2.20), `33→30` (z=+2.52), `282→159` (z=−1.70), `71→11` (z=−1.96).
 
-New outliers in 4th-session gravity run (need full re-tune before interpreting):
-`628→636` (z=−3.88), `636→628` (z=−4.62), `719→325` (z=−4.14),
-`328→326` (z=−3.84), `22→159` (z=−2.84, model=0 — possible routing issue).
+New outliers in latest gravity run (per-session, Woodbury; need full re-tune before interpreting):
+`636↔628` Comber Road (z≈−5.4/−5.2 multiple sessions), `719↔325` Messines Road (z≈−6.1/−5.3),
+`328↔326` Comber Road (z≈−4.5/−3.7), `22→159` (z=−2.84, model=0 — routing issue).
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
@@ -145,10 +152,15 @@ New outliers in 4th-session gravity run (need full re-tune before interpreting):
   between K and the gravity parameters, not K and the external zone populations
   (which only vary O(100%) under L2 regularization and can only contribute O(4×)
   to raw flows). χ²/N is reliable; K is not interpretable in isolation.
-- After a structural model change (e.g. adding through routes), a gravity-only
+- After a structural model change (e.g. adding through routes or new count data), a gravity-only
   stage 1 run with fixed external zone weights will show inflated χ²/N and
   spurious outliers at boundary sites (esp. site 508). A full 24-param re-tune
   is needed to restore fit quality.
+- The Woodbury correction accounts for within-slot correlated uncertainty: all observations
+  in the same `(weekday, hour)` slot share the same NI-average hourly fraction, so their
+  fractional AADT uncertainty is perfectly correlated. The correction is O(B_slot) per slot
+  (negligible cost). `N_eff = N − N_slots` is the effective degrees of freedom after removing
+  one per slot. The 10 current slots yield N_eff=151 vs N=161.
 
 ---
 
