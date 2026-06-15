@@ -156,6 +156,15 @@ with open(TUNER_CONFIG) as f:
 lam       = config["lambda"]
 city_list = list(config["cities"].items())
 
+grav_ref = config.get("gravity_ref", {})
+grav_lam = config.get("gravity_lambda", 0.0)
+log_grav_ref = np.array([
+    math.log(max(grav_ref.get("W_BIZ", 1.0), 1e-4)),
+    math.log(max(grav_ref.get("MU",    7.7),  1e-4)),
+    math.log(max(grav_ref.get("SIGMA", 1.0),  1e-4)),
+    math.log(max(grav_ref.get("ALPHA", 2.0),  1e-4)),
+])
+
 # External nodes covered by tuner_config (node 180 excluded)
 external_nodes = set()
 for _, city_cfg in city_list:
@@ -313,6 +322,8 @@ def objective(log_params, log_ref=None):
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
+    if grav_lam > 0:
+        chi2 += grav_lam * float(np.sum((log_params[:n_gravity] - log_grav_ref) ** 2))
 
     eval_count[0] += 1
     if chi2 < best["chi2"]:
@@ -331,7 +342,7 @@ def objective(log_params, log_ref=None):
 # ── Build initial parameter vector ────────────────────────────────────────────
 
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
-grav_start = {"W_BIZ": 1.0, "MU": 7.5, "SIGMA": 1.0, "ALPHA": 2.0}
+grav_start = {"W_BIZ": 1.0, "MU": 7.7, "SIGMA": 1.0, "ALPHA": 2.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
