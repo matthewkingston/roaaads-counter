@@ -24,7 +24,7 @@ Usage:
   python3 analysis/tune_assignment.py --tag "added-june-counts"
 """
 
-import json, math, os, subprocess, sys, time
+import json, math, os, subprocess, sys, time, xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import numpy as np
@@ -35,7 +35,7 @@ import scipy.optimize
 PATHS_CACHE  = "simulation/newtownards_paths.npz"
 WEIGHTS_FILE = "simulation/node_weights.json"
 TUNER_CONFIG = "simulation/tuner_config.json"
-LINKS_GEO    = "simulation/newtownards_links.geojson"
+CONS_GRAPH   = "simulation/newtownards_consolidated.graphml"
 LINK_AADT    = "data/link_aadt.json"
 TUNED_PARAMS = "simulation/tuned_params.json"
 HISTORY_FILE = "simulation/tuning_history.jsonl"
@@ -122,17 +122,26 @@ node_biz_full = {int(k): v for k, v in wdata["node_business_demand"].items()}
 base_w_pop = np.array([node_pop_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 base_w_biz = np.array([node_biz_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 
-# ── Load street names for links ───────────────────────────────────────────────
+# ── Load street names from consolidated GraphML (sequential node IDs) ─────────
 
 link_name = {}
-if os.path.exists(LINKS_GEO):
-    with open(LINKS_GEO) as _f:
-        _geo = json.load(_f)
-    for _feat in _geo["features"]:
-        _p = _feat["properties"]
-        _name = _p.get("name") or ""
-        if _name:
-            link_name[(int(_p["u"]), int(_p["v"]))] = _name
+if os.path.exists(CONS_GRAPH):
+    _ns  = "http://graphml.graphstruct.org/graphml"
+    _ns2 = "http://graphml.graphstruct.org/graphml"
+    try:
+        _tree = ET.parse(CONS_GRAPH)
+        _root = _tree.getroot()
+        _nsmap = {"g": _root.tag.split("}")[0].lstrip("{")} if "}" in _root.tag else {"g": ""}
+        _pfx = "{" + _nsmap["g"] + "}" if _nsmap["g"] else ""
+        for _edge in _root.iter(f"{_pfx}edge"):
+            _u = int(_edge.get("source"))
+            _v = int(_edge.get("target"))
+            for _data in _edge:
+                if _data.get("key") == "d14" and _data.text:
+                    link_name[(_u, _v)] = _data.text
+                    break
+    except Exception as _e:
+        print(f"Warning: could not load street names ({_e})")
 
 
 def _link_label(u, v):

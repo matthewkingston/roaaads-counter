@@ -49,7 +49,6 @@ TUNER_CONFIG   = "simulation/tuner_config.json"
 CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
 PATHS_CACHE    = "simulation/newtownards_paths.npz"
 LINK_AADT_FILE = "data/link_aadt.json"
-LINKS_GEO      = "simulation/newtownards_links.geojson"
 
 # ── Load node weights ────────────────────────────────────────────────────────────
 
@@ -86,23 +85,6 @@ if os.path.exists(TUNED_PARAMS):
     for _nid, _val in _tp.get("external_node_biz", {}).items():
         node_business_demand[int(_nid)] = _val
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}]")
-
-# ── Load street names for links ──────────────────────────────────────────────────
-
-_link_name = {}
-if os.path.exists(LINKS_GEO):
-    with open(LINKS_GEO) as _f:
-        _geo = json.load(_f)
-    for _feat in _geo["features"]:
-        _p = _feat["properties"]
-        _n = _p.get("name") or ""
-        if _n:
-            _link_name[(int(_p["u"]), int(_p["v"]))] = _n
-
-
-def _link_label(u, v):
-    name = _link_name.get((u, v), "")
-    return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
 # ── Assignment ───────────────────────────────────────────────────────────────────
 
@@ -216,6 +198,16 @@ else:
 
     link_flow = dict(lf)
     print(f"  Assignment complete in {time.time()-t0:.1f}s  ({len(link_flow)} loaded links)")
+
+# ── Street name lookup (from already-loaded graph) ───────────────────────────────
+
+_link_name = {(int(u), int(v)): d["name"]
+              for u, v, d in G.edges(data=True) if d.get("name")}
+
+
+def _link_label(u, v):
+    name = _link_name.get((u, v), "")
+    return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
 # ── Calibration ──────────────────────────────────────────────────────────────────
 
