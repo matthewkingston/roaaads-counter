@@ -50,35 +50,54 @@ HIGHWAY_STYLE = {
 }
 
 # ── External zone weights for boundary nodes ───────────────────────────────────
-# Each boundary node represents an external destination. Population and workplace
-# demand are drawn from that destination, scaled by a damping factor for nodes
-# that are secondary routes to the same place.
-# centroid (lat, lon) is where the destination sits in the real world — used
-# for gravity-model distance calculations instead of the boundary node position.
-# Node 180 (local access) has no external centroid and keeps its own position.
+# Geographic positions (name, lat, lon) are hardcoded here.
+# Pop, workplace, and damping are read from tuner_config.json — single source of
+# truth shared with the tuner's L2 regularisation anchors.
+# Node 180 (local access) has no external centroid and no tuner_config entry;
+# its pop/wp are hardcoded as it is too small to tune.
 
-EXTERNAL_ZONES = {
-    #  node: (name,                    lat,      lon,     pop,  workplace, damping)
-     47: ("Donaghadee",           54.6408, -5.5328,  35_000,    7_000, 1.0),  # eastern Ards catchment
-     65: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 1.0),
-     92: ("Lower Ards Peninsula", 54.4892, -5.5283,  20_000,    4_000, 1.0),  # whole lower Ards peninsula
-     97: ("Belfast",              54.5973, -5.9301, 340_000,  180_000, 1.0),
-     98: ("Bangor",               54.6536, -5.6697,  62_000,   20_000, 0.3),
-     99: ("Holywood",             54.6322, -5.8325,  12_000,    4_000, 0.5),
-    119: ("Belfast",              54.5973, -5.9301, 340_000,  180_000, 0.3),
-    180: (None,                   None,    None,         50,        0, 1.0),
-    617: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
-    618: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
-    620: ("Comber",               54.5503, -5.7419,  10_000,    3_000, 0.3),
-    731: ("Bangor",               54.6536, -5.6697,  62_000,   20_000, 1.0),
-    748: ("Millisle",             54.6015, -5.5031,   3_000,      500, 1.0),
-    749: ("Millisle",             54.6015, -5.5031,   3_000,      500, 0.5),
+_EXT_GEO = {
+    #  node: (name,                    lat,      lon)
+     47: ("Donaghadee",           54.6408, -5.5328),
+     65: ("Comber",               54.5503, -5.7419),
+     92: ("Lower Ards Peninsula", 54.4892, -5.5283),
+     97: ("Belfast",              54.5973, -5.9301),
+     98: ("Bangor",               54.6536, -5.6697),
+     99: ("Holywood",             54.6322, -5.8325),
+    119: ("Belfast",              54.5973, -5.9301),
+    180: (None,                   None,    None   ),
+    617: ("Comber",               54.5503, -5.7419),
+    618: ("Comber",               54.5503, -5.7419),
+    620: ("Comber",               54.5503, -5.7419),
+    731: ("Bangor",               54.6536, -5.6697),
+    748: ("Millisle",             54.6015, -5.5031),
+    749: ("Millisle",             54.6015, -5.5031),
 }
+
+with open("simulation/tuner_config.json") as _f:
+    _tuner_cfg_ext = json.load(_f)
+
+_node_cfg = {}  # node_id → (ref_pop, ref_wp, damping)
+for _city_cfg in _tuner_cfg_ext["cities"].values():
+    for _nid in _city_cfg["nodes"]:
+        _node_cfg[_nid] = (
+            _city_cfg["ref_pop"],
+            _city_cfg["ref_wp"],
+            _city_cfg["dampings"][str(_nid)],
+        )
+
+EXTERNAL_ZONES = {}
+for _nid, (name, lat, lon) in _EXT_GEO.items():
+    if _nid == 180:
+        EXTERNAL_ZONES[_nid] = (name, lat, lon, 50, 0, 1.0)
+    else:
+        ref_pop, ref_wp, damp = _node_cfg[_nid]
+        EXTERNAL_ZONES[_nid] = (name, lat, lon, ref_pop, ref_wp, damp)
 
 # ── Fast path: --zones-only ────────────────────────────────────────────────────
 # Patches only boundary node entries in node_weights.json. Skips all internal
-# population processing and map building. Use when only pop/workplace/damping
-# values in EXTERNAL_ZONES have changed (not lat/lon).
+# population processing and map building. Use after editing ref_pop/ref_wp/dampings
+# in tuner_config.json (not when lat/lon has changed).
 
 if "--zones-only" in sys.argv:
     import os as _os

@@ -21,10 +21,10 @@ Results:
 Usage:
   python3 analysis/tune_assignment.py
   python3 analysis/tune_assignment.py --full
-  python3 analysis/tune_assignment.py --tag "added-june-counts"
+  python3 analysis/tune_assignment.py --note "added-june-counts"
 """
 
-import json, math, os, subprocess, sys, time, xml.etree.ElementTree as ET
+import json, math, os, secrets, subprocess, sys, time, xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import numpy as np
@@ -50,39 +50,41 @@ COUNT_SITES = [
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
 stage = "gravity"
-tag   = None
+note  = None
 argv  = sys.argv[1:]
 i = 0
 while i < len(argv):
     if argv[i] == "--full":
         stage = "full"
-    elif argv[i] == "--tag" and i + 1 < len(argv):
+    elif argv[i] == "--note" and i + 1 < len(argv):
         i += 1
-        tag = argv[i]
+        note = argv[i]
     i += 1
 
-if tag is None:
-    try:
-        tag = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        tag = "untagged"
+run_id = secrets.token_hex(4)
 
-print(f"Stage: {stage}  tag: {tag}")
+try:
+    git_hash = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+    ).decode().strip()
+except Exception:
+    git_hash = "unknown"
+
+print(f"Run ID: {run_id}  stage: {stage}  git: {git_hash}" +
+      (f"  note: {note}" if note else ""))
 
 # ── Load previous best from history ──────────────────────────────────────────
 
 prev_chi2_per_n = None
-prev_tag        = None
+prev_id         = None
 if os.path.exists(HISTORY_FILE):
     with open(HISTORY_FILE) as _hf:
         _lines = [ln for ln in _hf if ln.strip()]
     if _lines:
         _last = json.loads(_lines[-1])
         prev_chi2_per_n = _last.get("chi2_per_n")
-        prev_tag        = _last.get("tag", "")
-        print(f"Previous run:  χ²/N={prev_chi2_per_n:.4f}  (tag={prev_tag})")
+        prev_id         = _last.get("id", "")
+        print(f"Previous run:  χ²/N={prev_chi2_per_n:.4f}  (id={prev_id})")
 
 # ── Load paths cache ──────────────────────────────────────────────────────────
 
@@ -622,22 +624,33 @@ except Exception as _e:
 
 # ── Append to tuning history ──────────────────────────────────────────────────
 
-history_entry = {
-    "timestamp":  datetime.now(timezone.utc).isoformat(),
-    "tag":        tag,
-    "stage":      stage,
-    "n_evals":    eval_count[0],
-    "n_obs":      n_obs,
-    "n_slots":    n_slots,
-    "n_eff":      n_eff,
-    "n_params":   len(log_p0),
-    "chi2":       round(chi2, 3),
-    "chi2_per_n": round(chi2_per_n, 4),
+params = {
     "K":     round(K, 6),
     "W_BIZ": round(W_BIZ, 6),
     "MU":    round(MU, 6),
     "SIGMA": round(SIGMA, 6),
     "ALPHA": round(ALPHA, 6),
+}
+if stage == "full":
+    params["external_node_pop"] = {str(k): round(v) for k, v in ext_pop_map.items()}
+    params["external_node_biz"] = {str(k): round(v) for k, v in ext_biz_map.items()}
+    params["external_city_pop"] = {k: round(v) for k, v in city_pops_out.items()}
+    params["external_city_wp"]  = {k: round(v) for k, v in city_wps_out.items()}
+    params["external_dampings"] = {k: round(v, 4) for k, v in dampings_out.items()}
+
+history_entry = {
+    "id":        run_id,
+    "git_hash":  git_hash,
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "stage":     stage,
+    "n_evals":   eval_count[0],
+    "n_obs":     n_obs,
+    "n_slots":   n_slots,
+    "n_eff":     n_eff,
+    "n_params":  len(log_p0),
+    "chi2":      round(chi2, 3),
+    "chi2_per_n": round(chi2_per_n, 4),
+    "params":    params,
     "observations": [
         {
             "kind":     observations[i_obs][0],
@@ -652,6 +665,8 @@ history_entry = {
         for i_obs in range(n_obs)
     ],
 }
+if note:
+    history_entry["note"] = note
 
 with open(HISTORY_FILE, "a") as f:
     f.write(json.dumps(history_entry) + "\n")

@@ -20,8 +20,9 @@ python3 simulation/build_paths.py            # precompute all-pairs shortest pat
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
 python3 analysis/aggregate_counts.py         # combine per-session AADT → link_aadt.json
 
-python3 analysis/tune_assignment.py          # Stage 1: tune gravity params (4 params, ~2 min)
-python3 analysis/tune_assignment.py --full   # Stage 2: + external zones (24 params, ~35 min)
+python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (4 params, ~2 min)
+python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (24 params, ~35 min)
+python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 
 python3 simulation/build_assignment.py       # apply tuned params, write flows
 python3 simulation/build_demographics.py --map-only   # rebuild map HTML only (fast)
@@ -37,14 +38,16 @@ refine rather than restart.
 
 | File | Role |
 |------|------|
-| `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. |
+| `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. External zone pop/wp/damping values are read from `tuner_config.json` (lat/lon centroids remain hardcoded in the script). |
 | `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. |
 | `simulation/build_assignment.py` | Gravity model + all-or-nothing assignment. Loads `tuned_params.json` automatically if present. Prints χ²/N goodness-of-fit table. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise MU/SIGMA/ALPHA/W_BIZ toward physically plausible values (prevents K-drift pathology). Initial guess for MU calibrated so peak = exp(MU − ALPHA·SIGMA²) ≈ 300 s (5 min) at default ALPHA=2, SIGMA=1. Edit to change external zone priors, allowed through routes, or gravity anchors. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Uses individual per-session observations from `link_aadt.json` (not per-link aggregates). Applies Woodbury correction for within-slot correlated uncertainty. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Uses individual per-session observations from `link_aadt.json` (not per-link aggregates). Applies Woodbury correction for within-slot correlated uncertainty. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. Each run gets a unique random 8-char hex `id`; use `--note "label"` for a human-readable annotation. |
+| `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
+| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, MU, SIGMA, ALPHA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
 | `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
 
