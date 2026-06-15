@@ -135,16 +135,15 @@ on the rank-1 covariance removes this double-counting without cost.
 | 2026-06-14 | full | 62 | 24 | 0.956 | road-class routing, Hardford Link primary, excl 161→160 |
 | 2026-06-15 | full | 62 | 24 | **0.895** | + through routes (6 city pairs); refs updated |
 | 2026-06-15 | gravity | 109 | 4 | 2.346 | + 4th count session (107 directed links); per-link agg, no Woodbury |
-| 2026-06-15 | gravity | 161 | 4 | **2.00** | Woodbury correction; per-session obs (N_eff=151, 10 slots); full re-tune pending |
+| 2026-06-15 | gravity | 161 | 4 | 2.00 | Woodbury correction; per-session obs (N_eff=151, 10 slots) |
+| 2026-06-15 | full | 161 | 24 | **1.1754** | Jeffreys v3 reprocess; per-session obs (N_eff=151, 10 slots) |
 
-Current best full-tune: χ²/N = 0.895 (62 obs, through routes, excl 161→160).
-Official sites: 507 z=−0.85, 508 z=−0.10, 444 z=−0.15.
-Persistent outliers from last full tune: `18→21` (z=−2.20), `33→30` (z=+2.52), `282→159` (z=−1.70), `71→11` (z=−1.96).
-
-New outliers in latest gravity run (per-session, Woodbury; need full re-tune before interpreting):
-`636↔628` Comber Road (z≈−5.4/−5.2 multiple sessions), `719↔325` Messines Road (z≈−6.1/−5.3),
-`328↔326` Comber Road (z≈−4.5/−3.7).
+Current best full-tune: χ²/N = 1.1754 (161 obs, N_eff=151, 10 slots, Jeffreys v3).
+Official sites: 507 z=−1.63, 508 z=−0.12, 444 z=−0.25.
+Persistent outliers: `719↔325` Messines Road (z=−5.71/−4.44), `328→326` Comber Road (z=−3.53), `18→21` Hardford Link (z=−3.26), `636↔628` Comber Road (z=−2.66/−2.35).
+LowerArds tuned pop +514% above ref — pathological overshoot; tuner_config refs NOT updated (user decision needed).
 `22→159` (model=0) was a data error (snap direction bug, fixed 2026-06-15): now recorded as 159→22.
+Belfast Road `20→18` zero-count obs now gives z=+2.16 (obs=628, model=2,561) with Jeffreys fix — no longer silent.
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
