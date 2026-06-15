@@ -530,7 +530,7 @@ print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f} 
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
     direction = "improvement" if delta < 0 else "regression"
-    print(f"  vs previous ({prev_tag}):  Δχ²/N={delta:+.4f}  ({direction})")
+    print(f"  vs previous ({prev_id}):  Δχ²/N={delta:+.4f}  ({direction})")
 
 # ── City parameter delta table (full stage) ───────────────────────────────────
 
@@ -623,7 +623,7 @@ try:
     ax.set_title(
         f"Gravity kernel  "
         f"MU={MU:.3f}  SIGMA={SIGMA:.3f}  ALPHA={ALPHA:.3f}  K={K:.3e}\n"
-        f"stage={stage}  χ²/N={chi2_per_n:.4f}  tag={tag}"
+        f"stage={stage}  χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
     )
     ax.set_xscale("log")
     ax.set_yscale("log")
