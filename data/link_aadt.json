@@ -9,7 +9,12 @@
           "session_id": "b3c3396f",
           "direction": "with",
           "aadt": 2446,
-          "aadt_uncertainty": 1538
+          "aadt_uncertainty": 1538,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -22,13 +27,23 @@
           "session_id": "d1062f62",
           "direction": "against",
           "aadt": 5811,
-          "aadt_uncertainty": 2072
+          "aadt_uncertainty": 2072,
+          "time_slot": [
+            6,
+            19
+          ],
+          "frac_rel_std": 0.148807
         },
         {
           "session_id": "a704744e",
           "direction": "against",
           "aadt": 8612,
-          "aadt_uncertainty": 1937
+          "aadt_uncertainty": 1937,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -41,7 +56,12 @@
           "session_id": "0dda12dd",
           "direction": "with",
           "aadt": 9316,
-          "aadt_uncertainty": 3348
+          "aadt_uncertainty": 3348,
+          "time_slot": [
+            5,
+            20
+          ],
+          "frac_rel_std": 0.155447
         }
       ]
     },
@@ -54,7 +74,12 @@
           "session_id": "1806eadd",
           "direction": "against",
           "aadt": 1572,
-          "aadt_uncertainty": 1945
+          "aadt_uncertainty": 1945,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         }
       ]
     },
@@ -67,13 +92,23 @@
           "session_id": "f9c950f8",
           "direction": "with",
           "aadt": 1636,
-          "aadt_uncertainty": 2024
+          "aadt_uncertainty": 2024,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         },
         {
           "session_id": "3767c452",
           "direction": "with",
           "aadt": 3182,
-          "aadt_uncertainty": 1378
+          "aadt_uncertainty": 1378,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -86,7 +121,12 @@
           "session_id": "d1c695eb",
           "direction": "against",
           "aadt": 5867,
-          "aadt_uncertainty": 2022
+          "aadt_uncertainty": 2022,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -99,7 +139,12 @@
           "session_id": "0dda12dd",
           "direction": "against",
           "aadt": 5590,
-          "aadt_uncertainty": 2530
+          "aadt_uncertainty": 2530,
+          "time_slot": [
+            5,
+            20
+          ],
+          "frac_rel_std": 0.155447
         }
       ]
     },
@@ -112,7 +157,12 @@
           "session_id": "219245fa",
           "direction": "against",
           "aadt": 8473,
-          "aadt_uncertainty": 2044
+          "aadt_uncertainty": 2044,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -125,7 +175,12 @@
           "session_id": "1806eadd",
           "direction": "with",
           "aadt": 1572,
-          "aadt_uncertainty": 1945
+          "aadt_uncertainty": 1945,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         }
       ]
     },
@@ -138,7 +193,12 @@
           "session_id": "73ea3606",
           "direction": "with",
           "aadt": 2654,
-          "aadt_uncertainty": 1492
+          "aadt_uncertainty": 1492,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         }
       ]
     },
@@ -151,13 +211,23 @@
           "session_id": "f9c950f8",
           "direction": "against",
           "aadt": 3271,
-          "aadt_uncertainty": 2648
+          "aadt_uncertainty": 2648,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         },
         {
           "session_id": "3767c452",
           "direction": "against",
           "aadt": 6365,
-          "aadt_uncertainty": 1949
+          "aadt_uncertainty": 1949,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -170,13 +240,23 @@
           "session_id": "da6689ce",
           "direction": "with",
           "aadt": 1373,
-          "aadt_uncertainty": 1699
+          "aadt_uncertainty": 1699,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         },
         {
           "session_id": "32978e9a",
           "direction": "with",
           "aadt": 2933,
-          "aadt_uncertainty": 1173
+          "aadt_uncertainty": 1173,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -189,13 +269,23 @@
           "session_id": "50b95b49",
           "direction": "against",
           "aadt": 3289,
-          "aadt_uncertainty": 1057
+          "aadt_uncertainty": 1057,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         },
         {
           "session_id": "bf841b3e",
           "direction": "with",
           "aadt": 2890,
-          "aadt_uncertainty": 1142
+          "aadt_uncertainty": 1142,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         }
       ]
     },
@@ -208,13 +298,23 @@
           "session_id": "50b95b49",
           "direction": "with",
           "aadt": 2783,
-          "aadt_uncertainty": 958
+          "aadt_uncertainty": 958,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         },
         {
           "session_id": "bf841b3e",
           "direction": "against",
           "aadt": 1806,
-          "aadt_uncertainty": 891
+          "aadt_uncertainty": 891,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         }
       ]
     },
@@ -227,37 +327,67 @@
           "session_id": "8611420e",
           "direction": "against",
           "aadt": 6630,
-          "aadt_uncertainty": 2027
+          "aadt_uncertainty": 2027,
+          "time_slot": [
+            5,
+            16
+          ],
+          "frac_rel_std": 0.116636
         },
         {
           "session_id": "e0e99295",
           "direction": "against",
           "aadt": 1256,
-          "aadt_uncertainty": 1551
+          "aadt_uncertainty": 1551,
+          "time_slot": [
+            5,
+            20
+          ],
+          "frac_rel_std": 0.155447
         },
         {
           "session_id": "165eb2ec",
           "direction": "against",
           "aadt": 1266,
-          "aadt_uncertainty": 1029
+          "aadt_uncertainty": 1029,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "b09a7f4d",
           "direction": "with",
           "aadt": 3674,
-          "aadt_uncertainty": 1707
+          "aadt_uncertainty": 1707,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "15bee925",
           "direction": "with",
           "aadt": 4515,
-          "aadt_uncertainty": 2923
+          "aadt_uncertainty": 2923,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         },
         {
           "session_id": "aa7ca35a",
           "direction": "with",
           "aadt": 6240,
-          "aadt_uncertainty": 1775
+          "aadt_uncertainty": 1775,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -270,13 +400,23 @@
           "session_id": "ee3e6972",
           "direction": "against",
           "aadt": 11969,
-          "aadt_uncertainty": 3172
+          "aadt_uncertainty": 3172,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "5cbc5b4b",
           "direction": "against",
           "aadt": 10753,
-          "aadt_uncertainty": 2094
+          "aadt_uncertainty": 2094,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -289,13 +429,23 @@
           "session_id": "ddb4802a",
           "direction": "with",
           "aadt": 8933,
-          "aadt_uncertainty": 3185
+          "aadt_uncertainty": 3185,
+          "time_slot": [
+            6,
+            19
+          ],
+          "frac_rel_std": 0.148807
         },
         {
           "session_id": "2f5912e7",
           "direction": "with",
           "aadt": 11068,
-          "aadt_uncertainty": 3033
+          "aadt_uncertainty": 3033,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -308,13 +458,23 @@
           "session_id": "4173b28d",
           "direction": "with",
           "aadt": 4768,
-          "aadt_uncertainty": 1617
+          "aadt_uncertainty": 1617,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "c0d8cc04",
           "direction": "against",
           "aadt": 5265,
-          "aadt_uncertainty": 1497
+          "aadt_uncertainty": 1497,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -327,37 +487,67 @@
           "session_id": "8611420e",
           "direction": "with",
           "aadt": 3570,
-          "aadt_uncertainty": 1458
+          "aadt_uncertainty": 1458,
+          "time_slot": [
+            5,
+            16
+          ],
+          "frac_rel_std": 0.116636
         },
         {
           "session_id": "e0e99295",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 888
+          "aadt_uncertainty": 888,
+          "time_slot": [
+            5,
+            20
+          ],
+          "frac_rel_std": 0.155447
         },
         {
           "session_id": "165eb2ec",
           "direction": "with",
           "aadt": 3166,
-          "aadt_uncertainty": 1599
+          "aadt_uncertainty": 1599,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "b09a7f4d",
           "direction": "against",
           "aadt": 6123,
-          "aadt_uncertainty": 2292
+          "aadt_uncertainty": 2292,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "15bee925",
           "direction": "against",
           "aadt": 1505,
-          "aadt_uncertainty": 1862
+          "aadt_uncertainty": 1862,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         },
         {
           "session_id": "aa7ca35a",
           "direction": "against",
           "aadt": 7577,
-          "aadt_uncertainty": 1968
+          "aadt_uncertainty": 1968,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -370,13 +560,23 @@
           "session_id": "ee3e6972",
           "direction": "with",
           "aadt": 4127,
-          "aadt_uncertainty": 1545
+          "aadt_uncertainty": 1545,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "5cbc5b4b",
           "direction": "with",
           "aadt": 4032,
-          "aadt_uncertainty": 1230
+          "aadt_uncertainty": 1230,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -389,7 +589,12 @@
           "session_id": "fa21680a",
           "direction": "against",
           "aadt": 2251,
-          "aadt_uncertainty": 1415
+          "aadt_uncertainty": 1415,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -402,13 +607,23 @@
           "session_id": "0aa54303",
           "direction": "against",
           "aadt": 8215,
-          "aadt_uncertainty": 2347
+          "aadt_uncertainty": 2347,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "1a81303a",
           "direction": "with",
           "aadt": 5229,
-          "aadt_uncertainty": 1838
+          "aadt_uncertainty": 1838,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -421,7 +636,12 @@
           "session_id": "219245fa",
           "direction": "with",
           "aadt": 2542,
-          "aadt_uncertainty": 1101
+          "aadt_uncertainty": 1101,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -434,7 +654,12 @@
           "session_id": "f56b2ce4",
           "direction": "with",
           "aadt": 6281,
-          "aadt_uncertainty": 2213
+          "aadt_uncertainty": 2213,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -447,7 +672,12 @@
           "session_id": "cfa98d4d",
           "direction": "against",
           "aadt": 7195,
-          "aadt_uncertainty": 2582
+          "aadt_uncertainty": 2582,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -460,7 +690,12 @@
           "session_id": "50323b32",
           "direction": "with",
           "aadt": 11448,
-          "aadt_uncertainty": 3324
+          "aadt_uncertainty": 3324,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -473,7 +708,12 @@
           "session_id": "50323b32",
           "direction": "against",
           "aadt": 11448,
-          "aadt_uncertainty": 3324
+          "aadt_uncertainty": 3324,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -486,7 +726,12 @@
           "session_id": "7553939c",
           "direction": "against",
           "aadt": 8632,
-          "aadt_uncertainty": 3097
+          "aadt_uncertainty": 3097,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -499,7 +744,12 @@
           "session_id": "7553939c",
           "direction": "with",
           "aadt": 5179,
-          "aadt_uncertainty": 2341
+          "aadt_uncertainty": 2341,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -512,7 +762,12 @@
           "session_id": "99740b33",
           "direction": "against",
           "aadt": 6977,
-          "aadt_uncertainty": 2620
+          "aadt_uncertainty": 2620,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -525,7 +780,12 @@
           "session_id": "f3ed0a4c",
           "direction": "with",
           "aadt": 3168,
-          "aadt_uncertainty": 2552
+          "aadt_uncertainty": 2552,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -538,7 +798,12 @@
           "session_id": "99740b33",
           "direction": "with",
           "aadt": 3101,
-          "aadt_uncertainty": 1712
+          "aadt_uncertainty": 1712,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -551,7 +816,12 @@
           "session_id": "c583e89a",
           "direction": "against",
           "aadt": 7781,
-          "aadt_uncertainty": 3079
+          "aadt_uncertainty": 3079,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -564,7 +834,12 @@
           "session_id": "96c14ded",
           "direction": "against",
           "aadt": 5500,
-          "aadt_uncertainty": 1756
+          "aadt_uncertainty": 1756,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -577,7 +852,12 @@
           "session_id": "97709d2a",
           "direction": "with",
           "aadt": 3372,
-          "aadt_uncertainty": 1260
+          "aadt_uncertainty": 1260,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -590,7 +870,12 @@
           "session_id": "96c14ded",
           "direction": "with",
           "aadt": 5000,
-          "aadt_uncertainty": 1673
+          "aadt_uncertainty": 1673,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -603,7 +888,12 @@
           "session_id": "97709d2a",
           "direction": "against",
           "aadt": 5479,
-          "aadt_uncertainty": 1614
+          "aadt_uncertainty": 1614,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -616,7 +906,12 @@
           "session_id": "fa21680a",
           "direction": "with",
           "aadt": 750,
-          "aadt_uncertainty": 921
+          "aadt_uncertainty": 921,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -629,13 +924,23 @@
           "session_id": "1fbb2ee8",
           "direction": "against",
           "aadt": 1498,
-          "aadt_uncertainty": 1190
+          "aadt_uncertainty": 1190,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "1517d1e4",
           "direction": "against",
           "aadt": 2334,
-          "aadt_uncertainty": 1467
+          "aadt_uncertainty": 1467,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -648,13 +953,23 @@
           "session_id": "0aa54303",
           "direction": "with",
           "aadt": 4481,
-          "aadt_uncertainty": 1565
+          "aadt_uncertainty": 1565,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "1a81303a",
           "direction": "against",
           "aadt": 8715,
-          "aadt_uncertainty": 2389
+          "aadt_uncertainty": 2389,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -667,19 +982,34 @@
           "session_id": "fd190c10",
           "direction": "with",
           "aadt": 4742,
-          "aadt_uncertainty": 2340
+          "aadt_uncertainty": 2340,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         },
         {
           "session_id": "de9ade9d",
           "direction": "against",
           "aadt": 3870,
-          "aadt_uncertainty": 2136
+          "aadt_uncertainty": 2136,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         },
         {
           "session_id": "64bcb497",
           "direction": "with",
           "aadt": 5727,
-          "aadt_uncertainty": 1823
+          "aadt_uncertainty": 1823,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -692,13 +1022,23 @@
           "session_id": "69fcde8e",
           "direction": "against",
           "aadt": 2272,
-          "aadt_uncertainty": 1479
+          "aadt_uncertainty": 1479,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "20c786ef",
           "direction": "with",
           "aadt": 4910,
-          "aadt_uncertainty": 2739
+          "aadt_uncertainty": 2739,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         }
       ]
     },
@@ -711,7 +1051,12 @@
           "session_id": "d1c695eb",
           "direction": "with",
           "aadt": 3200,
-          "aadt_uncertainty": 1447
+          "aadt_uncertainty": 1447,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -724,7 +1069,12 @@
           "session_id": "0b87589d",
           "direction": "with",
           "aadt": 1189,
-          "aadt_uncertainty": 945
+          "aadt_uncertainty": 945,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -737,7 +1087,12 @@
           "session_id": "0b87589d",
           "direction": "against",
           "aadt": 2377,
-          "aadt_uncertainty": 1276
+          "aadt_uncertainty": 1276,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -750,7 +1105,12 @@
           "session_id": "b3437a3b",
           "direction": "against",
           "aadt": 11718,
-          "aadt_uncertainty": 3567
+          "aadt_uncertainty": 3567,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -763,7 +1123,12 @@
           "session_id": "f5dbcc07",
           "direction": "against",
           "aadt": 4391,
-          "aadt_uncertainty": 1737
+          "aadt_uncertainty": 1737,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -776,13 +1141,23 @@
           "session_id": "b044049b",
           "direction": "against",
           "aadt": 5221,
-          "aadt_uncertainty": 1741
+          "aadt_uncertainty": 1741,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "69ce8194",
           "direction": "with",
           "aadt": 3371,
-          "aadt_uncertainty": 1457
+          "aadt_uncertainty": 1457,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -795,13 +1170,23 @@
           "session_id": "b044049b",
           "direction": "with",
           "aadt": 1566,
-          "aadt_uncertainty": 985
+          "aadt_uncertainty": 985,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "69ce8194",
           "direction": "against",
           "aadt": 1686,
-          "aadt_uncertainty": 1060
+          "aadt_uncertainty": 1060,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -814,7 +1199,12 @@
           "session_id": "b78b4c7f",
           "direction": "with",
           "aadt": 450,
-          "aadt_uncertainty": 553
+          "aadt_uncertainty": 553,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -827,7 +1217,12 @@
           "session_id": "a4ff4257",
           "direction": "against",
           "aadt": 5767,
-          "aadt_uncertainty": 1230
+          "aadt_uncertainty": 1230,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -840,7 +1235,12 @@
           "session_id": "b78b4c7f",
           "direction": "against",
           "aadt": 450,
-          "aadt_uncertainty": 553
+          "aadt_uncertainty": 553,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -853,7 +1253,12 @@
           "session_id": "e27f765e",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 574
+          "aadt_uncertainty": 574,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -866,7 +1271,12 @@
           "session_id": "a4ff4257",
           "direction": "with",
           "aadt": 2440,
-          "aadt_uncertainty": 777
+          "aadt_uncertainty": 777,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -879,19 +1289,34 @@
           "session_id": "fd190c10",
           "direction": "against",
           "aadt": 1897,
-          "aadt_uncertainty": 1527
+          "aadt_uncertainty": 1527,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         },
         {
           "session_id": "de9ade9d",
           "direction": "with",
           "aadt": 3870,
-          "aadt_uncertainty": 2136
+          "aadt_uncertainty": 2136,
+          "time_slot": [
+            5,
+            21
+          ],
+          "frac_rel_std": 0.153233
         },
         {
           "session_id": "64bcb497",
           "direction": "against",
           "aadt": 8330,
-          "aadt_uncertainty": 2215
+          "aadt_uncertainty": 2215,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -904,13 +1329,23 @@
           "session_id": "1881dead",
           "direction": "against",
           "aadt": 1275,
-          "aadt_uncertainty": 606
+          "aadt_uncertainty": 606,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "0a533678",
           "direction": "with",
           "aadt": 1495,
-          "aadt_uncertainty": 711
+          "aadt_uncertainty": 711,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -923,13 +1358,23 @@
           "session_id": "1881dead",
           "direction": "with",
           "aadt": 765,
-          "aadt_uncertainty": 481
+          "aadt_uncertainty": 481,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "0a533678",
           "direction": "against",
           "aadt": 1495,
-          "aadt_uncertainty": 711
+          "aadt_uncertainty": 711,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -942,7 +1387,12 @@
           "session_id": "a53b4064",
           "direction": "with",
           "aadt": 2210,
-          "aadt_uncertainty": 974
+          "aadt_uncertainty": 974,
+          "time_slot": [
+            5,
+            16
+          ],
+          "frac_rel_std": 0.116636
         }
       ]
     },
@@ -955,7 +1405,12 @@
           "session_id": "a53b4064",
           "direction": "against",
           "aadt": 1473,
-          "aadt_uncertainty": 800
+          "aadt_uncertainty": 800,
+          "time_slot": [
+            5,
+            16
+          ],
+          "frac_rel_std": 0.116636
         }
       ]
     },
@@ -968,7 +1423,12 @@
           "session_id": "f5dbcc07",
           "direction": "with",
           "aadt": 5488,
-          "aadt_uncertainty": 1969
+          "aadt_uncertainty": 1969,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -981,7 +1441,12 @@
           "session_id": "bee91a87",
           "direction": "against",
           "aadt": 16143,
-          "aadt_uncertainty": 5793
+          "aadt_uncertainty": 5793,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -994,7 +1459,12 @@
           "session_id": "f2d72be5",
           "direction": "against",
           "aadt": 5456,
-          "aadt_uncertainty": 2295
+          "aadt_uncertainty": 2295,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1007,7 +1477,12 @@
           "session_id": "94270f75",
           "direction": "against",
           "aadt": 1240,
-          "aadt_uncertainty": 1531
+          "aadt_uncertainty": 1531,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1020,7 +1495,12 @@
           "session_id": "94270f75",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 876
+          "aadt_uncertainty": 876,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1033,7 +1513,12 @@
           "session_id": "159c6641",
           "direction": "against",
           "aadt": 6221,
-          "aadt_uncertainty": 1945
+          "aadt_uncertainty": 1945,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1046,7 +1531,12 @@
           "session_id": "f2d72be5",
           "direction": "with",
           "aadt": 3118,
-          "aadt_uncertainty": 1722
+          "aadt_uncertainty": 1722,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1059,7 +1549,12 @@
           "session_id": "73ea3606",
           "direction": "against",
           "aadt": 1990,
-          "aadt_uncertainty": 1296
+          "aadt_uncertainty": 1296,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         }
       ]
     },
@@ -1072,13 +1567,23 @@
           "session_id": "69fcde8e",
           "direction": "with",
           "aadt": 1514,
-          "aadt_uncertainty": 1230
+          "aadt_uncertainty": 1230,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "20c786ef",
           "direction": "against",
           "aadt": 4910,
-          "aadt_uncertainty": 2739
+          "aadt_uncertainty": 2739,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         }
       ]
     },
@@ -1091,7 +1596,12 @@
           "session_id": "cfa98d4d",
           "direction": "with",
           "aadt": 8634,
-          "aadt_uncertainty": 2871
+          "aadt_uncertainty": 2871,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1104,7 +1614,12 @@
           "session_id": "5bcd75b5",
           "direction": "against",
           "aadt": 10659,
-          "aadt_uncertainty": 4483
+          "aadt_uncertainty": 4483,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1117,7 +1632,12 @@
           "session_id": "7ea5e505",
           "direction": "with",
           "aadt": 1918,
-          "aadt_uncertainty": 1232
+          "aadt_uncertainty": 1232,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1130,7 +1650,12 @@
           "session_id": "7ea5e505",
           "direction": "against",
           "aadt": 8310,
-          "aadt_uncertainty": 2675
+          "aadt_uncertainty": 2675,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1143,13 +1668,23 @@
           "session_id": "d1062f62",
           "direction": "with",
           "aadt": 5811,
-          "aadt_uncertainty": 2072
+          "aadt_uncertainty": 2072,
+          "time_slot": [
+            6,
+            19
+          ],
+          "frac_rel_std": 0.148807
         },
         {
           "session_id": "a704744e",
           "direction": "with",
           "aadt": 8237,
-          "aadt_uncertainty": 1890
+          "aadt_uncertainty": 1890,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1162,13 +1697,23 @@
           "session_id": "ddb4802a",
           "direction": "against",
           "aadt": 9826,
-          "aadt_uncertainty": 3363
+          "aadt_uncertainty": 3363,
+          "time_slot": [
+            6,
+            19
+          ],
+          "frac_rel_std": 0.148807
         },
         {
           "session_id": "2f5912e7",
           "direction": "against",
           "aadt": 9592,
-          "aadt_uncertainty": 2814
+          "aadt_uncertainty": 2814,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1181,7 +1726,12 @@
           "session_id": "5bcd75b5",
           "direction": "with",
           "aadt": 12182,
-          "aadt_uncertainty": 4820
+          "aadt_uncertainty": 4820,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1194,7 +1744,12 @@
           "session_id": "b3c3396f",
           "direction": "against",
           "aadt": 12231,
-          "aadt_uncertainty": 3351
+          "aadt_uncertainty": 3351,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1207,13 +1762,23 @@
           "session_id": "65ab63e2",
           "direction": "with",
           "aadt": 1271,
-          "aadt_uncertainty": 1010
+          "aadt_uncertainty": 1010,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "1264ee97",
           "direction": "against",
           "aadt": 3232,
-          "aadt_uncertainty": 1732
+          "aadt_uncertainty": 1732,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1226,7 +1791,12 @@
           "session_id": "bacafe4b",
           "direction": "with",
           "aadt": 6184,
-          "aadt_uncertainty": 844
+          "aadt_uncertainty": 844,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1239,7 +1809,12 @@
           "session_id": "942fad08",
           "direction": "with",
           "aadt": 7005,
-          "aadt_uncertainty": 1729
+          "aadt_uncertainty": 1729,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1252,7 +1827,12 @@
           "session_id": "942fad08",
           "direction": "against",
           "aadt": 10323,
-          "aadt_uncertainty": 2147
+          "aadt_uncertainty": 2147,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1265,13 +1845,23 @@
           "session_id": "1fbb2ee8",
           "direction": "with",
           "aadt": 1498,
-          "aadt_uncertainty": 1190
+          "aadt_uncertainty": 1190,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "1517d1e4",
           "direction": "with",
           "aadt": 778,
-          "aadt_uncertainty": 955
+          "aadt_uncertainty": 955,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1284,7 +1874,12 @@
           "session_id": "01472615",
           "direction": "against",
           "aadt": 708,
-          "aadt_uncertainty": 870
+          "aadt_uncertainty": 870,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1297,7 +1892,12 @@
           "session_id": "01472615",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 501
+          "aadt_uncertainty": 501,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1310,7 +1910,12 @@
           "session_id": "6a4cacb0",
           "direction": "against",
           "aadt": 2008,
-          "aadt_uncertainty": 1262
+          "aadt_uncertainty": 1262,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1323,7 +1928,12 @@
           "session_id": "527c49e4",
           "direction": "against",
           "aadt": 616,
-          "aadt_uncertainty": 757
+          "aadt_uncertainty": 757,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1336,7 +1946,12 @@
           "session_id": "527c49e4",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 436
+          "aadt_uncertainty": 436,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1349,7 +1964,12 @@
           "session_id": "6a4cacb0",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 473
+          "aadt_uncertainty": 473,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1362,7 +1982,12 @@
           "session_id": "1d462189",
           "direction": "against",
           "aadt": 0,
-          "aadt_uncertainty": 362
+          "aadt_uncertainty": 362,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1375,7 +2000,12 @@
           "session_id": "1d462189",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 362
+          "aadt_uncertainty": 362,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1388,7 +2018,12 @@
           "session_id": "e27f765e",
           "direction": "against",
           "aadt": 1623,
-          "aadt_uncertainty": 1289
+          "aadt_uncertainty": 1289,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         }
       ]
     },
@@ -1401,7 +2036,12 @@
           "session_id": "c583e89a",
           "direction": "with",
           "aadt": 6808,
-          "aadt_uncertainty": 2863
+          "aadt_uncertainty": 2863,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1414,25 +2054,45 @@
           "session_id": "3dc59f7f",
           "direction": "against",
           "aadt": 0,
-          "aadt_uncertainty": 236
+          "aadt_uncertainty": 236,
+          "time_slot": [
+            5,
+            16
+          ],
+          "frac_rel_std": 0.116636
         },
         {
           "session_id": "78e26e17",
           "direction": "against",
           "aadt": 356,
-          "aadt_uncertainty": 441
+          "aadt_uncertainty": 441,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "445e0e4f",
           "direction": "against",
           "aadt": 372,
-          "aadt_uncertainty": 457
+          "aadt_uncertainty": 457,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "2e20d38d",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 164
+          "aadt_uncertainty": 164,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1445,25 +2105,45 @@
           "session_id": "3dc59f7f",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 236
+          "aadt_uncertainty": 236,
+          "time_slot": [
+            5,
+            16
+          ],
+          "frac_rel_std": 0.116636
         },
         {
           "session_id": "78e26e17",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 252
+          "aadt_uncertainty": 252,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "445e0e4f",
           "direction": "with",
           "aadt": 744,
-          "aadt_uncertainty": 591
+          "aadt_uncertainty": 591,
+          "time_slot": [
+            0,
+            13
+          ],
+          "frac_rel_std": 0.079221
         },
         {
           "session_id": "2e20d38d",
           "direction": "against",
           "aadt": 0,
-          "aadt_uncertainty": 164
+          "aadt_uncertainty": 164,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1476,7 +2156,12 @@
           "session_id": "fba7330e",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 261
+          "aadt_uncertainty": 261,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1489,13 +2174,23 @@
           "session_id": "bdbfa2be",
           "direction": "against",
           "aadt": 405,
-          "aadt_uncertainty": 497
+          "aadt_uncertainty": 497,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "c8157a13",
           "direction": "with",
           "aadt": 403,
-          "aadt_uncertainty": 494
+          "aadt_uncertainty": 494,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1508,13 +2203,23 @@
           "session_id": "65ab63e2",
           "direction": "against",
           "aadt": 1271,
-          "aadt_uncertainty": 1010
+          "aadt_uncertainty": 1010,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "1264ee97",
           "direction": "with",
           "aadt": 1616,
-          "aadt_uncertainty": 1284
+          "aadt_uncertainty": 1284,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1527,13 +2232,23 @@
           "session_id": "466e8946",
           "direction": "with",
           "aadt": 10615,
-          "aadt_uncertainty": 1523
+          "aadt_uncertainty": 1523,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "f4e6b217",
           "direction": "against",
           "aadt": 12340,
-          "aadt_uncertainty": 1691
+          "aadt_uncertainty": 1691,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1546,13 +2261,23 @@
           "session_id": "9d6069eb",
           "direction": "against",
           "aadt": 2573,
-          "aadt_uncertainty": 1379
+          "aadt_uncertainty": 1379,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "df286ae7",
           "direction": "with",
           "aadt": 3170,
-          "aadt_uncertainty": 1508
+          "aadt_uncertainty": 1508,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1565,13 +2290,23 @@
           "session_id": "466e8946",
           "direction": "against",
           "aadt": 13193,
-          "aadt_uncertainty": 1758
+          "aadt_uncertainty": 1758,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "f4e6b217",
           "direction": "with",
           "aadt": 12340,
-          "aadt_uncertainty": 1691
+          "aadt_uncertainty": 1691,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1584,13 +2319,23 @@
           "session_id": "9d6069eb",
           "direction": "with",
           "aadt": 1930,
-          "aadt_uncertainty": 1213
+          "aadt_uncertainty": 1213,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "df286ae7",
           "direction": "against",
           "aadt": 1902,
-          "aadt_uncertainty": 1196
+          "aadt_uncertainty": 1196,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1603,7 +2348,12 @@
           "session_id": "bacafe4b",
           "direction": "against",
           "aadt": 7711,
-          "aadt_uncertainty": 980
+          "aadt_uncertainty": 980,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1616,7 +2366,12 @@
           "session_id": "fba7330e",
           "direction": "against",
           "aadt": 0,
-          "aadt_uncertainty": 261
+          "aadt_uncertainty": 261,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1629,13 +2384,23 @@
           "session_id": "bdbfa2be",
           "direction": "with",
           "aadt": 0,
-          "aadt_uncertainty": 286
+          "aadt_uncertainty": 286,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         },
         {
           "session_id": "c8157a13",
           "direction": "against",
           "aadt": 1208,
-          "aadt_uncertainty": 759
+          "aadt_uncertainty": 759,
+          "time_slot": [
+            0,
+            14
+          ],
+          "frac_rel_std": 0.078675
         }
       ]
     },
@@ -1648,13 +2413,23 @@
           "session_id": "da6689ce",
           "direction": "against",
           "aadt": 2747,
-          "aadt_uncertainty": 2223
+          "aadt_uncertainty": 2223,
+          "time_slot": [
+            6,
+            21
+          ],
+          "frac_rel_std": 0.173564
         },
         {
           "session_id": "32978e9a",
           "direction": "against",
           "aadt": 5865,
-          "aadt_uncertainty": 1668
+          "aadt_uncertainty": 1668,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1667,13 +2442,23 @@
           "session_id": "4173b28d",
           "direction": "against",
           "aadt": 2934,
-          "aadt_uncertainty": 1203
+          "aadt_uncertainty": 1203,
+          "time_slot": [
+            6,
+            15
+          ],
+          "frac_rel_std": 0.187518
         },
         {
           "session_id": "c0d8cc04",
           "direction": "with",
           "aadt": 2632,
-          "aadt_uncertainty": 1053
+          "aadt_uncertainty": 1053,
+          "time_slot": [
+            0,
+            15
+          ],
+          "frac_rel_std": 0.083171
         }
       ]
     },
@@ -1686,7 +2471,12 @@
           "session_id": "f3ed0a4c",
           "direction": "against",
           "aadt": 4753,
-          "aadt_uncertainty": 3053
+          "aadt_uncertainty": 3053,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     },
@@ -1699,7 +2489,12 @@
           "session_id": "159c6641",
           "direction": "with",
           "aadt": 3111,
-          "aadt_uncertainty": 1308
+          "aadt_uncertainty": 1308,
+          "time_slot": [
+            6,
+            20
+          ],
+          "frac_rel_std": 0.154203
         }
       ]
     }

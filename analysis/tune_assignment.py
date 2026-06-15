@@ -190,18 +190,21 @@ print(f"  {len(city_list)} cities  {len(tunable_dampings)} tunable dampings")
 
 # ── Build observation list ────────────────────────────────────────────────────
 
-observations = []
-for s in COUNT_SITES:
-    observations.append((
-        "official", s["node"], s["links"],
-        float(s["observed"]), 0.10 * s["observed"]
-    ))
-
 # Links excluded from calibration (retained in link_aadt.json but not used as
 # tuning observations). Directed: (u, v) only excludes that direction.
 EXCLUDE_LINKS = {
     (161, 160),  # too-short count, likely distorted by traffic light timing
 }
+
+observations     = []
+obs_time_slots   = []
+obs_frac_rel_std = []
+
+for s in COUNT_SITES:
+    observations.append(("official", s["node"], s["links"],
+                         float(s["observed"]), 0.10 * s["observed"]))
+    obs_time_slots.append(None)
+    obs_frac_rel_std.append(None)
 
 if os.path.exists(LINK_AADT):
     with open(LINK_AADT) as f:
@@ -210,18 +213,58 @@ if os.path.exists(LINK_AADT):
         u, v = map(int, key.split(","))
         if (u, v) in EXCLUDE_LINKS:
             continue
-        observations.append((
-            "walking", (u, v), None,
-            float(entry["aadt"]), float(entry["aadt_uncertainty"])
-        ))
+        for sess_obs in entry["observations"]:
+            observations.append(("walking", (u, v), None,
+                float(sess_obs["aadt"]), float(sess_obs["aadt_uncertainty"])))
+            ts  = sess_obs.get("time_slot")
+            frs = sess_obs.get("frac_rel_std")
+            obs_time_slots.append(tuple(ts) if ts is not None else None)
+            obs_frac_rel_std.append(float(frs) if frs is not None else None)
 
 n_obs   = len(observations)
 obs_arr = np.array([o[3] for o in observations], dtype=np.float64)
 sig_arr = np.array([o[4] for o in observations], dtype=np.float64)
 
+# Woodbury: decompose total uncertainty into correlated (σ_f) and independent (σ_c)
+sigma_f_arr = np.zeros(n_obs)
+for i, frs in enumerate(obs_frac_rel_std):
+    if frs is not None:
+        sigma_f_arr[i] = obs_arr[i] * frs
+
+sigma_c_sq = np.maximum(sig_arr**2 - sigma_f_arr**2, (sig_arr * 1e-6)**2)
+
+# Group slotted observations by (weekday, hour) — each slot shares one correlated mode
+slot_groups = {}
+for i, ts in enumerate(obs_time_slots):
+    if ts is not None:
+        slot_groups.setdefault(ts, []).append(i)
+slot_list = list(slot_groups.items())
+
+# Precompute per-slot Woodbury denominators and observation terms (obs-dependent, constant)
+slot_denom  = {}
+slot_uf_obs = {}
+for ts, idxs in slot_list:
+    slot_denom[ts]  = 1.0 + sum(sigma_f_arr[i]**2 / sigma_c_sq[i] for i in idxs)
+    slot_uf_obs[ts] = sum(sigma_f_arr[i] * obs_arr[i] / sigma_c_sq[i] for i in idxs)
+
+unslotted_idxs = [i for i, ts in enumerate(obs_time_slots) if ts is None]
+
+n_slots   = len(slot_list)
+n_slotted = sum(len(idxs) for _, idxs in slot_list)
+n_eff     = n_obs - n_slots
+n_official = len(COUNT_SITES)
+print(f"  {n_obs} observations ({n_official} official, {n_obs - n_official} walking"
+      f" in {n_slots} time slot(s))")
+if n_slotted < n_obs - n_official:
+    print(f"  Warning: {n_obs - n_official - n_slotted} walking obs have no time-slot"
+          f" data — treated as independent")
+for ts, idxs in sorted(slot_list):
+    if len(idxs) > 2:
+        print(f"  Slot {ts}: {len(idxs)} correlated observations")
+
 # Precompute link index sets per observation for fast model flow extraction
 obs_link_idxs = []
-for kind, target, links, _, _ in observations:
+for kind, target, links, *_ in observations:
     if kind == "official":
         if links:
             idxs = [link_index[lnk] for lnk in links if lnk in link_index]
@@ -232,8 +275,6 @@ for kind, target, links, _, _ in observations:
         k = link_index.get(target, -1)
         idxs = [k] if k >= 0 else []
     obs_link_idxs.append(idxs)
-
-print(f"  {n_obs} observations ({len(COUNT_SITES)} official, {n_obs - len(COUNT_SITES)} walking)")
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
@@ -251,10 +292,19 @@ def model_obs(raw_flow):
 
 
 def calibrate_K(m_arr):
-    w2  = 1.0 / sig_arr ** 2
-    num = float(np.dot(w2 * m_arr, obs_arr))
-    den = float(np.dot(w2 * m_arr, m_arr))
-    return num / den if den > 0 else 1.0
+    A = 0.0
+    B = 0.0
+    for i in unslotted_idxs:
+        w = 1.0 / sig_arr[i] ** 2
+        A += w * m_arr[i] ** 2
+        B += w * m_arr[i] * obs_arr[i]
+    for ts, idxs in slot_list:
+        denom = slot_denom[ts]
+        uf_m  = sum(sigma_f_arr[i] * m_arr[i] / sigma_c_sq[i] for i in idxs)
+        A += sum(m_arr[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_m ** 2 / denom
+        B += (sum(obs_arr[i] * m_arr[i] / sigma_c_sq[i] for i in idxs)
+              - slot_uf_obs[ts] * uf_m / denom)
+    return B / A if A > 0 else 1.0
 
 
 # ── Objective function ────────────────────────────────────────────────────────
@@ -317,8 +367,12 @@ def objective(log_params, log_ref=None):
     raw_flow = run_assignment(W_BIZ, MU, SIGMA, ALPHA, w_pop, w_biz)
     m_arr    = model_obs(raw_flow)
     K        = calibrate_K(m_arr)
-    resid    = (K * m_arr - obs_arr) / sig_arr
-    chi2     = float(np.dot(resid, resid))
+    r        = K * m_arr - obs_arr
+    chi2     = float(sum((r[i] / sig_arr[i]) ** 2 for i in unslotted_idxs))
+    for ts, idxs in slot_list:
+        denom = slot_denom[ts]
+        uf_r  = sum(sigma_f_arr[i] * r[i] / sigma_c_sq[i] for i in idxs)
+        chi2 += float(sum(r[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_r ** 2 / denom)
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
@@ -444,14 +498,19 @@ for arr_i, nid in ext_indices:
 raw_flow  = run_assignment(W_BIZ, MU, SIGMA, ALPHA, w_pop_f, w_biz_f)
 m_arr     = model_obs(raw_flow)
 K         = calibrate_K(m_arr)
-resid     = (K * m_arr - obs_arr) / sig_arr
-chi2      = float(np.dot(resid, resid))
+r         = K * m_arr - obs_arr
+chi2      = float(sum((r[i] / sig_arr[i]) ** 2 for i in unslotted_idxs))
+for ts, idxs in slot_list:
+    denom = slot_denom[ts]
+    uf_r  = sum(sigma_f_arr[i] * r[i] / sigma_c_sq[i] for i in idxs)
+    chi2 += float(sum(r[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_r ** 2 / denom)
 chi2_per_n = chi2 / n_obs
+resid      = r / sig_arr  # for fit table and history entry z-scores
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
 print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  MU={MU:.4f}  SIGMA={SIGMA:.4f}  ALPHA={ALPHA:.4f}")
-print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  (target ~1.0)")
+print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
     direction = "improvement" if delta < 0 else "regression"
@@ -512,6 +571,8 @@ tuned = {
     "chi2":       round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),
     "n_obs":      n_obs,
+    "n_slots":    n_slots,
+    "n_eff":      n_eff,
     "stage":      stage,
 }
 if stage == "full":
@@ -567,6 +628,8 @@ history_entry = {
     "stage":      stage,
     "n_evals":    eval_count[0],
     "n_obs":      n_obs,
+    "n_slots":    n_slots,
+    "n_eff":      n_eff,
     "n_params":   len(log_p0),
     "chi2":       round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),

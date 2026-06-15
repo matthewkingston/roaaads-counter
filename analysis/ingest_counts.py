@@ -245,7 +245,7 @@ for sid, data in sessions.items():
         snap_count += 1
 
     # AADT estimation via hourly fraction profile
-    if processed["sessions"][sid].get("aadt_method") != "hourly_fraction_v1":
+    if processed["sessions"][sid].get("aadt_method") != "hourly_fraction_v2":
         rec  = processed["sessions"][sid]
         T    = rec["duration_s"]
         dt_l = parse_iso(rec["start_utc"]).astimezone(LOCAL_TZ)
@@ -264,7 +264,9 @@ for sid, data in sessions.items():
         rec["total_aadt"],   rec["total_aadt_uncertainty"]   = _aadt(rec["total_count"],   rec["total_uncertainty"])
         rec["hourly_fraction"]     = round(mean_f, 6)
         rec["hourly_fraction_std"] = round(std_f,  6)
-        rec["aadt_method"]         = "hourly_fraction_v1"
+        rec["time_slot"]           = [dt_l.weekday(), dt_l.hour]
+        rec["frac_rel_std"]        = round(std_f / mean_f, 6)
+        rec["aadt_method"]         = "hourly_fraction_v2"
         aadt_count += 1
 
 # ── Save ─────────────────────────────────────────────────────────────────────

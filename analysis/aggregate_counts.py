@@ -58,6 +58,8 @@ for sid, rec in processed["sessions"].items():
             "direction":        direction,
             "aadt":             aadt,
             "aadt_uncertainty": unc,
+            "time_slot":        rec.get("time_slot"),
+            "frac_rel_std":     rec.get("frac_rel_std"),
         })
 
 # ── Combine each bucket ───────────────────────────────────────────────────────
