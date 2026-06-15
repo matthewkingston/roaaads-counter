@@ -138,9 +138,13 @@ New outliers in 4th-session gravity run (need full re-tune before interpreting):
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
   improvement over residential population alone for this network and dataset.
-- `K` is not physically anchored between runs (can vary by orders of magnitude
-  while compensating through external zone populations). The χ²/N is reliable;
-  the absolute value of K is not.
+- `K` is analytically set at each optimizer step to rescale the raw flow field to
+  match observed AADT. It absorbs the overall scale of unnormalized gravity flows,
+  which shifts by many orders of magnitude as ALPHA and MU change (e.g. ALPHA 2→5
+  changes d^{-ALPHA} by ~10^9 for a typical d=1000s path). The degeneracy is
+  between K and the gravity parameters, not K and the external zone populations
+  (which only vary O(100%) under L2 regularization and can only contribute O(4×)
+  to raw flows). χ²/N is reliable; K is not interpretable in isolation.
 - After a structural model change (e.g. adding through routes), a gravity-only
   stage 1 run with fixed external zone weights will show inflated χ²/N and
   spurious outliers at boundary sites (esp. site 508). A full 24-param re-tune
