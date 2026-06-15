@@ -247,7 +247,7 @@ for sid, data in sessions.items():
         snap_count += 1
 
     # AADT estimation via hourly fraction profile
-    if processed["sessions"][sid].get("aadt_method") != "hourly_fraction_v2":
+    if processed["sessions"][sid].get("aadt_method") != "hourly_fraction_v3":
         rec  = processed["sessions"][sid]
         T    = rec["duration_s"]
         dt_l = parse_iso(rec["start_utc"]).astimezone(LOCAL_TZ)
@@ -257,8 +257,14 @@ for sid, data in sessions.items():
             if n is None:
                 return None, None
             k      = 3600.0 / (T * mean_f)
-            aadt   = round(n * k)
-            sigma  = round(k * math.sqrt(sigma_n ** 2 + (n * std_f / mean_f) ** 2))
+            # Use Jeffreys posterior mean (n + 0.5) for both the point estimate
+            # and the fraction-uncertainty term, so the estimate is consistent
+            # with the Jeffreys uncertainty (sigma_n = sqrt(n + 0.5)).
+            # For n >> 1 the 0.5 correction is negligible; for n=0 it shifts
+            # the point estimate from 0 to ~0.5/T rather than anchoring at 0.
+            n_eff  = n + 0.5
+            aadt   = round(n_eff * k)
+            sigma  = round(k * math.sqrt(sigma_n ** 2 + (n_eff * std_f / mean_f) ** 2))
             return aadt, sigma
 
         rec["with_aadt"],    rec["with_aadt_uncertainty"]    = _aadt(rec["with_count"],    rec["with_uncertainty"])
@@ -268,7 +274,7 @@ for sid, data in sessions.items():
         rec["hourly_fraction_std"] = round(std_f,  6)
         rec["time_slot"]           = [dt_l.weekday(), dt_l.hour]
         rec["frac_rel_std"]        = round(std_f / mean_f, 6)
-        rec["aadt_method"]         = "hourly_fraction_v2"
+        rec["aadt_method"]         = "hourly_fraction_v3"
         aadt_count += 1
 
 # ── Save ─────────────────────────────────────────────────────────────────────
