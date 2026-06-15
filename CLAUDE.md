@@ -4,6 +4,10 @@ A gravity-model traffic assignment pipeline for Newtownards, calibrated against
 walking count data and official AADT figures. The pipeline is fully reproducible:
 running the scripts in order regenerates all outputs from raw data.
 
+**Agent instruction:** Keep this file up to date. After any tuning run, count data
+ingest, model change, or reference value update, edit the relevant sections before
+committing. This file is the authoritative record of model state.
+
 ---
 
 ## Pipeline (run in this order)
@@ -34,10 +38,10 @@ refine rather than restart.
 | File | Role |
 |------|------|
 | `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. |
-| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. |
+| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. |
 | `simulation/build_assignment.py` | Gravity model + all-or-nothing assignment. Loads `tuned_params.json` automatically if present. Prints χ²/N goodness-of-fit table. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization and city→node groupings. Edit this to change the prior for external zone populations. |
+| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, and `through_route_pairs` whitelist. Edit to change external zone priors or allowed through routes. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
 | `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. |
@@ -79,6 +83,17 @@ one pop and one wp value; individual nodes scale by a fixed damping ratio.
 Nodes with damping=1.0 are fixed; nodes with damping<1.0 are tunable (but
 L2-penalised toward the config reference values).
 
+### Through routes
+External→external OD pairs are included for a whitelisted set of city pairs
+stored in `tuner_config.json` under `through_route_pairs`. All other
+boundary→boundary pairs are excluded. The whitelist captures trips that genuinely
+traverse Newtownards (e.g. Comber↔Donaghadee via A22→A48) while excluding trips
+that use an out-of-network bypass (e.g. Belfast↔Bangor via the A2 coast road).
+Changing the whitelist requires rebuilding the paths cache (`build_paths.py`).
+
+Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
+Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds.
+
 ### K: analytical calibration
 At each optimizer evaluation, K is set analytically to minimise χ²:
 `K = Σ(model_i × obs_i / σ_i²) / Σ(model_i² / σ_i²)`
@@ -96,7 +111,7 @@ plus all directed walking-count links from `link_aadt.json`.
 - Site 508: A48 Donaghadee Road — 10,792 AADT
 - Site 444: A20 Portaferry Road — 7,282 AADT
 
-**Walking counts:** 3 CSV files, 63 total observations covering 60 directed links.
+**Walking counts:** 4 CSV files, 109 observations covering 107 directed links.
 
 ---
 
@@ -108,34 +123,49 @@ plus all directed walking-count links from `link_aadt.json`.
 | 2026-06-14 | gravity | 25 | 4 | 3.97 | |
 | 2026-06-14 | full | 25 | 24 | 0.98 | |
 | 2026-06-14 | full | 25 | 24 | 0.90 | |
-| 2026-06-14 | full | 62 | 24 | **0.956** ← current | road-class routing, Hardford Link primary, excl 161→160 |
+| 2026-06-14 | full | 62 | 24 | 0.956 | road-class routing, Hardford Link primary, excl 161→160 |
+| 2026-06-15 | full | 62 | 24 | **0.895** | + through routes (6 city pairs); refs updated |
+| 2026-06-15 | gravity | 109 | 4 | 2.346 | + 4th count session (107 directed links); full re-tune pending |
 
-Current best: χ²/N = 0.956 (62 obs). Official sites: 507 z=−1.07, 508 z=+0.15, 444 z=−0.07.
-Persistent outliers: `18→21` (z=−2.13), `33→30` (z=+2.64), `282→159` (z=−1.74), `71→11` (z=−1.85).
+Current best full-tune: χ²/N = 0.895 (62 obs, through routes, excl 161→160).
+Official sites: 507 z=−0.85, 508 z=−0.10, 444 z=−0.15.
+Persistent outliers: `18→21` (z=−2.20), `33→30` (z=+2.52), `282→159` (z=−1.70), `71→11` (z=−1.96).
+
+New outliers in 4th-session gravity run (need full re-tune before interpreting):
+`628→636` (z=−3.88), `636→628` (z=−4.62), `719→325` (z=−4.14),
+`328→326` (z=−3.84), `22→159` (z=−2.84, model=0 — possible routing issue).
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
   improvement over residential population alone for this network and dataset.
-- `K` is not physically anchored between runs (can vary by orders of magnitude
-  while compensating through external zone populations). The χ²/N is reliable;
-  the absolute value of K is not.
+- `K` is analytically set at each optimizer step to rescale the raw flow field to
+  match observed AADT. It absorbs the overall scale of unnormalized gravity flows,
+  which shifts by many orders of magnitude as ALPHA and MU change (e.g. ALPHA 2→5
+  changes d^{-ALPHA} by ~10^9 for a typical d=1000s path). The degeneracy is
+  between K and the gravity parameters, not K and the external zone populations
+  (which only vary O(100%) under L2 regularization and can only contribute O(4×)
+  to raw flows). χ²/N is reliable; K is not interpretable in isolation.
+- After a structural model change (e.g. adding through routes), a gravity-only
+  stage 1 run with fixed external zone weights will show inflated χ²/N and
+  spurious outliers at boundary sites (esp. site 508). A full 24-param re-tune
+  is needed to restore fit quality.
 
 ---
 
 ## External Zone Reference Values (`tuner_config.json`)
 
+Updated after 2026-06-15 full tuning run (χ²/N=0.895). Always update these
+after a full tuning run to keep regularization centred on the current best estimate.
+
 | City | Nodes | ref_pop | ref_wp | Tunable dampings |
 |------|-------|---------|--------|-----------------|
-| Donaghadee | 47 | 35,000 | 7,000 | — |
-| Comber | 65, 617, 618, 620 | 10,000 | 3,000 | 617, 618, 620 (×0.3) |
-| LowerArds | 92 | 33,000 | 5,000 | — |
-| Belfast | 97, 119 | 340,000 | 180,000 | 119 (×0.3) |
-| Bangor | 98, 731 | 62,000 | 20,000 | 98 (×0.3) |
+| Donaghadee | 47 | 66,000 | 7,000 | — |
+| Comber | 65, 617, 618, 620 | 15,000 | 3,000 | 617 (×0.52), 618 (×0.52), 620 (×0.40) |
+| LowerArds | 92 | 51,000 | 5,000 | — |
+| Belfast | 97, 119 | 234,000 | 180,000 | 119 (×0.46) |
+| Bangor | 98, 731 | 36,000 | 20,000 | 98 (×0.32) |
 | Holywood | 99 | 3,600 | 1,200 | — |
 | Millisle | 748, 749 | 3,000 | 500 | 749 (×0.5) |
-
-LowerArds ref_pop raised to 33,000 after stage-2 tuning converged to 33,575
-(was 20,000 original estimate).
 
 ---
 
