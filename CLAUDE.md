@@ -136,14 +136,23 @@ on the rank-1 covariance removes this double-counting without cost.
 | 2026-06-15 | full | 62 | 24 | **0.895** | + through routes (6 city pairs); refs updated |
 | 2026-06-15 | gravity | 109 | 4 | 2.346 | + 4th count session (107 directed links); per-link agg, no Woodbury |
 | 2026-06-15 | gravity | 161 | 4 | 2.00 | Woodbury correction; per-session obs (N_eff=151, 10 slots) |
-| 2026-06-15 | full | 161 | 24 | **1.1754** | Jeffreys v3 reprocess; per-session obs (N_eff=151, 10 slots) |
+| 2026-06-15 | full | 161 | 24 | 1.1754 | Jeffreys v3 reprocess; paths cache stale (no through-routes) |
+| 2026-06-15 | gravity | 161 | 4 | 1.1687 | rebuilt paths cache with through-routes (+56 OD pairs) |
+| 2026-06-15 | full | 161 | 24 | **1.1207** | through-routes active; LowerArds resolved (+92% not +514%) |
 
-Current best full-tune: χ²/N = 1.1754 (161 obs, N_eff=151, 10 slots, Jeffreys v3).
-Official sites: 507 z=−1.63, 508 z=−0.12, 444 z=−0.25.
-Persistent outliers: `719↔325` Messines Road (z=−5.71/−4.44), `328→326` Comber Road (z=−3.53), `18→21` Hardford Link (z=−3.26), `636↔628` Comber Road (z=−2.66/−2.35).
-LowerArds tuned pop +514% above ref — pathological overshoot; tuner_config refs NOT updated (user decision needed).
+Current best full-tune: χ²/N = 1.1207 (161 obs, N_eff=151, 10 slots; through-routes active).
+Official sites: 507 z=−1.76, 508 z=−0.58, 444 z=+0.54.
+Persistent structural outliers: `719↔325` Messines Road (z=−4.77/−3.53), `328→326` Comber Road (z=−3.63), `18→21` Hardford Link (z=−3.04). All are internal-traffic corridors; external zone tuning cannot resolve them.
+All cities tuning well above tuner_config refs (Donaghadee +122%, Belfast +129%, LowerArds +92%, Bangor +66%) — refs likely need updating. User decision pending.
 `22→159` (model=0) was a data error (snap direction bug, fixed 2026-06-15): now recorded as 159→22.
-Belfast Road `20→18` zero-count obs now gives z=+2.16 (obs=628, model=2,561) with Jeffreys fix — no longer silent.
+Belfast Road `20→18` zero-count obs gives z=+1.93 (obs=628, model=2,357) with Jeffreys fix.
+
+### Paths cache note
+The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
+`through_route_pairs` changes. The cache previously lacked all through-routes despite the
+whitelist being correct — the cache predated the through-route feature. This caused the
+LowerArds pop to blow up to +514% as the tuner compensated for missing through-traffic.
+After rebuilding (2026-06-15) LowerArds settled at +92%.
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit
