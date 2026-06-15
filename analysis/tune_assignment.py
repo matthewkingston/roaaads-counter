@@ -190,6 +190,20 @@ n_ext     = n_city + n_damp  # external params in stage 2
 
 print(f"  {len(city_list)} cities  {len(tunable_dampings)} tunable dampings")
 
+# Override external node weights from tuner_config so gravity-only tuning
+# always uses the same city values as the --full stage, regardless of what
+# node_weights.json contains.
+_ext_pop_cfg = {}
+_ext_biz_cfg = {}
+for _city_name, _city_cfg in city_list:
+    for _nid in _city_cfg["nodes"]:
+        _damp = _city_cfg["dampings"][str(_nid)]
+        _ext_pop_cfg[_nid] = _city_cfg["ref_pop"] * _damp
+        _ext_biz_cfg[_nid] = _city_cfg["ref_wp"]  * _damp
+for _arr_i, _nid in ext_indices:
+    base_w_pop[_arr_i] = _ext_pop_cfg[_nid]
+    base_w_biz[_arr_i] = _ext_biz_cfg[_nid]
+
 # ── Build observation list ────────────────────────────────────────────────────
 
 # Links excluded from calibration (retained in link_aadt.json but not used as
