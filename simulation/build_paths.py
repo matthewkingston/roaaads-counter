@@ -27,6 +27,7 @@ from scipy.sparse.csgraph import dijkstra
 
 CONS_GRAPH          = "simulation/newtownards_consolidated.graphml"
 WEIGHTS_FILE        = "simulation/node_weights.json"
+TUNER_CONFIG        = "simulation/tuner_config.json"
 PATHS_CACHE         = "simulation/newtownards_paths.npz"
 OFFSCREEN_SPEED_MS  = 80_000 / 3600   # 80 km/h in m/s — assumed speed for off-network boundary legs
 
@@ -62,6 +63,17 @@ with open(WEIGHTS_FILE) as f:
     weights = json.load(f)
 node_effective_utm = {int(k): (v[0], v[1]) for k, v in weights["node_effective_utm"].items()}
 boundary_node_ids  = set(weights["boundary_node_ids"])
+
+with open(TUNER_CONFIG) as f:
+    tuner_cfg = json.load(f)
+_city_nodes = {name: cfg["nodes"] for name, cfg in tuner_cfg["cities"].items()}
+allowed_through_pairs = set()
+for city_a, city_b in tuner_cfg.get("through_route_pairs", []):
+    for na in _city_nodes[city_a]:
+        for nb in _city_nodes[city_b]:
+            allowed_through_pairs.add((na, nb))
+            allowed_through_pairs.add((nb, na))
+print(f"  Through-route pairs: {len(tuner_cfg.get('through_route_pairs', []))} city pairs → {len(allowed_through_pairs)} node pairs")
 
 # ── Offscreen legs ───────────────────────────────────────────────────────────────
 
@@ -125,7 +137,8 @@ for src_i, src_nid in enumerate(node_ids):
         if dst_i == src_i:
             continue
         if src_is_boundary and dst_i in boundary_idx:
-            continue
+            if (src_nid, dst_nid) not in allowed_through_pairs:
+                continue
         d_net = dist_matrix[src_i, dst_i]
         if not math.isfinite(d_net):
             continue

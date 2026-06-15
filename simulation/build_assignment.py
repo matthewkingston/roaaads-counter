@@ -44,6 +44,7 @@ COUNT_SITES = [
 
 OUT_DIR        = "simulation"
 WEIGHTS_FILE   = "simulation/node_weights.json"
+TUNER_CONFIG   = "simulation/tuner_config.json"
 CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
 PATHS_CACHE    = "simulation/newtownards_paths.npz"
 LINK_AADT_FILE = "data/link_aadt.json"
@@ -58,6 +59,16 @@ node_population      = {int(k): v for k, v in weights["node_population"].items()
 node_business_demand = {int(k): v for k, v in weights["node_business_demand"].items()}
 node_effective_utm   = {int(k): (v[0], v[1]) for k, v in weights["node_effective_utm"].items()}
 boundary_node_ids    = set(weights["boundary_node_ids"])
+
+with open(TUNER_CONFIG) as f:
+    _tuner_cfg = json.load(f)
+_city_nodes = {name: cfg["nodes"] for name, cfg in _tuner_cfg["cities"].items()}
+allowed_through_pairs = set()
+for _city_a, _city_b in _tuner_cfg.get("through_route_pairs", []):
+    for _na in _city_nodes[_city_a]:
+        for _nb in _city_nodes[_city_b]:
+            allowed_through_pairs.add((_na, _nb))
+            allowed_through_pairs.add((_nb, _na))
 
 TUNED_PARAMS = "simulation/tuned_params.json"
 if os.path.exists(TUNED_PARAMS):
@@ -168,7 +179,8 @@ else:
             if target == source or len(path) < 2:
                 continue
             if src_is_boundary and target in boundary_node_ids:
-                continue
+                if (source, target) not in allowed_through_pairs:
+                    continue
             w_j = node_weight[target]
             if w_j <= 0:
                 continue

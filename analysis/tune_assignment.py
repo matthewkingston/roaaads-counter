@@ -214,6 +214,7 @@ t0         = time.time()
 
 
 def objective(log_params, log_ref=None):
+    log_params = np.clip(log_params, -100, 100)
     W_BIZ = math.exp(log_params[0])
     MU    = math.exp(log_params[1])
     SIGMA = math.exp(log_params[2])
