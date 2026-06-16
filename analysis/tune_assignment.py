@@ -33,7 +33,7 @@ import scipy.optimize
 sys.path.insert(0, "simulation")
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
-                   gravity_assign, print_chi2_table)
+                   print_chi2_table)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
