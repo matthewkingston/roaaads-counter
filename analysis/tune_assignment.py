@@ -212,7 +212,7 @@ for _arr_i, _nid in ext_indices:
     base_w_pop[_arr_i] = _ext_pop_cfg[_nid]
     base_w_biz[_arr_i] = _ext_biz_cfg[_nid]
 
-# ── Precompute distance-bin link matrices ─────────────────────────────────────
+# ── Precompute distance-bin link matrices (all-or-nothing mode only) ──────────
 # The 20M-entry scatter (pair_idx gather + bincount) dominates each evaluation.
 # Precompute link-bin accumulation matrices so each eval is a small matmul instead.
 #
@@ -223,75 +223,79 @@ for _arr_i, _nid in ext_indices:
 # Stage 1: all OD-pair weights fixed → use all-pair matrices.
 # Stage 2: external-node weights vary → precompute internal-only matrices and
 #   compute the ~23K external-involved OD pairs exactly per eval.
+#
+# Skipped when _has_stoch=True: the stochastic path uses exact per-pair scatter
+# for every eval and never calls the bin-matrix path.
 
-print("Precomputing link-bin matrices …")
-_t_pc = time.time()
+if not _has_stoch:
+    print("Precomputing link-bin matrices …")
+    _t_pc = time.time()
 
-from scipy.sparse import coo_matrix as _coo
+    from scipy.sparse import coo_matrix as _coo
 
-N_BINS      = 300
-_d_lo       = float(od_dist.min())
-_d_hi       = float(od_dist.max()) * 1.001
-_bin_edges  = np.logspace(np.log10(_d_lo), np.log10(_d_hi), N_BINS + 1)
-_bin_centers = np.sqrt(_bin_edges[:-1] * _bin_edges[1:])  # geometric mean per bin
+    N_BINS      = 300
+    _d_lo       = float(od_dist.min())
+    _d_hi       = float(od_dist.max()) * 1.001
+    _bin_edges  = np.logspace(np.log10(_d_lo), np.log10(_d_hi), N_BINS + 1)
+    _bin_centers = np.sqrt(_bin_edges[:-1] * _bin_edges[1:])  # geometric mean per bin
 
-# Bin index for each OD pair (0 … N_BINS-1)
-_pair_bin  = np.clip(np.digitize(od_dist, _bin_edges) - 1, 0, N_BINS - 1).astype(np.int32)
-_col_all   = _pair_bin[pair_idx]   # bin index for every link-pair entry
+    # Bin index for each OD pair (0 … N_BINS-1)
+    _pair_bin  = np.clip(np.digitize(od_dist, _bin_edges) - 1, 0, N_BINS - 1).astype(np.int32)
+    _col_all   = _pair_bin[pair_idx]   # bin index for every link-pair entry
 
-# Weight products per OD pair under base weights (ext nodes already at ref values)
-_pp_od = base_w_pop[od_src] * base_w_pop[od_dst]
-_pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
-          + base_w_biz[od_src] * base_w_pop[od_dst])
-_bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
+    # Weight products per OD pair under base weights (ext nodes already at ref values)
+    _pp_od = base_w_pop[od_src] * base_w_pop[od_dst]
+    _pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
+              + base_w_biz[od_src] * base_w_pop[od_dst])
+    _bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
 
-# Mask: True for OD pairs that involve at least one external node
-_is_ext_node = np.zeros(N_nodes, dtype=bool)
-for _ai, _ in ext_indices:
-    _is_ext_node[_ai] = True
-_ext_pair_mask  = _is_ext_node[od_src] | _is_ext_node[od_dst]  # (N_OD,)
-_entry_is_ext   = _ext_pair_mask[pair_idx]                       # (N_entries,)
+    # Mask: True for OD pairs that involve at least one external node
+    _is_ext_node = np.zeros(N_nodes, dtype=bool)
+    for _ai, _ in ext_indices:
+        _is_ext_node[_ai] = True
+    _ext_pair_mask  = _is_ext_node[od_src] | _is_ext_node[od_dst]  # (N_OD,)
+    _entry_is_ext   = _ext_pair_mask[pair_idx]                       # (N_entries,)
 
-_int_sel = np.where(~_entry_is_ext)[0]   # link-pair entries for internal-only pairs
-_ext_sel = np.where(_entry_is_ext)[0]    # link-pair entries for external-involved pairs
-
-
-def _link_bin(dat_od, sel=None):
-    """Build a dense (N_links, N_BINS) accumulation matrix via COO→dense."""
-    if sel is None:
-        r, c, d = link_idx_arr, _col_all, dat_od[pair_idx]
-    else:
-        pi = pair_idx[sel]
-        r, c, d = link_idx_arr[sel], _col_all[sel], dat_od[pi]
-    return _coo((d, (r, c)), shape=(N_links, N_BINS)).toarray()
+    _int_sel = np.where(~_entry_is_ext)[0]   # link-pair entries for internal-only pairs
+    _ext_sel = np.where(_entry_is_ext)[0]    # link-pair entries for external-involved pairs
 
 
-# Stage-1 matrices: all OD pairs (external nodes at reference weights, fixed)
-# Stored as float32: f32 × f32 BLAS SGEMV is ~30× faster than f64 DGEMV.
-all_bin_pp = _link_bin(_pp_od).astype(np.float32)
-all_bin_pb = _link_bin(_pb_od).astype(np.float32)
-all_bin_bb = _link_bin(_bb_od).astype(np.float32)
+    def _link_bin(dat_od, sel=None):
+        """Build a dense (N_links, N_BINS) accumulation matrix via COO→dense."""
+        if sel is None:
+            r, c, d = link_idx_arr, _col_all, dat_od[pair_idx]
+        else:
+            pi = pair_idx[sel]
+            r, c, d = link_idx_arr[sel], _col_all[sel], dat_od[pi]
+        return _coo((d, (r, c)), shape=(N_links, N_BINS)).toarray()
 
-# Stage-2 matrices: internal-internal pairs only
-int_bin_pp = _link_bin(_pp_od, _int_sel).astype(np.float32)
-int_bin_pb = _link_bin(_pb_od, _int_sel).astype(np.float32)
-int_bin_bb = _link_bin(_bb_od, _int_sel).astype(np.float32)
 
-# External pair arrays for exact per-eval scatter in stage 2
-_ext_p     = np.unique(pair_idx[_ext_sel])                # unique global pair indices
-_ext_dist  = od_dist[_ext_p]                              # distances for ext OD pairs
-_ext_src   = od_src[_ext_p]                               # node-array src index
-_ext_dst   = od_dst[_ext_p]                               # node-array dst index
-_ext_local = np.empty(len(od_src), dtype=np.int32)        # global→local pair map
-_ext_local[_ext_p] = np.arange(len(_ext_p), dtype=np.int32)
-_ext_link  = link_idx_arr[_ext_sel]                       # link idx per ext entry
-_ext_lp    = _ext_local[pair_idx[_ext_sel]]               # local pair idx per ext entry
+    # Stage-1 matrices: all OD pairs (external nodes at reference weights, fixed)
+    # Stored as float32: f32 × f32 BLAS SGEMV is ~30× faster than f64 DGEMV.
+    all_bin_pp = _link_bin(_pp_od).astype(np.float32)
+    all_bin_pb = _link_bin(_pb_od).astype(np.float32)
+    all_bin_bb = _link_bin(_bb_od).astype(np.float32)
 
-del _is_ext_node, _ext_pair_mask, _entry_is_ext, _int_sel, _ext_sel, _ext_local
-del _pp_od, _pb_od, _bb_od, _col_all
+    # Stage-2 matrices: internal-internal pairs only
+    int_bin_pp = _link_bin(_pp_od, _int_sel).astype(np.float32)
+    int_bin_pb = _link_bin(_pb_od, _int_sel).astype(np.float32)
+    int_bin_bb = _link_bin(_bb_od, _int_sel).astype(np.float32)
 
-print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
-      f"  ({time.time()-_t_pc:.1f}s)")
+    # External pair arrays for exact per-eval scatter in stage 2
+    _ext_p     = np.unique(pair_idx[_ext_sel])                # unique global pair indices
+    _ext_dist  = od_dist[_ext_p]                              # distances for ext OD pairs
+    _ext_src   = od_src[_ext_p]                               # node-array src index
+    _ext_dst   = od_dst[_ext_p]                               # node-array dst index
+    _ext_local = np.empty(len(od_src), dtype=np.int32)        # global→local pair map
+    _ext_local[_ext_p] = np.arange(len(_ext_p), dtype=np.int32)
+    _ext_link  = link_idx_arr[_ext_sel]                       # link idx per ext entry
+    _ext_lp    = _ext_local[pair_idx[_ext_sel]]               # local pair idx per ext entry
+
+    del _is_ext_node, _ext_pair_mask, _entry_is_ext, _int_sel, _ext_sel, _ext_local
+    del _pp_od, _pb_od, _bb_od, _col_all
+
+    print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
+          f"  ({time.time()-_t_pc:.1f}s)")
 
 # ── Build observation list ────────────────────────────────────────────────────
 
