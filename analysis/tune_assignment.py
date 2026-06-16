@@ -316,6 +316,10 @@ if not _has_stoch:
     print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
           f"  ({time.time()-_t_pc:.1f}s)")
 
+    def _kern_b(P, ALPHA):
+        u = _bin_centers / P
+        return ((ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))).astype(np.float32)
+
 # ── Build observation list ────────────────────────────────────────────────────
 
 observations     = []
@@ -426,17 +430,12 @@ _slot_data = [
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def _kern_b(P, ALPHA):
-    u = _bin_centers / P
-    return ((ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))).astype(np.float32)
-
-
 def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
     """Gravity assignment with optional stochastic logit routing.
 
     THETA=None  → fast binned all-or-nothing:
       Stage 1: ~0.12 ms (3 f32 matmuls).  Stage 2: ~5.5 ms (+ exact ext scatter).
-    THETA given → exact scatter over k=3 paths with logit weights (~20 ms).
+    THETA given → CSR SpMV scatter over k=3 paths with logit weights (~150 ms).
       share(r) ∝ exp(−THETA · d_r / P).  Works identically for stage 1 and 2.
     """
     if THETA is None or not _has_stoch:
