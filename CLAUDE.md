@@ -45,8 +45,8 @@ refine rather than restart.
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ/THETA toward physically plausible values (prevents K-drift pathology). Default P=300 s sets the peak travel time; ALPHA=2 gives 1/d² tail decay; THETA=1.0 is the logit dispersion anchor. Edit to change external zone priors, allowed through routes, or gravity anchors. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
-| `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. When the paths cache has k=3 alternative paths, Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); otherwise 3. `--full` adds 14 city pop/wp + 6 dampings. Uses per-session observations from `link_aadt.json`. Applies Woodbury correction for within-slot correlated uncertainty. **Performance:** all-or-nothing (THETA=None/old cache): ~0.12 ms/eval stage 1, ~5.5 ms stage 2 via precomputed bin-matmul path. Stochastic (THETA given + k=3 paths): ~150 ms/eval via CSR SpMV scatter; ~1 min stage 1, ~8 min stage 2. Startup builds three sparse (N_links×N_OD) matrices (~0.6 s one-off). |
+| `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry now carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s` so the tuner can work in count space. Output: `data/link_aadt.json`. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. When the paths cache has k=3 alternative paths, Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); otherwise 3. `--full` adds 14 city pop/wp + 6 dampings. Uses per-session observations from `link_aadt.json`. K and per-slot hourly fractions {f_s} are jointly calibrated at each evaluation via alternating minimisation; walking obs in count space, official sites in AADT space. Per-slot fraction priors derived from `hourly_fractions.csv` grouped by weekday/Saturday/Sunday. **Performance:** all-or-nothing (THETA=None/old cache): ~0.12 ms/eval stage 1, ~5.5 ms stage 2 via precomputed bin-matmul path. Stochastic (THETA given + k=3 paths): ~150 ms/eval via CSR SpMV scatter; ~1 min stage 1, ~8 min stage 2. Startup builds three sparse (N_links×N_OD) matrices (~0.6 s one-off). |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, THETA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
@@ -117,19 +117,36 @@ Changing the whitelist requires rebuilding the paths cache (`build_paths.py`).
 Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
 Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds.
 
-### K: analytical calibration
-At each optimizer evaluation, K is set analytically to minimise the Woodbury-corrected χ².
-For unslotted (official) observations: standard weighted formula.
-For each time slot s: Woodbury rank-1 correction removes the shared fractional mode.
-The combined formula is: `K = B / A` where A and B accumulate both contributions.
+### K and slot fractions: joint analytical calibration
+At each optimizer evaluation, K (global scale) and per-slot hourly fractions {f_s} are
+jointly calibrated via alternating minimisation (10 iterations, converges in 3–5).
+
+**K-step** (for fixed {f_s}): K = B / A where A and B accumulate official AADT terms
+(AADT space) and walking count terms (count space, weight m·T·f_s).
+
+**f_s-step** (for fixed K): each f_s = (Σ C_i + mean_f/std_f²) / (Σ C_i²/n_eff_i + 1/std_f²)
+where C_i = K · m_i · T_i/3600 and the second term is the Gaussian prior.
+
+Slot key is (day_type, hour): day_type = 0 (weekday, Mon–Fri), 1 (Saturday), 2 (Sunday).
+Prior hyperparameters from `hourly_fractions.csv` via law of total variance:
+  std_f = sqrt(between_day_var + mean(within_day_var across dows in slot)).
 
 ### Goodness of fit
 `χ²/N` (mean squared z-score, target ~1.0). Three official AADT sites (±10%) plus
 all per-session walking-count observations from `link_aadt.json` observations lists.
-Woodbury correction: observations sharing the same `(weekday, hour)` time slot have
-correlated AADT uncertainty (same hourly fraction draw). The Woodbury matrix identity
-on the rank-1 covariance removes this double-counting without cost.
+
+Walking obs compared in count space: chi²_walk = Σ (K·m·T·f_s/3600 − n_eff)² / n_eff,
+where n_eff = n + 0.5 (Jeffreys count). Shared f_s per (day_type, hour) slot is the
+correlation mechanism (all obs in a slot scale together), anchored by a Gaussian prior.
+Official sites compared in AADT space: chi²_off = Σ (K·m − y)² / σ².
+Total objective: chi² = chi²_off + chi²_walk + Σ (f_s − mean_f)² / std_f².
+
 `N_eff = N − N_slots` is printed as a diagnostic (each slot loses one effective df).
+With weekday/Sat/Sun grouping, 15 original (dow, hour) slots typically collapse to ~10
+(day_type, hour) slots, yielding N_eff = N − N_slots.
+
+**Note:** `model.py` / `build_assignment.py` still use the older Woodbury formulation
+for `compute_chi2()` — their reported χ²/N will differ slightly from the tuner's.
 
 ---
 
@@ -140,7 +157,7 @@ on the rank-1 covariance removes this double-counting without cost.
 - Site 508: A48 Donaghadee Road — 10,792 AADT
 - Site 444: A20 Portaferry Road — 7,282 AADT
 
-**Walking counts:** 5 CSV files, 130 sessions, 256 individual session-direction observations across 136 directed links, 15 time slots. Combined with 3 official sites: N=258 total tuner observations, N_eff=243 (15 slots). The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
+**Walking counts:** 5 CSV files, 130 sessions, 256 individual session-direction observations across 136 directed links. Day-type grouping (weekday/Sat/Sun) of the 15 original (dow, hour) time slots yields fewer (day_type, hour) slots (around 10), increasing N_eff. Combined with 3 official sites: N=258 total tuner observations. The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
 
 ---
 
@@ -203,11 +220,13 @@ LowerArds settled at +92%.
   `(u, v)`. For one-way roads where u > v (e.g. 159→22), the dot-product sign was
   correct but `link_with` was flipped. Fix: store `(u, v)` not `(pair[0], pair[1])`.
   Only `f56b2ce4` was materially affected — re-snapped from 22→159 to 159→22.
-- The Woodbury correction accounts for within-slot correlated uncertainty: all observations
-  in the same `(weekday, hour)` slot share the same NI-average hourly fraction, so their
-  fractional AADT uncertainty is perfectly correlated. The correction is O(B_slot) per slot
-  (negligible cost). `N_eff = N − N_slots` is the effective degrees of freedom after removing
-  one per slot. The 15 current slots yield N_eff=243 vs N=258 (255 walking + 3 official).
+- Slot fractions f_s are inferred per (day_type, hour) — grouping weekday / Saturday / Sunday.
+  They are anchored by a Gaussian prior derived from `hourly_fractions.csv` via the law of
+  total variance (between-day variance + mean within-day variance). The prior prevents runaway
+  values in slots with sparse data. All obs in a slot share the same f_s, preserving the
+  within-slot correlation that Woodbury previously handled. `N_eff = N − N_slots` is the
+  effective degrees of freedom. With day_type grouping, N_slots is typically ~10 vs 15 with
+  the old (dow, hour) formulation, gaining ~5 effective degrees of freedom.
 
 ---
 
