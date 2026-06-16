@@ -35,6 +35,8 @@ for key in ("K",) + GRAVITY_KEYS:
 
 existing.update({k: grav_ref[k] for k in GRAVITY_KEYS})
 existing["K"] = 1.0
+for _stale in ("MU", "SIGMA"):
+    existing.pop(_stale, None)
 
 with open(TUNED_PARAMS, "w") as f:
     json.dump(existing, f, indent=2)

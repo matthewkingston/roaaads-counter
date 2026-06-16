@@ -95,6 +95,8 @@ if non_scalar:
     print(f"\n  External zone params restored: {', '.join(non_scalar)}")
 
 existing.update(params)
+for _stale in ("MU", "SIGMA"):
+    existing.pop(_stale, None)
 existing["chi2"]       = entry["chi2"]
 existing["chi2_per_n"] = entry["chi2_per_n"]
 existing["n_obs"]      = entry["n_obs"]
