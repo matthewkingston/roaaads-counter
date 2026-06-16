@@ -140,7 +140,7 @@ on the rank-1 covariance removes this double-counting without cost.
 - Site 508: A48 Donaghadee Road — 10,792 AADT
 - Site 444: A20 Portaferry Road — 7,282 AADT
 
-**Walking counts:** 4 CSV files, 81 sessions, 159 individual session-direction observations across 107 directed links. The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
+**Walking counts:** 5 CSV files, 130 sessions, 256 individual session-direction observations across 136 directed links, 15 time slots (N_eff=241). The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
 
 ---
 
@@ -207,7 +207,7 @@ LowerArds settled at +92%.
   in the same `(weekday, hour)` slot share the same NI-average hourly fraction, so their
   fractional AADT uncertainty is perfectly correlated. The correction is O(B_slot) per slot
   (negligible cost). `N_eff = N − N_slots` is the effective degrees of freedom after removing
-  one per slot. The 10 current slots yield N_eff=151 vs N=161.
+  one per slot. The 15 current slots yield N_eff=241 vs N=256.
 
 ---
 
