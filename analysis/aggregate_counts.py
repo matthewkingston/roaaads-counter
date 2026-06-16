@@ -40,13 +40,14 @@ for sid, rec in processed["sessions"].items():
         skipped_duration += 1
         continue
 
-    for direction, link_field, aadt_field, unc_field in (
-        ("with",    "matched_link_with",    "with_aadt",    "with_aadt_uncertainty"),
-        ("against", "matched_link_against", "against_aadt", "against_aadt_uncertainty"),
+    for direction, link_field, aadt_field, unc_field, count_field in (
+        ("with",    "matched_link_with",    "with_aadt",    "with_aadt_uncertainty",    "with_count"),
+        ("against", "matched_link_against", "against_aadt", "against_aadt_uncertainty", "against_count"),
     ):
-        link = rec.get(link_field)
-        aadt = rec.get(aadt_field)
-        unc  = rec.get(unc_field)
+        link  = rec.get(link_field)
+        aadt  = rec.get(aadt_field)
+        unc   = rec.get(unc_field)
+        count = rec.get(count_field, None)
 
         if link is None or aadt is None or unc is None:
             skipped_null += 1
@@ -60,6 +61,8 @@ for sid, rec in processed["sessions"].items():
             "aadt_uncertainty": unc,
             "time_slot":        rec.get("time_slot"),
             "frac_rel_std":     rec.get("frac_rel_std"),
+            "n_eff":            round(count + 0.5, 1) if count is not None else None,
+            "duration_s":       rec.get("duration_s"),
         })
 
 # ── Combine each bucket ───────────────────────────────────────────────────────
