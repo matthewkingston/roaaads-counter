@@ -102,7 +102,20 @@ N_nodes      = len(node_ids)
 
 link_index = {(int(link_u[k]), int(link_v[k])): k for k in range(N_links)}
 
-print(f"  {N_nodes} nodes  {N_links} links  {len(od_src):,} OD pairs")
+_has_stoch = "pair_idx_2" in cache
+if _has_stoch:
+    _od_dist_2  = cache["od_dist_2"].astype(np.float64)
+    _pair_idx_2 = cache["pair_idx_2"]
+    _link_idx_2 = cache["link_idx_2"]
+    _od_dist_3  = cache["od_dist_3"].astype(np.float64)
+    _pair_idx_3 = cache["pair_idx_3"]
+    _link_idx_3 = cache["link_idx_3"]
+else:
+    _od_dist_2 = _pair_idx_2 = _link_idx_2 = None
+    _od_dist_3 = _pair_idx_3 = _link_idx_3 = None
+
+print(f"  {N_nodes} nodes  {N_links} links  {len(od_src):,} OD pairs"
+      + ("  stochastic k=3 paths loaded" if _has_stoch else "  (no stochastic paths — run build_paths.py)"))
 
 # ── Load node weights ─────────────────────────────────────────────────────────
 
@@ -153,11 +166,14 @@ city_list = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam = config.get("gravity_lambda", 0.0)
-log_grav_ref = np.array([
+_grav_ref_vals = [
     math.log(max(grav_ref.get("W_BIZ", 1.0),   1e-4)),
     math.log(max(grav_ref.get("P",     300.0),  1e-4)),
     math.log(max(grav_ref.get("ALPHA", 2.0),    1e-4)),
-])
+]
+if _has_stoch:
+    _grav_ref_vals.append(math.log(max(grav_ref.get("THETA", 1.0), 1e-4)))
+log_grav_ref = np.array(_grav_ref_vals)
 
 # External nodes covered by tuner_config (node 180 excluded)
 external_nodes = set()
@@ -175,7 +191,7 @@ for city_name, city_cfg in city_list:
         if damp < 1.0:
             tunable_dampings.append((city_name, int(node_str), damp))
 
-n_gravity = 3
+n_gravity = 4 if _has_stoch else 3
 n_city    = len(city_list) * 2
 n_damp    = len(tunable_dampings)
 n_ext     = n_city + n_damp  # external params in stage 2
@@ -392,30 +408,55 @@ def _kern_b(P, ALPHA):
     return ((ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))).astype(np.float32)
 
 
-def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz):
-    """Fast binned gravity assignment.
-    Stage 1: ~0.12 ms (3 f32 matmuls).  Stage 2: ~5.5 ms (+ exact ext scatter).
-    Uses f32 matrices + f32 kernel vector for BLAS SGEMV performance (~30× vs DGEMV).
+def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
+    """Gravity assignment with optional stochastic logit routing.
+
+    THETA=None  → fast binned all-or-nothing:
+      Stage 1: ~0.12 ms (3 f32 matmuls).  Stage 2: ~5.5 ms (+ exact ext scatter).
+    THETA given → exact scatter over k=3 paths with logit weights (~20 ms).
+      share(r) ∝ exp(−THETA · d_r / P).  Works identically for stage 1 and 2.
     """
-    f_b = _kern_b(P, ALPHA)                         # float32, N_BINS elements
-    W   = np.float32(W_BIZ)
-    W2  = np.float32(W_BIZ ** 2)
-    if stage == "full":
-        # Internal-internal pairs via precomputed bins; 3 separate matmuls
-        flow = (int_bin_pp @ f_b
-                + W  * (int_bin_pb @ f_b)
-                + W2 * (int_bin_bb @ f_b)).astype(np.float64)
-        # External-involved pairs: compute exactly with current weights
-        w_src = w_pop[_ext_src] + W_BIZ * w_biz[_ext_src]
-        w_dst = w_pop[_ext_dst] + W_BIZ * w_biz[_ext_dst]
-        u_e   = _ext_dist / P
-        t_e   = w_src * w_dst * (ALPHA + 1) * u_e / (ALPHA + u_e ** (ALPHA + 1))
-        flow += np.bincount(_ext_link, weights=t_e[_ext_lp], minlength=N_links)
-    else:
-        # Stage 1: all weights fixed at reference — all pairs use precomputed bins
-        flow = (all_bin_pp @ f_b
-                + W  * (all_bin_pb @ f_b)
-                + W2 * (all_bin_bb @ f_b)).astype(np.float64)
+    if THETA is None or not _has_stoch:
+        # Fast bin-matrix path (all-or-nothing)
+        f_b = _kern_b(P, ALPHA)
+        W   = np.float32(W_BIZ)
+        W2  = np.float32(W_BIZ ** 2)
+        if stage == "full":
+            flow = (int_bin_pp @ f_b
+                    + W  * (int_bin_pb @ f_b)
+                    + W2 * (int_bin_bb @ f_b)).astype(np.float64)
+            w_src = w_pop[_ext_src] + W_BIZ * w_biz[_ext_src]
+            w_dst = w_pop[_ext_dst] + W_BIZ * w_biz[_ext_dst]
+            u_e   = _ext_dist / P
+            t_e   = w_src * w_dst * (ALPHA + 1) * u_e / (ALPHA + u_e ** (ALPHA + 1))
+            flow += np.bincount(_ext_link, weights=t_e[_ext_lp], minlength=N_links)
+        else:
+            flow = (all_bin_pp @ f_b
+                    + W  * (all_bin_pb @ f_b)
+                    + W2 * (all_bin_bb @ f_b)).astype(np.float64)
+        return flow
+
+    # Stochastic logit: exact scatter over 3 paths
+    w_vec = w_pop + W_BIZ * w_biz
+    t_ij  = w_vec[od_src] * w_vec[od_dst]
+
+    # Logit shares: stable via row-wise max subtraction
+    d_mat  = np.stack([od_dist, _od_dist_2, _od_dist_3], axis=1)
+    log_w  = -THETA * d_mat / P
+    log_w -= log_w.max(axis=1, keepdims=True)
+    shares = np.exp(log_w)
+    shares /= shares.sum(axis=1, keepdims=True)
+
+    flow = np.zeros(N_links, dtype=np.float64)
+    for r, (pidx, lidx, d_r) in enumerate([
+        (pair_idx,    link_idx_arr, od_dist),
+        (_pair_idx_2, _link_idx_2,  _od_dist_2),
+        (_pair_idx_3, _link_idx_3,  _od_dist_3),
+    ]):
+        u_r  = d_r / P
+        f_r  = (ALPHA + 1) * u_r / (ALPHA + u_r ** (ALPHA + 1))
+        w_r  = t_ij * shares[:, r] * f_r
+        flow += np.bincount(lidx, weights=w_r[pidx], minlength=N_links)
     return flow
 
 
@@ -451,6 +492,7 @@ def objective(log_params, log_ref=None):
     W_BIZ = math.exp(log_params[0])
     P     = math.exp(log_params[1])
     ALPHA = math.exp(log_params[2])
+    THETA = math.exp(log_params[3]) if _has_stoch else None
 
     if stage == "full":
         # Build per-node weight arrays from city-level params and dampings
@@ -495,7 +537,7 @@ def objective(log_params, log_ref=None):
         w_pop = base_w_pop
         w_biz = base_w_biz
 
-    raw_flow = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz)
+    raw_flow = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA)
     m_arr    = model_obs(raw_flow)
     K        = calibrate_K(m_arr)
     r    = K * m_arr - obs_arr
@@ -528,22 +570,25 @@ def objective(log_params, log_ref=None):
 # ── Build initial parameter vector ────────────────────────────────────────────
 
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
-grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0}
+grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0, "THETA": 1.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
-    for k in ("W_BIZ", "P", "ALPHA"):
+    for k in ("W_BIZ", "P", "ALPHA", "THETA"):
         if k in tp:
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
 
 # Clamp to a safe minimum before log-transform (guards against degenerate prior runs)
 _LOG_MIN = 1e-4
-log_p0 = np.array([
+_log_p0_vals = [
     math.log(max(grav_start["W_BIZ"], _LOG_MIN)),
     math.log(max(grav_start["P"],     _LOG_MIN)),
     math.log(max(grav_start["ALPHA"], _LOG_MIN)),
-], dtype=np.float64)
+]
+if _has_stoch:
+    _log_p0_vals.append(math.log(max(grav_start["THETA"], _LOG_MIN)))
+log_p0 = np.array(_log_p0_vals, dtype=np.float64)
 
 log_ref = None
 
@@ -562,7 +607,8 @@ if stage == "full":
     print(f"Full stage: {len(log_p0)} params "
           f"({n_gravity} gravity + {n_city} city pop/wp + {n_damp} dampings)")
 else:
-    print(f"Gravity stage: {len(log_p0)} params")
+    _theta_note = "  [W_BIZ, P, ALPHA, THETA]" if _has_stoch else "  [W_BIZ, P, ALPHA]"
+    print(f"Gravity stage: {len(log_p0)} params{_theta_note}")
 
 # ── Run optimization ──────────────────────────────────────────────────────────
 
@@ -588,6 +634,7 @@ log_best = best["log_params"]
 W_BIZ = math.exp(log_best[0])
 P     = math.exp(log_best[1])
 ALPHA = math.exp(log_best[2])
+THETA = math.exp(log_best[3]) if _has_stoch else None
 
 ext_pop_map  = {}
 ext_biz_map  = {}
@@ -625,7 +672,7 @@ for arr_i, nid in ext_indices:
         w_pop_f[arr_i] = ext_pop_map[nid]
         w_biz_f[arr_i] = ext_biz_map[nid]
 
-raw_flow  = run_assignment(W_BIZ, P, ALPHA, w_pop_f, w_biz_f)
+raw_flow  = run_assignment(W_BIZ, P, ALPHA, w_pop_f, w_biz_f, THETA)
 m_arr     = model_obs(raw_flow)
 K         = calibrate_K(m_arr)
 r         = K * m_arr - obs_arr
@@ -639,7 +686,8 @@ resid      = r / sig_arr  # for fit table and history entry z-scores
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
-print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}")
+_theta_str = f"  THETA={THETA:.4f}" if THETA is not None else ""
+print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}{_theta_str}")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -684,6 +732,7 @@ tuned = {
     "W_BIZ":  round(W_BIZ, 6),
     "P":      round(P, 4),
     "ALPHA":  round(ALPHA, 6),
+    **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
     "external_node_pop": {str(k): round(v) for k, v in ext_pop_map.items()},
     "external_node_biz": {str(k): round(v) for k, v in ext_biz_map.items()},
     "chi2":       round(chi2, 3),
@@ -747,6 +796,7 @@ params = {
     "W_BIZ":  round(W_BIZ, 6),
     "P":      round(P, 4),
     "ALPHA":  round(ALPHA, 6),
+    **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
 }
 if stage == "full":
     params["external_node_pop"] = {str(k): round(v) for k, v in ext_pop_map.items()}

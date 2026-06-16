@@ -39,16 +39,16 @@ refine rather than restart.
 | File | Role |
 |------|------|
 | `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. External zone pop/wp/damping values are read from `tuner_config.json` (lat/lon centroids remain hardcoded in the script). |
-| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. |
+| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. Produces **k=3 alternative paths** per OD pair (k=2/k=3 via progressive edge penalisation ×10) for stochastic logit routing. Build time ~30 min (3 Dijkstra passes). |
 | `simulation/model.py` | **Shared constants and functions** imported by both `build_assignment.py` and `tune_assignment.py`: `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel, used by `build_assignment.py` only), `site_flow()`, `compute_chi2()` (Woodbury-corrected, used by `build_assignment.py` only), `print_chi2_table()` (used by both). **Note:** `tune_assignment.py` has its own parallel `calibrate_K()` and vectorized chi² loop (in `objective()`) that implement the same Woodbury algebra as `model.py`'s `compute_chi2()` — but using precomputed arrays for speed. If you change the Woodbury formula or observation-weighting logic in one place, change it in both. |
-| `simulation/build_assignment.py` | Gravity model + all-or-nothing assignment. Loads `tuned_params.json` automatically if present. Prints Woodbury-corrected χ²/N goodness-of-fit table via `model.py`'s `compute_chi2()`. |
+| `simulation/build_assignment.py` | Gravity model assignment. Loads `tuned_params.json` automatically if present. Uses stochastic logit routing (k=3 paths, THETA parameter) if the paths cache and tuned params both support it; otherwise falls back to all-or-nothing. Prints Woodbury-corrected χ²/N goodness-of-fit table via `model.py`'s `compute_chi2()`. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ toward physically plausible values (prevents K-drift pathology). Default P=300 s sets the peak travel time; ALPHA=2 gives 1/d² tail decay. Edit to change external zone priors, allowed through routes, or gravity anchors. |
+| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ/THETA toward physically plausible values (prevents K-drift pathology). Default P=300 s sets the peak travel time; ALPHA=2 gives 1/d² tail decay; THETA=1.0 is the logit dispersion anchor. Edit to change external zone priors, allowed through routes, or gravity anchors. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 3 gravity params (W_BIZ, P, ALPHA); `--full` adds 14 city pop/wp + 6 dampings = 23 params total. Uses individual per-session observations from `link_aadt.json` (not per-link aggregates). Applies Woodbury correction for within-slot correlated uncertainty. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. Each run gets a unique random 8-char hex `id`; use `--note "label"` for a human-readable annotation. **Performance:** precomputes six (2018×300) float32 link-bin matrices at startup (~2.4 s) then evaluates each gravity call as 3 small BLAS SGEMV matmuls (~0.12 ms stage 1, ~5.5 ms stage 2) instead of a 20M-entry scatter — ~150× faster per eval vs the exact scatter loop. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. When the paths cache has k=3 alternative paths, Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); otherwise 3. `--full` adds 14 city pop/wp + 6 dampings. Uses per-session observations from `link_aadt.json`. Applies Woodbury correction for within-slot correlated uncertainty. **Performance:** all-or-nothing (THETA=None/old cache): ~0.12 ms/eval stage 1, ~5.5 ms stage 2 via precomputed bin-matmul path. Stochastic (THETA given + k=3 paths): ~20 ms/eval via exact 3-path scatter. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
-| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
+| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, THETA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
 | `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
 
@@ -86,6 +86,19 @@ Node weight: `w = population + W_BIZ × business_demand`
 
 Distances are least-time shortest paths (seconds), with an off-network leg added
 for boundary nodes using their real-world centroid position.
+
+### Stochastic route choice (logit)
+When the paths cache contains k=3 alternatives and THETA is a tuned parameter,
+demand is split across 3 paths per OD pair:
+
+`share(path r) ∝ exp(−THETA × d_r / P)`
+
+THETA → ∞: collapses to all-or-nothing (k=1 path only).
+THETA = 0: equal split across all 3 paths.
+
+Alternative paths k=2/k=3 are found by penalising k=1 (and k=1+k=2) edges ×10
+in the Dijkstra adjacency matrix. Pairs with no alternative fall back to k=1
+(which is equivalent to all-or-nothing for those pairs under any THETA).
 
 ### External zones
 14 boundary nodes grouped into 7 cities in `tuner_config.json`. Each city shares

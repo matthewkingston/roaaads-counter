@@ -10,12 +10,20 @@ edge travel time multiplied by HIGHWAY_COST_FACTOR, plus the boundary
 offscreen leg converted at OFFSCREEN_SPEED_MS. This means major roads appear
 shorter than minor roads of equal length, biasing route choice toward them.
 
+Three path alternatives are stored per OD pair (k=1, k=2, k=3):
+  k=1: original shortest paths
+  k=2: shortest paths after penalising all k=1 edges ×ALT_COST_PENALTY
+  k=3: shortest paths after penalising all k=1+k=2 edges ×ALT_COST_PENALTY
+All three use original (non-penalised) edge costs for od_dist.
+Pairs with no alternative path fall back to the k=1 path (same links, same dist).
+These are used for logit stochastic routing (THETA parameter in tune_assignment.py).
+
 Cache must be regenerated when:
   - The road network changes (newtownards_consolidated.graphml is updated)
   - External zone coordinates (lat/lon) change in build_demographics.py EXTERNAL_ZONES
   - HIGHWAY_COST_FACTOR values change
 
-Does NOT need regenerating for changes to W_BIZ, MU, SIGMA, ALPHA, node
+Does NOT need regenerating for changes to W_BIZ, P, ALPHA, THETA, node
 populations, damping factors, or count site values.
 """
 
@@ -30,6 +38,7 @@ WEIGHTS_FILE        = "simulation/node_weights.json"
 TUNER_CONFIG        = "simulation/tuner_config.json"
 PATHS_CACHE         = "simulation/newtownards_paths.npz"
 OFFSCREEN_SPEED_MS  = 80_000 / 3600   # 80 km/h in m/s — assumed speed for off-network boundary legs
+ALT_COST_PENALTY    = 10.0             # multiplier applied to k=1 (and k=1+k=2) edges when finding alternatives
 
 # Multipliers applied to edge travel time before Dijkstra.
 # < 1 favours that road class; > 1 penalises it.
@@ -86,12 +95,14 @@ for nid in boundary_node_ids:
     cx, cy = node_effective_utm[nid]
     boundary_offscreen[nid] = math.sqrt((nx_pos - cx) ** 2 + (ny_pos - cy) ** 2) / OFFSCREEN_SPEED_MS
 
-# ── Build scipy sparse adjacency matrix ──────────────────────────────────────────
+# ── Build sparse adjacency matrix ────────────────────────────────────────────────
 
 print("Building sparse adjacency matrix …")
 rows, cols, data = [], [], []
-link_list  = []
-link_to_idx = {}
+link_list    = []
+link_to_idx  = {}
+row_link_idx = []     # parallel to rows/cols/data: which link index each entry belongs to
+edge_orig_cost = {}   # (matrix_i, matrix_j) → original cost (for retracing alternative paths)
 
 for u, v, edata in G.edges(data=True):
     ht = edata.get("highway", "unclassified")
@@ -105,20 +116,86 @@ for u, v, edata in G.edges(data=True):
     if lnk not in link_to_idx:
         link_to_idx[lnk] = len(link_list)
         link_list.append(lnk)
+    li = link_to_idx[lnk]
+    row_link_idx.append(li)
+    # Keep minimum cost for each (i,j) pair (relevant if parallel edges exist)
+    if (i, j) not in edge_orig_cost or cost < edge_orig_cost[(i, j)]:
+        edge_orig_cost[(i, j)] = cost
 
 adj = csr_matrix((data, (rows, cols)), shape=(n, n))
 print(f"  {len(link_list)} directed links")
 
-# ── All-pairs Dijkstra (scipy) ───────────────────────────────────────────────────
+# ── Helper: build penalised adjacency ────────────────────────────────────────────
 
-print("Running all-pairs Dijkstra (scipy) …")
+def _build_penalized_adj(penalize_link_set):
+    """Multiply costs of edges whose link index is in penalize_link_set by ALT_COST_PENALTY."""
+    data_pen = [
+        cost * ALT_COST_PENALTY if li in penalize_link_set else cost
+        for cost, li in zip(data, row_link_idx)
+    ]
+    return csr_matrix((data_pen, (rows, cols)), shape=(n, n))
+
+# ── Helper: retrace alternative paths for all OD pairs ───────────────────────────
+
+def _retrace_alt(pred, od_src_list, od_dst_list, pair1_starts, link_idx_arr_1, od_dist_list, t_ref):
+    """
+    Retrace paths using pred (from a penalised Dijkstra) for each OD pair.
+    Distances are computed using original (non-penalised) edge costs.
+    Falls back to k=1 path for any pair where pred has no route.
+    Returns (od_dist_out, pair_idx_out, link_idx_out).
+    """
+    pair_idx_out = []
+    link_idx_out = []
+    od_dist_out  = []
+
+    for k, (src_i, dst_i) in enumerate(zip(od_src_list, od_dst_list)):
+        src_nid = node_ids[src_i]
+        dst_nid = node_ids[dst_i]
+
+        path_links = []
+        path_cost  = 0.0
+        cur = dst_i
+        while cur != src_i:
+            prev = pred[src_i, cur]
+            if prev < 0:
+                path_links = []
+                break
+            path_cost += edge_orig_cost.get((prev, cur), 0.0)
+            lnk = (node_ids[prev], node_ids[cur])
+            if lnk in link_to_idx:
+                path_links.append(link_to_idx[lnk])
+            cur = prev
+
+        if path_links:
+            path_links.reverse()
+            eff_dist = path_cost + boundary_offscreen.get(src_nid, 0.0) + boundary_offscreen.get(dst_nid, 0.0)
+            od_dist_out.append(max(float(eff_dist), 1.0))
+            for li in path_links:
+                pair_idx_out.append(k)
+                link_idx_out.append(li)
+        else:
+            # No alternative found — duplicate k=1 path
+            od_dist_out.append(od_dist_list[k])
+            s, e = int(pair1_starts[k]), int(pair1_starts[k + 1])
+            for li in link_idx_arr_1[s:e]:
+                pair_idx_out.append(k)
+                link_idx_out.append(int(li))
+
+        if (k + 1) % 100_000 == 0:
+            print(f"    {k+1:,}/{len(od_src_list):,}  ({time.time()-t_ref:.0f}s)")
+
+    return od_dist_out, pair_idx_out, link_idx_out
+
+# ── k=1: all-pairs Dijkstra (scipy) ─────────────────────────────────────────────
+
+print("Running k=1 Dijkstra (scipy) …")
 t0 = time.time()
 dist_matrix, predecessors = dijkstra(adj, directed=True, return_predecessors=True)
 print(f"  Done in {time.time()-t0:.1f}s")
 
-# ── Reconstruct paths and build OD pair + link arrays ───────────────────────────
+# ── Reconstruct k=1 paths ────────────────────────────────────────────────────────
 
-print("Reconstructing paths and building cache arrays …")
+print("Reconstructing k=1 paths …")
 t0 = time.time()
 
 od_src_list   = []
@@ -147,7 +224,6 @@ for src_i, src_nid in enumerate(node_ids):
         if eff_dist < 1.0:
             continue
 
-        # Reconstruct path by backtracking through predecessors
         path_links = []
         cur = dst_i
         while cur != src_i:
@@ -177,18 +253,78 @@ for src_i, src_nid in enumerate(node_ids):
 print(f"  {len(od_src_list):,} OD pairs  {len(pair_idx_list):,} pair-link entries  "
       f"in {time.time()-t0:.1f}s")
 
+# ── Build per-pair lookup for k=1 fallback ───────────────────────────────────────
+
+pair_idx_arr_1 = np.array(pair_idx_list, dtype=np.int32)
+link_idx_arr_1 = np.array(link_idx_list, dtype=np.int32)
+pair1_counts   = np.bincount(pair_idx_arr_1, minlength=len(od_src_list))
+pair1_starts   = np.concatenate([[0], np.cumsum(pair1_counts)]).astype(np.int64)
+used_links_1   = set(link_idx_arr_1.tolist())
+print(f"  k=1 uses {len(used_links_1):,} of {len(link_list):,} links")
+
+# ── k=2: penalise k=1 edges, re-run Dijkstra ────────────────────────────────────
+
+print(f"Building k=2 penalised adjacency ({len(used_links_1):,} links ×{ALT_COST_PENALTY}) …")
+adj_2 = _build_penalized_adj(used_links_1)
+
+print("Running k=2 Dijkstra …")
+t0 = time.time()
+_, pred_2 = dijkstra(adj_2, directed=True, return_predecessors=True)
+print(f"  Done in {time.time()-t0:.1f}s")
+
+print("Reconstructing k=2 paths …")
+t0 = time.time()
+od_dist_list_2, pair_idx_list_2, link_idx_list_2 = _retrace_alt(
+    pred_2, od_src_list, od_dst_list, pair1_starts, link_idx_arr_1, od_dist_list, t0)
+used_links_2 = set(link_idx_list_2)
+n_same_2 = sum(1 for k in range(len(od_src_list))
+               if od_dist_list_2[k] == od_dist_list[k])
+print(f"  {len(pair_idx_list_2):,} entries  {n_same_2:,} pairs fell back to k=1  "
+      f"({time.time()-t0:.1f}s)")
+
+# ── k=3: penalise k=1+k=2 edges, re-run Dijkstra ────────────────────────────────
+
+used_links_12 = used_links_1 | used_links_2
+print(f"Building k=3 penalised adjacency ({len(used_links_12):,} links ×{ALT_COST_PENALTY}) …")
+adj_3 = _build_penalized_adj(used_links_12)
+
+print("Running k=3 Dijkstra …")
+t0 = time.time()
+_, pred_3 = dijkstra(adj_3, directed=True, return_predecessors=True)
+print(f"  Done in {time.time()-t0:.1f}s")
+
+print("Reconstructing k=3 paths …")
+t0 = time.time()
+od_dist_list_3, pair_idx_list_3, link_idx_list_3 = _retrace_alt(
+    pred_3, od_src_list, od_dst_list, pair1_starts, link_idx_arr_1, od_dist_list, t0)
+n_same_3 = sum(1 for k in range(len(od_src_list))
+               if od_dist_list_3[k] == od_dist_list[k])
+print(f"  {len(pair_idx_list_3):,} entries  {n_same_3:,} pairs fell back to k=1  "
+      f"({time.time()-t0:.1f}s)")
+
 # ── Save ─────────────────────────────────────────────────────────────────────────
 
+print("Saving cache …")
 np.savez_compressed(
     PATHS_CACHE,
-    node_ids  = np.array(node_ids,       dtype=np.int32),
-    od_src    = np.array(od_src_list,    dtype=np.int32),
-    od_dst    = np.array(od_dst_list,    dtype=np.int32),
-    od_dist   = np.array(od_dist_list,   dtype=np.float32),
-    pair_idx  = np.array(pair_idx_list,  dtype=np.int32),
-    link_idx  = np.array(link_idx_list,  dtype=np.int32),
-    link_u    = np.array([u for u, v in link_list], dtype=np.int32),
-    link_v    = np.array([v for u, v in link_list], dtype=np.int32),
+    node_ids    = np.array(node_ids,         dtype=np.int32),
+    od_src      = np.array(od_src_list,      dtype=np.int32),
+    od_dst      = np.array(od_dst_list,      dtype=np.int32),
+    od_dist     = np.array(od_dist_list,     dtype=np.float32),
+    pair_idx    = np.array(pair_idx_list,    dtype=np.int32),
+    link_idx    = np.array(link_idx_list,    dtype=np.int32),
+    link_u      = np.array([u for u, v in link_list], dtype=np.int32),
+    link_v      = np.array([v for u, v in link_list], dtype=np.int32),
+    # Alternative paths (k=2 and k=3) for stochastic logit routing
+    od_dist_2   = np.array(od_dist_list_2,   dtype=np.float32),
+    pair_idx_2  = np.array(pair_idx_list_2,  dtype=np.int32),
+    link_idx_2  = np.array(link_idx_list_2,  dtype=np.int32),
+    od_dist_3   = np.array(od_dist_list_3,   dtype=np.float32),
+    pair_idx_3  = np.array(pair_idx_list_3,  dtype=np.int32),
+    link_idx_3  = np.array(link_idx_list_3,  dtype=np.int32),
 )
 size_mb = os.path.getsize(PATHS_CACHE) / 1e6
 print(f"Saved: {PATHS_CACHE}  ({size_mb:.1f} MB)")
+print(f"  k=1: {len(od_src_list):,} pairs  {len(pair_idx_list):,} entries")
+print(f"  k=2: {len(od_src_list):,} pairs  {len(pair_idx_list_2):,} entries  ({n_same_2:,} fallbacks)")
+print(f"  k=3: {len(od_src_list):,} pairs  {len(pair_idx_list_3):,} entries  ({n_same_3:,} fallbacks)")

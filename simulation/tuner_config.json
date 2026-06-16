@@ -12,7 +12,8 @@
   "gravity_ref": {
     "W_BIZ": 1.0,
     "P":     300.0,
-    "ALPHA": 2.0
+    "ALPHA": 2.0,
+    "THETA": 1.0
   },
   "cities": {
     "Donaghadee": {

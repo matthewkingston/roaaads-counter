@@ -61,6 +61,8 @@ for _city_a, _city_b in _tuner_cfg.get("through_route_pairs", []):
             allowed_through_pairs.add((_na, _nb))
             allowed_through_pairs.add((_nb, _na))
 
+THETA  = None   # logit dispersion; None = all-or-nothing
+
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         _tp = json.load(f)
@@ -68,11 +70,13 @@ if os.path.exists(TUNED_PARAMS):
     W_BIZ = _tp.get("W_BIZ", W_BIZ)
     P     = _tp.get("P",     P)
     ALPHA = _tp.get("ALPHA", ALPHA)
+    THETA = _tp.get("THETA", None)
     for _nid, _val in _tp.get("external_node_pop", {}).items():
         node_population[int(_nid)] = _val
     for _nid, _val in _tp.get("external_node_biz", {}).items():
         node_business_demand[int(_nid)] = _val
-    print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}]")
+    print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}"
+          + (f"  THETA={THETA:.4f}" if THETA is not None else "") + "]")
 
 # ── Assignment ────────────────────────────────────────────────────────────────
 
@@ -93,6 +97,23 @@ if os.path.exists(PATHS_CACHE):
     link_u       = cache["link_u"]            # int32 (L,)
     link_v       = cache["link_v"]            # int32 (L,)
 
+    # Load stochastic paths if available
+    _has_stoch = "pair_idx_2" in cache and THETA is not None
+    if _has_stoch:
+        od_dist_2 = cache["od_dist_2"].astype(np.float64)
+        pair_idx_2 = cache["pair_idx_2"]
+        link_idx_2 = cache["link_idx_2"]
+        od_dist_3 = cache["od_dist_3"].astype(np.float64)
+        pair_idx_3 = cache["pair_idx_3"]
+        link_idx_3 = cache["link_idx_3"]
+        print(f"  Stochastic k=3 paths loaded  THETA={THETA:.4f}")
+    else:
+        od_dist_2 = pair_idx_2 = link_idx_2 = None
+        od_dist_3 = pair_idx_3 = link_idx_3 = None
+        if THETA is not None:
+            print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
+            THETA = None
+
     # Node weight vector in the same order as node_ids_arr
     w_pop = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
     w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
@@ -101,7 +122,10 @@ if os.path.exists(PATHS_CACHE):
 
     N_links      = len(link_u)
     raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                                  W_BIZ, P, ALPHA, w_pop, w_biz)
+                                  W_BIZ, P, ALPHA, w_pop, w_biz,
+                                  THETA=THETA,
+                                  od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
+                                  od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
 
     link_flow = {
         (int(link_u[k]), int(link_v[k])): raw_flow_arr[k]

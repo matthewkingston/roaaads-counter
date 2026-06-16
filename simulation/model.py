@@ -35,19 +35,51 @@ LINK_AADT    = "data/link_aadt.json"
 # ── Gravity kernel ────────────────────────────────────────────────────────────
 
 def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                   W_BIZ, P, ALPHA, w_pop, w_biz):
+                   W_BIZ, P, ALPHA, w_pop, w_biz,
+                   THETA=None,
+                   od_dist_2=None, pair_idx_2=None, link_idx_2=None,
+                   od_dist_3=None, pair_idx_3=None, link_idx_3=None):
     """
-    Rational kernel all-or-nothing assignment.
+    Rational kernel assignment.
 
     Kernel: f(d) = (ALPHA+1)*u / (ALPHA + u^(ALPHA+1))  where u = d/P.
     Peak at d=P with f(P)=1; tail ~ 1/d^ALPHA.
 
+    When THETA is None or k=2/k=3 arrays absent: all-or-nothing on k=1 path.
+    When THETA is given with k=2/k=3 arrays: logit spread across 3 paths.
+      share(r) ∝ exp(−THETA · d_r / P); THETA→∞ collapses to all-or-nothing.
+
     Returns pre-K raw link flow array (length N_links).
     """
     w_vec = w_pop + W_BIZ * w_biz
-    u     = od_dist / P
-    t_ij  = w_vec[od_src] * w_vec[od_dst] * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
-    return np.bincount(link_idx, weights=t_ij[pair_idx], minlength=N_links)
+    _has_stoch = (THETA is not None and od_dist_2 is not None)
+
+    if not _has_stoch:
+        u    = od_dist / P
+        t_ij = w_vec[od_src] * w_vec[od_dst] * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
+        return np.bincount(link_idx, weights=t_ij[pair_idx], minlength=N_links)
+
+    # Stochastic: logit shares over 3 paths, then scatter each
+    t_ij = w_vec[od_src] * w_vec[od_dst]  # pre-kernel OD demand (N_OD,)
+
+    # Logit shares: shape (N_OD, 3) — numerically stable via subtracting row max
+    d_mat  = np.stack([od_dist, od_dist_2, od_dist_3], axis=1)
+    log_w  = -THETA * d_mat / P
+    log_w -= log_w.max(axis=1, keepdims=True)
+    shares = np.exp(log_w)
+    shares /= shares.sum(axis=1, keepdims=True)
+
+    flow = np.zeros(N_links, dtype=np.float64)
+    for r, (pidx, lidx, d_r) in enumerate([
+        (pair_idx,   link_idx,   od_dist),
+        (pair_idx_2, link_idx_2, od_dist_2),
+        (pair_idx_3, link_idx_3, od_dist_3),
+    ]):
+        u_r  = d_r / P
+        f_r  = (ALPHA + 1) * u_r / (ALPHA + u_r ** (ALPHA + 1))
+        w_r  = t_ij * shares[:, r] * f_r      # per-OD effective weight
+        flow += np.bincount(lidx, weights=w_r[pidx], minlength=N_links)
+    return flow
 
 # ── Flow extraction ───────────────────────────────────────────────────────────
 
