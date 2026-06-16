@@ -110,16 +110,25 @@ if _has_stoch:
     _od_dist_3  = cache["od_dist_3"].astype(np.float64)
     _pair_idx_3 = cache["pair_idx_3"]
     _link_idx_3 = cache["link_idx_3"]
-    # Precompute log(d) for all 3 paths so each eval avoids 3×N_entries log calls.
-    # The kernel u^(ALPHA+1) = exp((ALPHA+1)*(log_d - log_P)); log_d is fixed,
-    # log_P = log(P) is a cheap scalar per eval.
-    _log_od_dist   = np.log(od_dist).astype(np.float32)
-    _log_od_dist_2 = np.log(_od_dist_2).astype(np.float32)
-    _log_od_dist_3 = np.log(_od_dist_3).astype(np.float32)
-    # float32 distance copies for logit shares (halves memory bandwidth)
+    # Per-OD-pair float32 distances and precomputed log(d) for the gravity kernel.
+    # u^(ALPHA+1) = exp((ALPHA+1)*(log_d - log_P)); log_d fixed, log_P cheap scalar.
     _od_dist_f32   = od_dist.astype(np.float32)
     _od_dist_2_f32 = _od_dist_2.astype(np.float32)
     _od_dist_3_f32 = _od_dist_3.astype(np.float32)
+    _log_od_dist   = np.log(od_dist).astype(np.float32)
+    _log_od_dist_2 = np.log(_od_dist_2).astype(np.float32)
+    _log_od_dist_3 = np.log(_od_dist_3).astype(np.float32)
+    # Precompute CSR sparse link-pair matrices (one per path).
+    # SpMV `A_r @ w_r` (N_links × N_OD) × (N_OD,) replaces the
+    # gather+bincount scatter, cutting per-eval scatter cost ~9×.
+    from scipy.sparse import csr_matrix as _csr_build
+    print("  Building sparse link-pair matrices …", end=" ", flush=True)
+    _t_csr = time.time()
+    _N_OD = len(od_src)
+    _A1 = _csr_build((np.ones(len(pair_idx),    np.float32), (link_idx_arr, pair_idx)),    shape=(N_links, _N_OD))
+    _A2 = _csr_build((np.ones(len(_pair_idx_2), np.float32), (_link_idx_2,  _pair_idx_2)), shape=(N_links, _N_OD))
+    _A3 = _csr_build((np.ones(len(_pair_idx_3), np.float32), (_link_idx_3,  _pair_idx_3)), shape=(N_links, _N_OD))
+    print(f"done ({time.time()-_t_csr:.1f}s)")
 else:
     _od_dist_2 = _pair_idx_2 = _link_idx_2 = None
     _od_dist_3 = _pair_idx_3 = _link_idx_3 = None
@@ -451,37 +460,36 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
         return flow
 
     # Stochastic logit: exact scatter over 3 paths.
-    # Uses float32 throughout + precomputed log(d) to avoid 3×N_entries log
-    # calls per eval (the dominant cost at ~20M entries per path).
+    # All per-OD-pair (820K) arrays use float32.
+    # Scatter via prebuilt CSR SpMV (~38ms × 3) rather than gather+bincount
+    # (~102+350ms × 3), for ~9× scatter speedup.
     w_vec = (w_pop + W_BIZ * w_biz).astype(np.float32)
-    t_ij  = w_vec[od_src] * w_vec[od_dst]  # float32
+    t_ij  = w_vec[od_src] * w_vec[od_dst]  # float32, N_OD
 
     # Logit shares (float32, stable via row-wise max subtraction)
-    theta_over_p = np.float32(-THETA / P)
     d_mat  = np.stack([_od_dist_f32, _od_dist_2_f32, _od_dist_3_f32], axis=1)
-    log_w  = theta_over_p * d_mat
+    log_w  = np.float32(-THETA / P) * d_mat
     log_w -= log_w.max(axis=1, keepdims=True)
     shares = np.exp(log_w)
-    shares /= shares.sum(axis=1, keepdims=True)
+    shares /= shares.sum(axis=1, keepdims=True)  # float32, (N_OD, 3)
 
-    # Kernel: u^(ALPHA+1) via precomputed log(d); saves log() call per eval
-    log_P    = np.float32(math.log(P))
-    alpha1   = np.float32(ALPHA + 1)
-    alpha_f  = np.float32(ALPHA)
+    # Kernel via precomputed log(d): avoids log() call per eval
+    log_P   = np.float32(math.log(P))
+    alpha1  = np.float32(ALPHA + 1)
+    alpha_f = np.float32(ALPHA)
 
     flow = np.zeros(N_links, dtype=np.float64)
-    for r, (pidx, lidx, d_f32, log_d) in enumerate([
-        (pair_idx,    link_idx_arr, _od_dist_f32,   _log_od_dist),
-        (_pair_idx_2, _link_idx_2,  _od_dist_2_f32, _log_od_dist_2),
-        (_pair_idx_3, _link_idx_3,  _od_dist_3_f32, _log_od_dist_3),
+    for r, (A_r, d_f32, log_d) in enumerate([
+        (_A1, _od_dist_f32,   _log_od_dist),
+        (_A2, _od_dist_2_f32, _log_od_dist_2),
+        (_A3, _od_dist_3_f32, _log_od_dist_3),
     ]):
-        log_u = log_d - log_P                        # no log() — uses precomputed
-        u_pow = np.exp(alpha1 * log_u)               # one exp instead of log+exp
+        log_u = log_d - log_P
+        u_pow = np.exp(alpha1 * log_u)
         u_r   = d_f32 * np.float32(1.0 / P)
-        f_r   = alpha1 * u_r / (alpha_f + u_pow)     # float32
-        w_r   = t_ij * shares[:, r] * f_r            # float32
-        flow += np.bincount(lidx, weights=w_r[pidx].astype(np.float64),
-                            minlength=N_links)
+        f_r   = alpha1 * u_r / (alpha_f + u_pow)   # float32, N_OD
+        w_r   = t_ij * shares[:, r] * f_r           # float32, N_OD
+        flow += A_r @ w_r                            # SpMV: (N_links, N_OD) × (N_OD,)
     return flow
 
 
