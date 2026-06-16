@@ -146,8 +146,8 @@ else:
 
     print("Loading consolidated graph …")
     G = ox.load_graphml(CONS_GRAPH)
-    G = ox.speed.add_edge_speeds(G)
-    G = ox.speed.add_edge_travel_times(G)
+    G = ox.routing.add_edge_speeds(G)
+    G = ox.routing.add_edge_travel_times(G)
     node_ids = list(G.nodes())
     print(f"  {len(node_ids)} nodes  {G.number_of_edges()} edges")
 

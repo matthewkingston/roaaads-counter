@@ -15,13 +15,13 @@ committing. This file is the authoritative record of model state.
 ```
 python3 simulation/build_network.py          # build road network from OSM
 python3 simulation/build_demographics.py     # node weights + map scaffold
-python3 simulation/build_paths.py            # precompute all-pairs shortest paths (~10 min)
+python3 simulation/build_paths.py            # precompute k=3 shortest paths (~30 min)
 
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
 python3 analysis/aggregate_counts.py         # combine per-session AADT → link_aadt.json
 
-python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (3 params, ~5 s)
-python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (23 params, ~1-2 min)
+python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (4 params incl. THETA, ~30 s)
+python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (24 params, ~2-3 min)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 
 python3 simulation/build_assignment.py       # apply tuned params, write flows
@@ -171,10 +171,18 @@ Belfast Road `20→18` zero-count obs gives z=−2.80 (obs=628, model=2,277) —
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
-`through_route_pairs` changes. The cache previously lacked all through-routes despite the
-whitelist being correct — the cache predated the through-route feature. This caused the
-LowerArds pop to blow up to +514% as the tuner compensated for missing through-traffic.
-After rebuilding (2026-06-15) LowerArds settled at +92%.
+`through_route_pairs` changes or whenever stochastic routing (THETA) is to be used.
+
+**Stochastic routing requires a fresh cache rebuild.** The cache from 2026-06-15 contains
+only k=1 paths — it predates the k=3 alternative path feature. Until `build_paths.py` is
+re-run, `_has_stoch = False` and THETA is not included in the parameter space; tuning
+proceeds as all-or-nothing. After rebuilding, the cache will contain `pair_idx_2`/`pair_idx_3`
+keys and THETA becomes a 4th gravity parameter automatically.
+
+The cache previously lacked all through-routes despite the whitelist being correct — the
+cache predated the through-route feature. This caused the LowerArds pop to blow up to
++514% as the tuner compensated for missing through-traffic. After rebuilding (2026-06-15)
+LowerArds settled at +92%.
 
 ### Known model behaviour
 - `W_BIZ` consistently converges to ~0: business demand adds no marginal fit

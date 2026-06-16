@@ -60,8 +60,8 @@ HIGHWAY_COST_FACTOR = {
 
 print("Loading graph …")
 G = ox.load_graphml(CONS_GRAPH)
-G = ox.speed.add_edge_speeds(G)
-G = ox.speed.add_edge_travel_times(G)
+G = ox.routing.add_edge_speeds(G)
+G = ox.routing.add_edge_travel_times(G)
 node_ids = list(G.nodes())
 n = len(node_ids)
 node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
