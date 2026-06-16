@@ -213,18 +213,21 @@ LowerArds settled at +92%.
 
 ## External Zone Reference Values (`tuner_config.json`)
 
-Updated after 2026-06-15 full tuning run (χ²/N=0.895). Always update these
-after a full tuning run to keep regularization centred on the current best estimate.
+**These values must not be changed without explicit user approval.** After a full tuning run,
+updating them is something to *consider and discuss*, not an automatic step — the refs anchor
+L2 regularization and changing them shifts the penalty basin for all future runs.
+
+Last updated: 2026-06-16 full tuning run (χ²/N=1.2546, 258 obs, stochastic k=3).
 
 | City | Nodes | ref_pop | ref_wp | Tunable dampings |
 |------|-------|---------|--------|-----------------|
-| Donaghadee | 47 | 66,000 | 7,000 | — |
-| Comber | 65, 617, 618, 620 | 15,000 | 3,000 | 617 (×0.52), 618 (×0.52), 620 (×0.40) |
-| LowerArds | 92 | 51,000 | 5,000 | — |
-| Belfast | 97, 119 | 234,000 | 180,000 | 119 (×0.46) |
-| Bangor | 98, 731 | 36,000 | 20,000 | 98 (×0.32) |
-| Holywood | 99 | 3,600 | 1,200 | — |
-| Millisle | 748, 749 | 3,000 | 500 | 749 (×0.5) |
+| Donaghadee | 47 | 190,201 | 7,018 | — |
+| Comber | 65, 617, 618, 620 | 53,571 | 2,996 | 617 (×0.38), 618 (×0.35), 620 (×0.43) |
+| LowerArds | 92 | 84,500 | 5,024 | — |
+| Belfast | 97, 119 | 1,034,719 | 183,661 | 119 (×0.31) |
+| Bangor | 98, 731 | 95,426 | 21,246 | 98 (×0.39) |
+| Holywood | 99 | 3,652 | 1,203 | — |
+| Millisle | 748, 749 | 2,570 | 498 | 749 (×0.47) |
 
 ---
 
