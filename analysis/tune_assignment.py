@@ -30,22 +30,16 @@ from datetime import datetime, timezone
 import numpy as np
 import scipy.optimize
 
+sys.path.insert(0, "simulation")
+from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
+                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
+                   gravity_assign, print_chi2_table)
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-PATHS_CACHE  = "simulation/newtownards_paths.npz"
-WEIGHTS_FILE = "simulation/node_weights.json"
-TUNER_CONFIG = "simulation/tuner_config.json"
 CONS_GRAPH   = "simulation/newtownards_consolidated.graphml"
-LINK_AADT    = "data/link_aadt.json"
-TUNED_PARAMS = "simulation/tuned_params.json"
 HISTORY_FILE = "simulation/tuning_history.jsonl"
 CURVE_PNG    = "simulation/gravity_model_curve.png"
-
-COUNT_SITES = [
-    {"label": "site 507, A21 Bangor Road",     "node": 731, "links": [(731,730),(730,731)], "observed": 21_202},
-    {"label": "site 508, A48 Donaghadee Road", "node":  47, "links": None,                  "observed": 10_792},
-    {"label": "site 444, A20 Portaferry Road", "node":  92, "links": None,                  "observed":  7_282},
-]
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -204,12 +198,6 @@ for _arr_i, _nid in ext_indices:
 
 # ── Build observation list ────────────────────────────────────────────────────
 
-# Links excluded from calibration (retained in link_aadt.json but not used as
-# tuning observations). Directed: (u, v) only excludes that direction.
-EXCLUDE_LINKS = {
-    (161, 160),  # too-short count, likely distorted by traffic light timing
-}
-
 observations     = []
 obs_time_slots   = []
 obs_frac_rel_std = []
@@ -293,12 +281,8 @@ for kind, target, links, *_ in observations:
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
 def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz):
-    # Rational kernel: f(d) = (ALPHA+1)*u / (ALPHA + u^(ALPHA+1))  where u = d/P
-    # Peak at d=P with f(P)=1; tail ~ (ALPHA+1)*P^ALPHA / d^ALPHA.
-    w_vec = w_pop + W_BIZ * w_biz
-    u     = od_dist / P
-    t_ij  = w_vec[od_src] * w_vec[od_dst] * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
-    return np.bincount(link_idx_arr, weights=t_ij[pair_idx], minlength=N_links)
+    return gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx_arr, N_links,
+                          W_BIZ, P, ALPHA, w_pop, w_biz)
 
 
 def model_obs(raw_flow):
@@ -556,19 +540,7 @@ for i_obs, (kind, target, links, obs, sig) in enumerate(observations):
     fit_rows.append((kind, lbl, obs, sig, mod, z))
 
 fit_rows.sort(key=lambda r: abs(r[5]), reverse=True)
-
-LABEL_W = 52
-print(f"\n  {'':1s}  {'Src':<8}  {'Label':<{LABEL_W}}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}")
-for kind, lbl, obs, sig, mod, z in fit_rows:
-    marker = "*" if abs(z) > 2 else " "
-    print(f"  {marker} {kind:<8}  {lbl:<{LABEL_W}}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}")
-
-abs_z      = [abs(r[5]) for r in fit_rows]
-mean_abs_z = sum(abs_z) / len(abs_z)
-n_out2     = sum(1 for a in abs_z if a > 2)
-n_out3     = sum(1 for a in abs_z if a > 3)
-print(f"\n  n={len(fit_rows)}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_abs_z:.2f}"
-      f"  |z|>2: {n_out2}  |z|>3: {n_out3}")
+print_chi2_table(fit_rows, chi2, len(fit_rows))
 
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 

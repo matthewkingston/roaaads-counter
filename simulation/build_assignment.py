@@ -16,16 +16,20 @@ flows on the map.
 Usage:
   python3 simulation/build_assignment.py
 
-Tunable parameters: K, W_BIZ, P, ALPHA, COUNT_SITES (see Config section).
+Tunable parameters: K, W_BIZ, P, ALPHA (see Config section).
+Chi²/N uses per-session observations (same data as tuner). No Woodbury correction
+is applied, so the value will be slightly higher than the tuner's figure.
 """
 
 import json, math, time, os
 import numpy as np
 import osmnx as ox
 from collections import defaultdict
+from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
+                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
+                   gravity_assign, site_flow, compute_chi2, print_chi2_table)
 
-# ── Config ──────────────────────────────────────────────────────────────────────
-
+# ── Config ────────────────────────────────────────────────────────────────────
 
 K      = 1.73   # global flow scale factor
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
@@ -33,23 +37,10 @@ P      = 300.0  # peak travel time (seconds); flow peaks at d = P
 ALPHA  = 2.0    # tail decay exponent; flow ~ 1/d^ALPHA for large d
 OFFSCREEN_SPEED_MS = 80_000 / 3600   # 80 km/h — assumed speed for off-network boundary legs
 
-# Traffic count sites used in goodness_of_fit().
-# links: list of directed (u,v) pairs to sum for AADT; None → use cordon_flow(node).
-# Bangor Road is a dual carriageway so we sum the two named directed links explicitly.
-COUNT_SITES = [
-    {"label": "site 507, A21 Bangor Road",    "node": 731, "links": [(731, 730), (730, 731)], "observed": 21_202},
-    {"label": "site 508, A48 Donaghadee Road","node":  47, "links": None,                     "observed": 10_792},
-    {"label": "site 444, A20 Portaferry Road","node":  92, "links": None,                     "observed":  7_282},
-]
+OUT_DIR    = "simulation"
+CONS_GRAPH = "simulation/newtownards_consolidated.graphml"
 
-OUT_DIR        = "simulation"
-WEIGHTS_FILE   = "simulation/node_weights.json"
-TUNER_CONFIG   = "simulation/tuner_config.json"
-CONS_GRAPH     = "simulation/newtownards_consolidated.graphml"
-PATHS_CACHE    = "simulation/newtownards_paths.npz"
-LINK_AADT_FILE = "data/link_aadt.json"
-
-# ── Load node weights ────────────────────────────────────────────────────────────
+# ── Load node weights ─────────────────────────────────────────────────────────
 
 print("Loading node weights …")
 with open(WEIGHTS_FILE) as f:
@@ -70,7 +61,6 @@ for _city_a, _city_b in _tuner_cfg.get("through_route_pairs", []):
             allowed_through_pairs.add((_na, _nb))
             allowed_through_pairs.add((_nb, _na))
 
-TUNED_PARAMS = "simulation/tuned_params.json"
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         _tp = json.load(f)
@@ -84,12 +74,12 @@ if os.path.exists(TUNED_PARAMS):
         node_business_demand[int(_nid)] = _val
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}]")
 
-# ── Assignment ───────────────────────────────────────────────────────────────────
+# ── Assignment ────────────────────────────────────────────────────────────────
 
 link_flow = {}   # (u, v) → raw (pre-K) flow
 
 if os.path.exists(PATHS_CACHE):
-    # ── Fast path: vectorised numpy using precomputed paths ──────────────────────
+    # ── Fast path: vectorised numpy using precomputed paths ───────────────────
     print(f"Loading paths cache ({PATHS_CACHE}) …")
     t0 = time.time()
     cache = np.load(PATHS_CACHE)
@@ -104,21 +94,14 @@ if os.path.exists(PATHS_CACHE):
     link_v       = cache["link_v"]            # int32 (L,)
 
     # Node weight vector in the same order as node_ids_arr
-    w_vec = np.array([
-        node_population.get(int(nid), 0) + W_BIZ * node_business_demand.get(int(nid), 0)
-        for nid in node_ids_arr
-    ], dtype=np.float64)
-
-    total_weight = w_vec.sum()
+    w_pop = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
+    w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
+    total_weight = (w_pop + W_BIZ * w_biz).sum()
     print(f"  {len(node_ids_arr)} nodes  total weight {total_weight:,.0f}  (W_BIZ={W_BIZ})")
 
-    # Gravity flow for every OD pair — rational kernel: peak at d=P, tail ~ 1/d^ALPHA
-    u    = od_dist / P
-    t_ij = w_vec[od_src] * w_vec[od_dst] * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
-
-    # Accumulate onto links
-    N_links = len(link_u)
-    raw_flow_arr = np.bincount(link_idx, weights=t_ij[pair_idx], minlength=N_links)
+    N_links      = len(link_u)
+    raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
+                                  W_BIZ, P, ALPHA, w_pop, w_biz)
 
     link_flow = {
         (int(link_u[k]), int(link_v[k])): raw_flow_arr[k]
@@ -126,13 +109,14 @@ if os.path.exists(PATHS_CACHE):
     }
     print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
 
-    # Reconstruct node_ids list (needed for map / boundary markers)
-    node_ids  = [int(nid) for nid in node_ids_arr]
-    G = ox.load_graphml(CONS_GRAPH)
-    node_weight = {int(nid): float(w) for nid, w in zip(node_ids_arr, w_vec)}
+    # Reconstruct node_ids list and weights (needed for map / boundary markers)
+    node_ids    = [int(nid) for nid in node_ids_arr]
+    G           = ox.load_graphml(CONS_GRAPH)
+    node_weight = {int(nid): float(wp + W_BIZ * wb)
+                   for nid, wp, wb in zip(node_ids_arr, w_pop, w_biz)}
 
 else:
-    # ── Slow fallback: per-source NetworkX Dijkstra (~10s) ──────────────────────
+    # ── Slow fallback: per-source NetworkX Dijkstra (~10s) ────────────────────
     print("WARNING: paths cache not found — run build_paths.py for faster iterations")
     import networkx as nx
 
@@ -188,8 +172,8 @@ else:
                     + boundary_offscreen.get(source, 0))
             if dist < 1.0:
                 continue
-            u    = dist / P
-            t_ij = w_i * w_j * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
+            _u   = dist / P
+            t_ij = w_i * w_j * (ALPHA + 1) * _u / (ALPHA + _u ** (ALPHA + 1))
             for u, v in zip(path[:-1], path[1:]):
                 lf[(u, v)] += t_ij
         if (idx + 1) % 100 == 0:
@@ -198,7 +182,7 @@ else:
     link_flow = dict(lf)
     print(f"  Assignment complete in {time.time()-t0:.1f}s  ({len(link_flow)} loaded links)")
 
-# ── Street name lookup (from already-loaded graph) ───────────────────────────────
+# ── Street name lookup (from already-loaded graph) ────────────────────────────
 
 _link_name = {(int(u), int(v)): d["name"]
               for u, v, d in G.edges(data=True) if d.get("name")}
@@ -208,72 +192,21 @@ def _link_label(u, v):
     name = _link_name.get((u, v), "")
     return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
-# ── Calibration ──────────────────────────────────────────────────────────────────
-
-def cordon_flow(node):
-    return sum(f for (u, v), f in link_flow.items() if u == node or v == node)
-
-def site_raw_flow(site):
-    if site["links"]:
-        return sum(link_flow.get(lnk, 0) for lnk in site["links"])
-    return cordon_flow(site["node"])
-
-def goodness_of_fit():
-    """Chi-squared goodness of fit against all count data, sorted by |z|."""
-    rows = []
-    chi2 = 0.0
-
-    for s in COUNT_SITES:
-        mod = site_raw_flow(s)
-        obs = s["observed"]
-        sig = 0.10 * obs
-        z   = (mod - obs) / sig
-        chi2 += z * z
-        rows.append(("official", s["label"], obs, sig, mod, z))
-
-    if os.path.exists(LINK_AADT_FILE):
-        with open(LINK_AADT_FILE) as f:
-            link_aadt = json.load(f)["links"]
-        for key, entry in sorted(link_aadt.items()):
-            u, v = map(int, key.split(","))
-            mod  = link_flow.get((u, v), 0.0)
-            obs  = entry["aadt"]
-            sig  = entry["aadt_uncertainty"]
-            z    = (mod - obs) / sig
-            chi2 += z * z
-            rows.append(("walking", _link_label(u, v), obs, sig, mod, z))
-
-    rows.sort(key=lambda r: abs(r[5]), reverse=True)
-    n = len(rows)
-    chi2_per_n = chi2 / n
-
-    LABEL_W = 52
-    print(f"\nGoodness of fit  χ²={chi2:.2f}  n={n}  χ²/N={chi2_per_n:.4f}")
-    print(f"  {'':1s}  {'Src':<8}  {'Label':<{LABEL_W}}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}")
-    for kind, lbl, obs, sig, mod, z in rows:
-        marker = "*" if abs(z) > 2 else " "
-        print(f"  {marker} {kind:<8}  {lbl:<{LABEL_W}}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}")
-
-    abs_z      = [abs(r[5]) for r in rows]
-    mean_abs_z = sum(abs_z) / len(abs_z)
-    n_out2     = sum(1 for a in abs_z if a > 2)
-    n_out3     = sum(1 for a in abs_z if a > 3)
-    print(f"\n  n={n}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_abs_z:.2f}"
-          f"  |z|>2: {n_out2}  |z|>3: {n_out3}")
-    return chi2, n
-
+# ── Scale by K and report ─────────────────────────────────────────────────────
 
 link_flow = {k: v * K for k, v in link_flow.items()}
 
-raw_flows = [site_raw_flow(s) for s in COUNT_SITES]
 print(f"\nOfficial count sites  (K = {K})")
 print(f"  {'Site':<45s}  {'Modelled':>9s}  {'Observed':>9s}  {'Ratio':>6s}")
-for f, s in zip(raw_flows, COUNT_SITES):
+for s in COUNT_SITES:
+    f = site_flow(link_flow, s)
     print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
-goodness_of_fit()
+rows, chi2, n = compute_chi2(link_flow, label_fn=_link_label,
+                             link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS)
+print_chi2_table(rows, chi2, n)
 
-# ── Serialise flows ───────────────────────────────────────────────────────────────
+# ── Serialise flows ───────────────────────────────────────────────────────────
 
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
 with open(flows_path, "w") as f:
