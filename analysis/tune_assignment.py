@@ -540,7 +540,7 @@ for i_obs, (kind, target, links, obs, sig) in enumerate(observations):
     fit_rows.append((kind, lbl, obs, sig, mod, z))
 
 fit_rows.sort(key=lambda r: abs(r[5]), reverse=True)
-print_chi2_table(fit_rows, chi2, len(fit_rows))
+print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 

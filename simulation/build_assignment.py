@@ -202,9 +202,9 @@ for s in COUNT_SITES:
     f = site_flow(link_flow, s)
     print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
-rows, chi2, n = compute_chi2(link_flow, label_fn=_link_label,
-                             link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS)
-print_chi2_table(rows, chi2, n)
+rows, chi2, n_obs, n_eff = compute_chi2(link_flow, label_fn=_link_label,
+                                        link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS)
+print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
 # ── Serialise flows ───────────────────────────────────────────────────────────
 

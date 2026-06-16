@@ -63,28 +63,28 @@ def site_flow(link_flow_dict, site):
 def compute_chi2(link_flow_dict, label_fn=None,
                  link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS):
     """
-    Compute chi²/N using per-session walking count observations.
+    Compute chi²/N using per-session walking count observations with Woodbury correction.
 
-    Uses the same observation data as tune_assignment.py. No Woodbury
-    correction is applied, so the returned chi²/N will be slightly higher
-    than the tuner's Woodbury-corrected value.
+    Walking observations in the same (weekday, hour) time slot share a correlated
+    fractional AADT uncertainty (same hourly-fraction draw). The Woodbury rank-1
+    correction removes this double-counting, matching the tuner's objective exactly.
 
-    label_fn: optional callable(u, v) -> str for road-name labels on walking
-              rows. Defaults to "u→v" if None.
-
-    Returns (rows, chi2, n) where rows are sorted by |z| descending.
-    Each row: (kind, label, obs, sig, mod, z).
+    label_fn: optional callable(u, v) -> str for road-name labels.
+    Returns (rows, chi2, n_obs, n_eff).
+      rows: list of (kind, label, obs, sig, mod, z) sorted by |z| descending.
+      chi2: Woodbury-corrected chi² sum.
+      n_obs: total observation count.
+      n_eff: effective df = n_obs - n_slots (one df lost per correlated slot).
     """
-    rows = []
-    chi2 = 0.0
+    # ── Build raw observation list ────────────────────────────────────────────
+    # Each entry: (kind, label, mod, obs, sigma, time_slot_key, frac_rel_std)
+    obs_data = []
 
     for s in COUNT_SITES:
-        mod = site_flow(link_flow_dict, s)
-        obs = float(s["observed"])
-        sig = 0.10 * obs
-        z   = (mod - obs) / sig
-        chi2 += z * z
-        rows.append(("official", s["label"], obs, sig, mod, z))
+        obs_data.append(("official", s["label"],
+                         site_flow(link_flow_dict, s),
+                         float(s["observed"]), 0.10 * s["observed"],
+                         None, None))
 
     if link_aadt_file and os.path.exists(link_aadt_file):
         with open(link_aadt_file) as f:
@@ -96,30 +96,64 @@ def compute_chi2(link_flow_dict, label_fn=None,
                 continue
             lbl = label_fn(u, v) if label_fn else f"{u}→{v}"
             mod = link_flow_dict.get((u, v), 0.0)
-            for sess_obs in entry.get("observations", []):
-                obs = float(sess_obs["aadt"])
-                sig = float(sess_obs["aadt_uncertainty"])
-                z   = (mod - obs) / sig
-                chi2 += z * z
-                rows.append(("walking", lbl, obs, sig, mod, z))
+            for sess in entry.get("observations", []):
+                ts  = sess.get("time_slot")
+                frs = sess.get("frac_rel_std")
+                obs_data.append(("walking", lbl, mod,
+                                 float(sess["aadt"]), float(sess["aadt_uncertainty"]),
+                                 tuple(ts) if ts is not None else None,
+                                 float(frs) if frs is not None else None))
 
-    rows.sort(key=lambda r: abs(r[5]), reverse=True)
-    return rows, chi2, len(rows)
+    n_obs = len(obs_data)
+
+    # ── Woodbury decomposition ────────────────────────────────────────────────
+    sigma_f = np.array([
+        (d[3] * d[6]) if d[6] is not None else 0.0   # obs * frac_rel_std
+        for d in obs_data
+    ])
+    sigma_sq   = np.array([d[4] ** 2 for d in obs_data])
+    sigma_c_sq = np.maximum(sigma_sq - sigma_f ** 2, (np.sqrt(sigma_sq) * 1e-6) ** 2)
+    r          = np.array([d[2] - d[3] for d in obs_data])  # mod - obs
+
+    slot_groups = {}
+    for i, d in enumerate(obs_data):
+        if d[5] is not None:
+            slot_groups.setdefault(d[5], []).append(i)
+    slot_list = list(slot_groups.items())
+    n_slots   = len(slot_list)
+    n_eff     = n_obs - n_slots
+
+    unslotted = [i for i, d in enumerate(obs_data) if d[5] is None]
+
+    chi2 = float(sum((r[i] / obs_data[i][4]) ** 2 for i in unslotted))
+    for ts, idxs in slot_list:
+        denom = 1.0 + sum(sigma_f[i] ** 2 / sigma_c_sq[i] for i in idxs)
+        uf_r  = sum(sigma_f[i] * r[i] / sigma_c_sq[i] for i in idxs)
+        chi2 += float(sum(r[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_r ** 2 / denom)
+
+    # ── Build display rows (z uses total sigma, same as tuner's fit table) ────
+    rows = [
+        (d[0], d[1], d[3], d[4], d[2], float(r[i] / d[4]))
+        for i, d in enumerate(obs_data)
+    ]
+    rows.sort(key=lambda row: abs(row[5]), reverse=True)
+    return rows, chi2, n_obs, n_eff
 
 
-def print_chi2_table(rows, chi2, n, header="Goodness of fit"):
+def print_chi2_table(rows, chi2, n_obs, n_eff=None, header="Goodness of fit"):
     """Print the standard chi²/N table. Returns chi²/N."""
-    chi2_per_n = chi2 / n if n else 0.0
+    chi2_per_n = chi2 / n_obs if n_obs else 0.0
+    n_eff_str  = f"  χ²/N_eff={chi2 / n_eff:.4f}  N_eff={n_eff}" if n_eff else ""
     LABEL_W = 52
-    print(f"\n{header}  χ²={chi2:.2f}  n={n}  χ²/N={chi2_per_n:.4f}")
+    print(f"\n{header}  χ²={chi2:.2f}  n={n_obs}  χ²/N={chi2_per_n:.4f}{n_eff_str}")
     print(f"  {'':1s}  {'Src':<8}  {'Label':<{LABEL_W}}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}")
     for kind, lbl, obs, sig, mod, z in rows:
         marker = "*" if abs(z) > 2 else " "
         print(f"  {marker} {kind:<8}  {lbl:<{LABEL_W}}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}")
-    abs_z  = [abs(r[5]) for r in rows]
+    abs_z  = [abs(row[5]) for row in rows]
     n_out2 = sum(1 for a in abs_z if a > 2)
     n_out3 = sum(1 for a in abs_z if a > 3)
     mean_z = sum(abs_z) / len(abs_z) if abs_z else 0.0
-    print(f"\n  n={n}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_z:.2f}"
+    print(f"\n  n={n_obs}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_z:.2f}"
           f"  |z|>2: {n_out2}  |z|>3: {n_out3}")
     return chi2_per_n
