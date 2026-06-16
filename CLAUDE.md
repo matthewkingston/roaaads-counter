@@ -46,7 +46,7 @@ refine rather than restart.
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ/THETA toward physically plausible values (prevents K-drift pathology). Default P=300 s sets the peak travel time; ALPHA=2 gives 1/d² tail decay; THETA=1.0 is the logit dispersion anchor. Edit to change external zone priors, allowed through routes, or gravity anchors. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. When the paths cache has k=3 alternative paths, Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); otherwise 3. `--full` adds 14 city pop/wp + 6 dampings. Uses per-session observations from `link_aadt.json`. Applies Woodbury correction for within-slot correlated uncertainty. **Performance:** all-or-nothing (THETA=None/old cache): ~0.12 ms/eval stage 1, ~5.5 ms stage 2 via precomputed bin-matmul path. Stochastic (THETA given + k=3 paths): ~20 ms/eval via exact 3-path scatter. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. When the paths cache has k=3 alternative paths, Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); otherwise 3. `--full` adds 14 city pop/wp + 6 dampings. Uses per-session observations from `link_aadt.json`. Applies Woodbury correction for within-slot correlated uncertainty. **Performance:** all-or-nothing (THETA=None/old cache): ~0.12 ms/eval stage 1, ~5.5 ms stage 2 via precomputed bin-matmul path. Stochastic (THETA given + k=3 paths): ~150 ms/eval via CSR SpMV scatter; ~1 min stage 1, ~8 min stage 2. Startup builds three sparse (N_links×N_OD) matrices (~0.6 s one-off). |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, THETA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
@@ -140,7 +140,7 @@ on the rank-1 covariance removes this double-counting without cost.
 - Site 508: A48 Donaghadee Road — 10,792 AADT
 - Site 444: A20 Portaferry Road — 7,282 AADT
 
-**Walking counts:** 5 CSV files, 130 sessions, 256 individual session-direction observations across 136 directed links, 15 time slots (N_eff=241). The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
+**Walking counts:** 5 CSV files, 130 sessions, 256 individual session-direction observations across 136 directed links, 15 time slots. Combined with 3 official sites: N=258 total tuner observations, N_eff=243 (15 slots). The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
 
 ---
 
@@ -207,7 +207,7 @@ LowerArds settled at +92%.
   in the same `(weekday, hour)` slot share the same NI-average hourly fraction, so their
   fractional AADT uncertainty is perfectly correlated. The correction is O(B_slot) per slot
   (negligible cost). `N_eff = N − N_slots` is the effective degrees of freedom after removing
-  one per slot. The 15 current slots yield N_eff=241 vs N=256.
+  one per slot. The 15 current slots yield N_eff=243 vs N=258 (255 walking + 3 official).
 
 ---
 
