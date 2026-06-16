@@ -1,8 +1,8 @@
 """
 Restore tuned_params.json from a specific entry in tuning_history.jsonl.
 
-For gravity-only history entries, only the 5 gravity params (K, W_BIZ, MU,
-SIGMA, ALPHA) are written; existing external zone entries in tuned_params.json
+For gravity-only history entries, only the 4 gravity params (K, W_BIZ, P,
+ALPHA) are written; existing external zone entries in tuned_params.json
 are left unchanged.  For full-stage entries, all tuned params are restored.
 
 Usage:
@@ -58,6 +58,12 @@ if len(matches) > 1:
 
 entry = matches[0]
 
+if entry["params"].get("kernel") != "rational":
+    print("WARNING: this history entry uses the old lognormal kernel (no 'kernel' key or "
+          "kernel != 'rational'). Restoring it will produce incorrect results with the "
+          "current rational-kernel pipeline. Aborting.")
+    sys.exit(1)
+
 # ── Restore ───────────────────────────────────────────────────────────────────
 
 existing = {}
@@ -67,7 +73,7 @@ if os.path.exists(TUNED_PARAMS):
 
 params = entry["params"]
 
-GRAVITY_KEYS = ("K", "W_BIZ", "MU", "SIGMA", "ALPHA")
+GRAVITY_KEYS = ("K", "W_BIZ", "P", "ALPHA")
 ALL_KEYS = list(params.keys())
 
 print(f"Restoring from run {entry['id']}  "

@@ -7,8 +7,8 @@ K is analytically calibrated at each evaluation (not in the optimizer):
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
-Stage 1 (--gravity, default): tune W_BIZ, MU, SIGMA, ALPHA (4 params).
-Stage 2 (--full): also tune city-level pop/wp and sub-1 dampings (27 params)
+Stage 1 (--gravity, default): tune W_BIZ, P, ALPHA (3 params).
+Stage 2 (--full): also tune city-level pop/wp and sub-1 dampings (26 params)
   with L2 regularisation relative to simulation/tuner_config.json references.
 
 Node 180 (pop=50, wp=0) is excluded from stage 2 — too small to tune.
@@ -106,7 +106,6 @@ N_links      = len(link_u)
 node_ids     = [int(nid) for nid in node_ids_arr]
 N_nodes      = len(node_ids)
 
-ln_od_dist = np.log(od_dist)
 link_index = {(int(link_u[k]), int(link_v[k])): k for k in range(N_links)}
 
 print(f"  {N_nodes} nodes  {N_links} links  {len(od_src):,} OD pairs")
@@ -161,10 +160,9 @@ city_list = list(config["cities"].items())
 grav_ref = config.get("gravity_ref", {})
 grav_lam = config.get("gravity_lambda", 0.0)
 log_grav_ref = np.array([
-    math.log(max(grav_ref.get("W_BIZ", 1.0), 1e-4)),
-    math.log(max(grav_ref.get("MU",    7.7),  1e-4)),
-    math.log(max(grav_ref.get("SIGMA", 1.0),  1e-4)),
-    math.log(max(grav_ref.get("ALPHA", 2.0),  1e-4)),
+    math.log(max(grav_ref.get("W_BIZ", 1.0),   1e-4)),
+    math.log(max(grav_ref.get("P",     300.0),  1e-4)),
+    math.log(max(grav_ref.get("ALPHA", 2.0),    1e-4)),
 ])
 
 # External nodes covered by tuner_config (node 180 excluded)
@@ -183,7 +181,7 @@ for city_name, city_cfg in city_list:
         if damp < 1.0:
             tunable_dampings.append((city_name, int(node_str), damp))
 
-n_gravity = 4
+n_gravity = 3
 n_city    = len(city_list) * 2
 n_damp    = len(tunable_dampings)
 n_ext     = n_city + n_damp  # external params in stage 2
@@ -294,11 +292,12 @@ for kind, target, links, *_ in observations:
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(W_BIZ, MU, SIGMA, ALPHA, w_pop, w_biz):
+def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz):
+    # Rational kernel: f(d) = (ALPHA+1)*u / (ALPHA + u^(ALPHA+1))  where u = d/P
+    # Peak at d=P with f(P)=1; tail ~ (ALPHA+1)*P^ALPHA / d^ALPHA.
     w_vec = w_pop + W_BIZ * w_biz
-    t_ij  = (w_vec[od_src] * w_vec[od_dst]
-             * np.exp(-0.5 * ((ln_od_dist - MU) / SIGMA) ** 2)
-             / od_dist ** ALPHA)
+    u     = od_dist / P
+    t_ij  = w_vec[od_src] * w_vec[od_dst] * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
     return np.bincount(link_idx_arr, weights=t_ij[pair_idx], minlength=N_links)
 
 
@@ -333,9 +332,8 @@ t0         = time.time()
 def objective(log_params, log_ref=None):
     log_params = np.clip(log_params, -100, 100)
     W_BIZ = math.exp(log_params[0])
-    MU    = math.exp(log_params[1])
-    SIGMA = math.exp(log_params[2])
-    ALPHA = math.exp(log_params[3])
+    P     = math.exp(log_params[1])
+    ALPHA = math.exp(log_params[2])
 
     if stage == "full":
         # Build per-node weight arrays from city-level params and dampings
@@ -380,7 +378,7 @@ def objective(log_params, log_ref=None):
         w_pop = base_w_pop
         w_biz = base_w_biz
 
-    raw_flow = run_assignment(W_BIZ, MU, SIGMA, ALPHA, w_pop, w_biz)
+    raw_flow = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz)
     m_arr    = model_obs(raw_flow)
     K        = calibrate_K(m_arr)
     r        = K * m_arr - obs_arr
@@ -412,11 +410,11 @@ def objective(log_params, log_ref=None):
 # ── Build initial parameter vector ────────────────────────────────────────────
 
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
-grav_start = {"W_BIZ": 1.0, "MU": 7.7, "SIGMA": 1.0, "ALPHA": 2.0}
+grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
-    for k in ("W_BIZ", "MU", "SIGMA", "ALPHA"):
+    for k in ("W_BIZ", "P", "ALPHA"):
         if k in tp:
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
@@ -425,8 +423,7 @@ if os.path.exists(TUNED_PARAMS):
 _LOG_MIN = 1e-4
 log_p0 = np.array([
     math.log(max(grav_start["W_BIZ"], _LOG_MIN)),
-    math.log(max(grav_start["MU"],    _LOG_MIN)),
-    math.log(max(grav_start["SIGMA"], _LOG_MIN)),
+    math.log(max(grav_start["P"],     _LOG_MIN)),
     math.log(max(grav_start["ALPHA"], _LOG_MIN)),
 ], dtype=np.float64)
 
@@ -471,9 +468,8 @@ log_best = best["log_params"]
 # ── Unpack best params ────────────────────────────────────────────────────────
 
 W_BIZ = math.exp(log_best[0])
-MU    = math.exp(log_best[1])
-SIGMA = math.exp(log_best[2])
-ALPHA = math.exp(log_best[3])
+P     = math.exp(log_best[1])
+ALPHA = math.exp(log_best[2])
 
 ext_pop_map  = {}
 ext_biz_map  = {}
@@ -511,7 +507,7 @@ for arr_i, nid in ext_indices:
         w_pop_f[arr_i] = ext_pop_map[nid]
         w_biz_f[arr_i] = ext_biz_map[nid]
 
-raw_flow  = run_assignment(W_BIZ, MU, SIGMA, ALPHA, w_pop_f, w_biz_f)
+raw_flow  = run_assignment(W_BIZ, P, ALPHA, w_pop_f, w_biz_f)
 m_arr     = model_obs(raw_flow)
 K         = calibrate_K(m_arr)
 r         = K * m_arr - obs_arr
@@ -525,7 +521,7 @@ resid      = r / sig_arr  # for fit table and history entry z-scores
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
-print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  MU={MU:.4f}  SIGMA={SIGMA:.4f}  ALPHA={ALPHA:.4f}")
+print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -577,11 +573,11 @@ print(f"\n  n={len(fit_rows)}  χ²/N={chi2_per_n:.4f}  mean|z|={mean_abs_z:.2f}
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 
 tuned = {
-    "K":     round(K, 6),
-    "W_BIZ": round(W_BIZ, 6),
-    "MU":    round(MU, 6),
-    "SIGMA": round(SIGMA, 6),
-    "ALPHA": round(ALPHA, 6),
+    "kernel": "rational",
+    "K":      round(K, 6),
+    "W_BIZ":  round(W_BIZ, 6),
+    "P":      round(P, 4),
+    "ALPHA":  round(ALPHA, 6),
     "external_node_pop": {str(k): round(v) for k, v in ext_pop_map.items()},
     "external_node_biz": {str(k): round(v) for k, v in ext_biz_map.items()},
     "chi2":       round(chi2, 3),
@@ -609,20 +605,21 @@ try:
 
     d_sec  = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
     d_min  = d_sec / 60.0
-    kernel = K * np.exp(-0.5 * ((np.log(d_sec) - MU) / SIGMA) ** 2) / d_sec ** ALPHA
+    u      = d_sec / P
+    kernel = K * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
 
-    d_peak_sec = math.exp(MU - ALPHA * SIGMA ** 2)
-    k_peak     = K * math.exp(-0.5 * ((math.log(d_peak_sec) - MU) / SIGMA) ** 2) / d_peak_sec ** ALPHA
+    d_peak_sec = P          # peak is exactly at d = P
+    k_peak     = K          # f(P) = 1, so kernel peak = K
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(d_min, kernel, linewidth=1.8)
     ax.axvline(d_peak_sec / 60.0, color="r", linestyle="--", alpha=0.7,
-               label=f"peak  {d_peak_sec/60.0:.1f} min  ({k_peak:.3e})")
+               label=f"peak  {d_peak_sec/60.0:.1f} min  (K={k_peak:.3e})")
     ax.set_xlabel("Travel time (minutes)")
-    ax.set_ylabel("K · exp(−½((ln d − μ)/σ)²) / d^α")
+    ax.set_ylabel("K · (ALPHA+1) · u / (ALPHA + u^(ALPHA+1))  where u = d/P")
     ax.set_title(
-        f"Gravity kernel  "
-        f"MU={MU:.3f}  SIGMA={SIGMA:.3f}  ALPHA={ALPHA:.3f}  K={K:.3e}\n"
+        f"Gravity kernel (rational)  "
+        f"P={P:.1f}s  ALPHA={ALPHA:.3f}  K={K:.3e}\n"
         f"stage={stage}  χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
     )
     ax.set_xscale("log")
@@ -639,11 +636,11 @@ except Exception as _e:
 # ── Append to tuning history ──────────────────────────────────────────────────
 
 params = {
-    "K":     round(K, 6),
-    "W_BIZ": round(W_BIZ, 6),
-    "MU":    round(MU, 6),
-    "SIGMA": round(SIGMA, 6),
-    "ALPHA": round(ALPHA, 6),
+    "kernel": "rational",
+    "K":      round(K, 6),
+    "W_BIZ":  round(W_BIZ, 6),
+    "P":      round(P, 4),
+    "ALPHA":  round(ALPHA, 6),
 }
 if stage == "full":
     params["external_node_pop"] = {str(k): round(v) for k, v in ext_pop_map.items()}

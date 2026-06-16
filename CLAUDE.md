@@ -42,12 +42,12 @@ refine rather than restart.
 | `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. |
 | `simulation/build_assignment.py` | Gravity model + all-or-nothing assignment. Loads `tuned_params.json` automatically if present. Prints χ²/N goodness-of-fit table. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise MU/SIGMA/ALPHA/W_BIZ toward physically plausible values (prevents K-drift pathology). Initial guess for MU calibrated so peak = exp(MU − ALPHA·SIGMA²) ≈ 300 s (5 min) at default ALPHA=2, SIGMA=1. Edit to change external zone priors, allowed through routes, or gravity anchors. |
+| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ toward physically plausible values (prevents K-drift pathology). Default P=300 s sets the peak travel time; ALPHA=2 gives 1/d² tail decay. Edit to change external zone priors, allowed through routes, or gravity anchors. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Output: `data/link_aadt.json`. |
 | `analysis/tune_assignment.py` | Powell's method parameter tuning. Stage 1 tunes 4 gravity params; `--full` adds 14 city pop/wp + 6 dampings = 24 params total. Uses individual per-session observations from `link_aadt.json` (not per-link aggregates). Applies Woodbury correction for within-slot correlated uncertainty. Saves best result to `simulation/tuned_params.json` and appends to `simulation/tuning_history.jsonl`. Each run gets a unique random 8-char hex `id`; use `--note "label"` for a human-readable annotation. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
-| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, MU, SIGMA, ALPHA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
+| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
 | `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
 
@@ -73,7 +73,13 @@ further data from this file is needed) and `data/census-2021-apwp001.xlsx`.
 ## Model Design
 
 ### Gravity model
-OD flow: `T_ij = w_i × w_j × exp(-0.5 × ((ln(d_ij) - MU) / SIGMA)²) / d_ij^ALPHA`
+OD flow: `T_ij = K × w_i × w_j × f(d_ij)`
+
+Rational kernel: `f(d) = (ALPHA+1) × P^ALPHA × d / (ALPHA × P^(ALPHA+1) + d^(ALPHA+1))`
+
+Equivalently (numerically stable): `u = d/P; f(d) = (ALPHA+1) × u / (ALPHA + u^(ALPHA+1))`
+
+Properties: f(P) = 1 (peak always at d = P seconds), f(0) = 0, tail ~ 1/d^ALPHA for large d.
 
 Node weight: `w = population + W_BIZ × business_demand`
 
@@ -138,14 +144,16 @@ on the rank-1 covariance removes this double-counting without cost.
 | 2026-06-15 | gravity | 161 | 4 | 2.00 | Woodbury correction; per-session obs (N_eff=151, 10 slots) |
 | 2026-06-15 | full | 161 | 24 | 1.1754 | Jeffreys v3 reprocess; paths cache stale (no through-routes) |
 | 2026-06-15 | gravity | 161 | 4 | 1.1687 | rebuilt paths cache with through-routes (+56 OD pairs) |
-| 2026-06-15 | full | 161 | 24 | **1.1207** | through-routes active; LowerArds resolved (+92% not +514%) |
+| 2026-06-15 | full | 161 | 24 | 1.1207 | through-routes active; LowerArds resolved (+92% not +514%) |
+| 2026-06-16 | gravity | 161 | 3 | 1.1565 | rational kernel (P/ALPHA replaces MU/SIGMA/ALPHA) |
+| 2026-06-16 | full | 161 | 23 | **1.0833** | rational kernel full tune; P=190s, ALPHA=4.88 |
 
-Current best full-tune: χ²/N = 1.1207 (161 obs, N_eff=151, 10 slots; through-routes active).
-Official sites: 507 z=−1.76, 508 z=−0.58, 444 z=+0.54.
-Persistent structural outliers: `719↔325` Messines Road (z=−4.77/−3.53), `328→326` Comber Road (z=−3.63), `18→21` Hardford Link (z=−3.04). All are internal-traffic corridors; external zone tuning cannot resolve them.
-All cities tuning well above tuner_config refs (Donaghadee +122%, Belfast +129%, LowerArds +92%, Bangor +66%) — refs likely need updating. User decision pending.
+Current best full-tune: χ²/N = 1.0833 (161 obs, N_eff=151, 10 slots; rational kernel).
+Official sites: 507 z=−1.38, 508 z=−0.46, 444 z=+0.50.
+Persistent structural outliers: `719↔325` Messines Road (z=−4.36/−3.05), `328→326` Comber Road (z=−3.56), `18→21` Hardford Link (z=−3.15). All are internal-traffic corridors; external zone tuning cannot resolve them.
+All cities tuning well above tuner_config refs (Donaghadee +184%, Belfast +284%, LowerArds +226%, Bangor +30%) — refs need updating before next run.
 `22→159` (model=0) was a data error (snap direction bug, fixed 2026-06-15): now recorded as 159→22.
-Belfast Road `20→18` zero-count obs gives z=+1.93 (obs=628, model=2,357) with Jeffreys fix.
+Belfast Road `20→18` zero-count obs gives z=−2.80 (obs=628, model=2,277) — persistent underprediction of internal Circular Road traffic.
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
@@ -159,8 +167,8 @@ After rebuilding (2026-06-15) LowerArds settled at +92%.
   improvement over residential population alone for this network and dataset.
 - `K` is analytically set at each optimizer step to rescale the raw flow field to
   match observed AADT. It absorbs the overall scale of unnormalized gravity flows,
-  which shifts by many orders of magnitude as ALPHA and MU change (e.g. ALPHA 2→5
-  changes d^{-ALPHA} by ~10^9 for a typical d=1000s path). The degeneracy is
+  which shifts by many orders of magnitude as ALPHA and P change (e.g. ALPHA 2→5
+  changes the tail by ~10^9 for a typical d=1000s path). The degeneracy is
   between K and the gravity parameters, not K and the external zone populations
   (which only vary O(100%) under L2 regularization and can only contribute O(4×)
   to raw flows). χ²/N is reliable; K is not interpretable in isolation.

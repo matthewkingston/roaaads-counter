@@ -16,7 +16,7 @@ flows on the map.
 Usage:
   python3 simulation/build_assignment.py
 
-Tunable parameters: K, W_BIZ, MU, SIGMA, ALPHA, COUNT_SITES (see Config section).
+Tunable parameters: K, W_BIZ, P, ALPHA, COUNT_SITES (see Config section).
 """
 
 import json, math, time, os
@@ -29,9 +29,8 @@ from collections import defaultdict
 
 K      = 1.73   # global flow scale factor
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
-MU     = 7.5    # lognormal shift; peak at exp(MU − ALPHA×SIGMA²) = exp(5.5) ≈ 245 s ≈ 4 min
-SIGMA  = 1.0    # lognormal spread in log-time space
-ALPHA  = 2.0    # power-law tail exponent
+P      = 300.0  # peak travel time (seconds); flow peaks at d = P
+ALPHA  = 2.0    # tail decay exponent; flow ~ 1/d^ALPHA for large d
 OFFSCREEN_SPEED_MS = 80_000 / 3600   # 80 km/h — assumed speed for off-network boundary legs
 
 # Traffic count sites used in goodness_of_fit().
@@ -77,8 +76,7 @@ if os.path.exists(TUNED_PARAMS):
         _tp = json.load(f)
     K     = _tp.get("K",     K)
     W_BIZ = _tp.get("W_BIZ", W_BIZ)
-    MU    = _tp.get("MU",    MU)
-    SIGMA = _tp.get("SIGMA", SIGMA)
+    P     = _tp.get("P",     P)
     ALPHA = _tp.get("ALPHA", ALPHA)
     for _nid, _val in _tp.get("external_node_pop", {}).items():
         node_population[int(_nid)] = _val
@@ -114,9 +112,9 @@ if os.path.exists(PATHS_CACHE):
     total_weight = w_vec.sum()
     print(f"  {len(node_ids_arr)} nodes  total weight {total_weight:,.0f}  (W_BIZ={W_BIZ})")
 
-    # Gravity flow for every OD pair — lognormal × power-law decay
-    ln_d = np.log(od_dist)
-    t_ij = w_vec[od_src] * w_vec[od_dst] * np.exp(-0.5 * ((ln_d - MU) / SIGMA) ** 2) / od_dist ** ALPHA
+    # Gravity flow for every OD pair — rational kernel: peak at d=P, tail ~ 1/d^ALPHA
+    u    = od_dist / P
+    t_ij = w_vec[od_src] * w_vec[od_dst] * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
 
     # Accumulate onto links
     N_links = len(link_u)
@@ -190,7 +188,8 @@ else:
                     + boundary_offscreen.get(source, 0))
             if dist < 1.0:
                 continue
-            t_ij = w_i * w_j * math.exp(-0.5 * ((math.log(dist) - MU) / SIGMA) ** 2) / dist ** ALPHA
+            u    = dist / P
+            t_ij = w_i * w_j * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
             for u, v in zip(path[:-1], path[1:]):
                 lf[(u, v)] += t_ij
         if (idx + 1) % 100 == 0:
@@ -279,8 +278,8 @@ goodness_of_fit()
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
 with open(flows_path, "w") as f:
     json.dump({
-        "W_BIZ": W_BIZ, "MU": MU, "SIGMA": SIGMA, "ALPHA": ALPHA, "K": K,
+        "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "K": K,
         "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
     }, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}")
-print(f"Parameters: K={K}  W_BIZ={W_BIZ}  MU={MU}  SIGMA={SIGMA}  ALPHA={ALPHA}")
+print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}")

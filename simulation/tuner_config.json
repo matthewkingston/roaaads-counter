@@ -11,8 +11,7 @@
   "gravity_lambda": 0.05,
   "gravity_ref": {
     "W_BIZ": 1.0,
-    "MU":    7.7,
-    "SIGMA": 1.0,
+    "P":     300.0,
     "ALPHA": 2.0
   },
   "cities": {
