@@ -196,6 +196,87 @@ for _arr_i, _nid in ext_indices:
     base_w_pop[_arr_i] = _ext_pop_cfg[_nid]
     base_w_biz[_arr_i] = _ext_biz_cfg[_nid]
 
+# ── Precompute distance-bin link matrices ─────────────────────────────────────
+# The 20M-entry scatter (pair_idx gather + bincount) dominates each evaluation.
+# Precompute link-bin accumulation matrices so each eval is a small matmul instead.
+#
+# flow[l] = Σ_k M[l,k] · w_prod[k] · f(d_k; P,ALPHA)
+#         ≈ Σ_b f(d_b; P,ALPHA) · Σ_{k in bin b} M[l,k] · w_prod[k]
+#         = (link_bin_pp + W·link_bin_pb + W²·link_bin_bb) @ f_b
+#
+# Stage 1: all OD-pair weights fixed → use all-pair matrices.
+# Stage 2: external-node weights vary → precompute internal-only matrices and
+#   compute the ~23K external-involved OD pairs exactly per eval.
+
+print("Precomputing link-bin matrices …")
+_t_pc = time.time()
+
+from scipy.sparse import coo_matrix as _coo
+
+N_BINS      = 300
+_d_lo       = float(od_dist.min())
+_d_hi       = float(od_dist.max()) * 1.001
+_bin_edges  = np.logspace(np.log10(_d_lo), np.log10(_d_hi), N_BINS + 1)
+_bin_centers = np.sqrt(_bin_edges[:-1] * _bin_edges[1:])  # geometric mean per bin
+
+# Bin index for each OD pair (0 … N_BINS-1)
+_pair_bin  = np.clip(np.digitize(od_dist, _bin_edges) - 1, 0, N_BINS - 1).astype(np.int32)
+_col_all   = _pair_bin[pair_idx]   # bin index for every link-pair entry
+
+# Weight products per OD pair under base weights (ext nodes already at ref values)
+_pp_od = base_w_pop[od_src] * base_w_pop[od_dst]
+_pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
+          + base_w_biz[od_src] * base_w_pop[od_dst])
+_bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
+
+# Mask: True for OD pairs that involve at least one external node
+_is_ext_node = np.zeros(N_nodes, dtype=bool)
+for _ai, _ in ext_indices:
+    _is_ext_node[_ai] = True
+_ext_pair_mask  = _is_ext_node[od_src] | _is_ext_node[od_dst]  # (N_OD,)
+_entry_is_ext   = _ext_pair_mask[pair_idx]                       # (N_entries,)
+
+_int_sel = np.where(~_entry_is_ext)[0]   # link-pair entries for internal-only pairs
+_ext_sel = np.where(_entry_is_ext)[0]    # link-pair entries for external-involved pairs
+
+
+def _link_bin(dat_od, sel=None):
+    """Build a dense (N_links, N_BINS) accumulation matrix via COO→dense."""
+    if sel is None:
+        r, c, d = link_idx_arr, _col_all, dat_od[pair_idx]
+    else:
+        pi = pair_idx[sel]
+        r, c, d = link_idx_arr[sel], _col_all[sel], dat_od[pi]
+    return _coo((d, (r, c)), shape=(N_links, N_BINS)).toarray()
+
+
+# Stage-1 matrices: all OD pairs (external nodes at reference weights, fixed)
+# Stored as float32: f32 × f32 BLAS SGEMV is ~30× faster than f64 DGEMV.
+all_bin_pp = _link_bin(_pp_od).astype(np.float32)
+all_bin_pb = _link_bin(_pb_od).astype(np.float32)
+all_bin_bb = _link_bin(_bb_od).astype(np.float32)
+
+# Stage-2 matrices: internal-internal pairs only
+int_bin_pp = _link_bin(_pp_od, _int_sel).astype(np.float32)
+int_bin_pb = _link_bin(_pb_od, _int_sel).astype(np.float32)
+int_bin_bb = _link_bin(_bb_od, _int_sel).astype(np.float32)
+
+# External pair arrays for exact per-eval scatter in stage 2
+_ext_p     = np.unique(pair_idx[_ext_sel])                # unique global pair indices
+_ext_dist  = od_dist[_ext_p]                              # distances for ext OD pairs
+_ext_src   = od_src[_ext_p]                               # node-array src index
+_ext_dst   = od_dst[_ext_p]                               # node-array dst index
+_ext_local = np.empty(len(od_src), dtype=np.int32)        # global→local pair map
+_ext_local[_ext_p] = np.arange(len(_ext_p), dtype=np.int32)
+_ext_link  = link_idx_arr[_ext_sel]                       # link idx per ext entry
+_ext_lp    = _ext_local[pair_idx[_ext_sel]]               # local pair idx per ext entry
+
+del _is_ext_node, _ext_pair_mask, _entry_is_ext, _int_sel, _ext_sel, _ext_local
+del _pp_od, _pb_od, _bb_od, _col_all
+
+print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
+      f"  ({time.time()-_t_pc:.1f}s)")
+
 # ── Build observation list ────────────────────────────────────────────────────
 
 observations     = []
@@ -278,32 +359,84 @@ for kind, target, links, *_ in observations:
         idxs = [k] if k >= 0 else []
     obs_link_idxs.append(idxs)
 
+# ── Precomputed arrays for vectorised model_obs / calibrate_K / chi2 ─────────
+
+# Walking obs each have exactly 1 link; store as a numpy index array
+_walk_link_raw = np.array(
+    [obs_link_idxs[i][0] if obs_link_idxs[i] else -1
+     for i in range(n_official, n_obs)],
+    dtype=np.int64)
+_walk_link_safe = np.where(_walk_link_raw >= 0, _walk_link_raw, 0)
+_walk_valid     = _walk_link_raw >= 0
+
+# Unslotted obs (official sites) as numpy arrays
+_uns_arr    = np.array(unslotted_idxs, dtype=np.int64)
+_uns_sig_sq = sig_arr[_uns_arr] ** 2
+_uns_obs    = obs_arr[_uns_arr]
+
+# Per-slot precomputed arrays for calibrate_K and chi2
+_slot_data = [
+    (np.array(idxs, dtype=np.int64),
+     sigma_f_arr[np.array(idxs)],
+     sigma_c_sq[np.array(idxs)],
+     obs_arr[np.array(idxs)],
+     slot_denom[ts],
+     slot_uf_obs[ts])
+    for ts, idxs in slot_list
+]
+
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
+def _kern_b(P, ALPHA):
+    u = _bin_centers / P
+    return ((ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))).astype(np.float32)
+
+
 def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz):
-    return gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx_arr, N_links,
-                          W_BIZ, P, ALPHA, w_pop, w_biz)
+    """Fast binned gravity assignment.
+    Stage 1: ~0.12 ms (3 f32 matmuls).  Stage 2: ~5.5 ms (+ exact ext scatter).
+    Uses f32 matrices + f32 kernel vector for BLAS SGEMV performance (~30× vs DGEMV).
+    """
+    f_b = _kern_b(P, ALPHA)                         # float32, N_BINS elements
+    W   = np.float32(W_BIZ)
+    W2  = np.float32(W_BIZ ** 2)
+    if stage == "full":
+        # Internal-internal pairs via precomputed bins; 3 separate matmuls
+        flow = (int_bin_pp @ f_b
+                + W  * (int_bin_pb @ f_b)
+                + W2 * (int_bin_bb @ f_b)).astype(np.float64)
+        # External-involved pairs: compute exactly with current weights
+        w_src = w_pop[_ext_src] + W_BIZ * w_biz[_ext_src]
+        w_dst = w_pop[_ext_dst] + W_BIZ * w_biz[_ext_dst]
+        u_e   = _ext_dist / P
+        t_e   = w_src * w_dst * (ALPHA + 1) * u_e / (ALPHA + u_e ** (ALPHA + 1))
+        flow += np.bincount(_ext_link, weights=t_e[_ext_lp], minlength=N_links)
+    else:
+        # Stage 1: all weights fixed at reference — all pairs use precomputed bins
+        flow = (all_bin_pp @ f_b
+                + W  * (all_bin_pb @ f_b)
+                + W2 * (all_bin_bb @ f_b)).astype(np.float64)
+    return flow
 
 
 def model_obs(raw_flow):
-    return np.array([raw_flow[idxs].sum() if idxs else 0.0
-                     for idxs in obs_link_idxs])
+    m = np.empty(n_obs)
+    for i, idxs in enumerate(obs_link_idxs[:n_official]):
+        m[i] = raw_flow[idxs].sum() if idxs else 0.0
+    m[n_official:] = np.where(_walk_valid, raw_flow[_walk_link_safe], 0.0)
+    return m
 
 
 def calibrate_K(m_arr):
-    A = 0.0
-    B = 0.0
-    for i in unslotted_idxs:
-        w = 1.0 / sig_arr[i] ** 2
-        A += w * m_arr[i] ** 2
-        B += w * m_arr[i] * obs_arr[i]
-    for ts, idxs in slot_list:
-        denom = slot_denom[ts]
-        uf_m  = sum(sigma_f_arr[i] * m_arr[i] / sigma_c_sq[i] for i in idxs)
-        A += sum(m_arr[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_m ** 2 / denom
-        B += (sum(obs_arr[i] * m_arr[i] / sigma_c_sq[i] for i in idxs)
-              - slot_uf_obs[ts] * uf_m / denom)
-    return B / A if A > 0 else 1.0
+    m_u = m_arr[_uns_arr]
+    A   = float(np.sum(m_u ** 2 / _uns_sig_sq))
+    B   = float(np.sum(m_u * _uns_obs / _uns_sig_sq))
+    for ia, sf, sc, ob, denom, uf_obs in _slot_data:
+        m_s  = m_arr[ia]
+        uf_m = float(np.sum(sf * m_s / sc))
+        A   += float(np.sum(m_s ** 2 / sc)) - uf_m ** 2 / denom
+        B   += float(np.sum(ob * m_s / sc)) - uf_obs * uf_m / denom
+    return float(B / A) if A > 0 else 1.0
 
 
 # ── Objective function ────────────────────────────────────────────────────────
@@ -365,12 +498,13 @@ def objective(log_params, log_ref=None):
     raw_flow = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz)
     m_arr    = model_obs(raw_flow)
     K        = calibrate_K(m_arr)
-    r        = K * m_arr - obs_arr
-    chi2     = float(sum((r[i] / sig_arr[i]) ** 2 for i in unslotted_idxs))
-    for ts, idxs in slot_list:
-        denom = slot_denom[ts]
-        uf_r  = sum(sigma_f_arr[i] * r[i] / sigma_c_sq[i] for i in idxs)
-        chi2 += float(sum(r[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_r ** 2 / denom)
+    r    = K * m_arr - obs_arr
+    r_u  = r[_uns_arr]
+    chi2 = float(np.sum(r_u ** 2 / _uns_sig_sq))
+    for ia, sf, sc, _, denom, _ in _slot_data:
+        r_s  = r[ia]
+        uf_r = float(np.sum(sf * r_s / sc))
+        chi2 += float(np.sum(r_s ** 2 / sc)) - uf_r ** 2 / denom
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
