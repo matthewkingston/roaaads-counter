@@ -181,8 +181,8 @@ out = {
 if _use_2c:
     out["K_res"] = K_res
     out["K_biz"] = K_biz
-    out["flows_res"] = {f"{u},{v}": v for (u, v), v in link_flow_res.items()}
-    out["flows_biz"] = {f"{u},{v}": v for (u, v), v in link_flow_biz.items()}
+    out["flows_res"] = {f"{u},{v}": flow for (u, v), flow in link_flow_res.items()}
+    out["flows_biz"] = {f"{u},{v}": flow for (u, v), flow in link_flow_biz.items()}
 with open(flows_path, "w") as f:
     json.dump(out, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
