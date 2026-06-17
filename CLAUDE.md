@@ -17,11 +17,12 @@ python3 simulation/build_network.py          # build road network from OSM
 python3 simulation/build_demographics.py     # node weights + map scaffold
 python3 simulation/build_paths.py            # precompute k=3 shortest paths (~6 min)
 
+python3 analysis/parse_official_hourly.py    # parse ODS hourly counts → data/official_hourly.json (one-off)
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
 python3 analysis/aggregate_counts.py         # combine per-session AADT → link_aadt.json
 
-python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (4 params incl. THETA, ~30 s)
-python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (24 params, ~2-3 min)
+python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (4 params incl. THETA, ~5 min)
+python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (26 params, ~15 min)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 
 python3 simulation/build_assignment.py       # apply tuned params, write flows
@@ -30,9 +31,10 @@ python3 simulation/build_demographics.py --map-only   # rebuild map HTML only (f
 python3 analysis/report_tune.py              # generate reports/ text + pull plot for last run
 ```
 
-After adding new count data, re-run from `ingest_counts.py` onward. The tuner
-reads `simulation/tuned_params.json` as its starting point, so repeated runs
-refine rather than restart.
+After adding new count data, re-run from `ingest_counts.py` onward. Re-run
+`parse_official_hourly.py` only if the ODS source file changes. The tuner reads
+`simulation/tuned_params.json` as its starting point, so repeated runs refine rather
+than restart.
 
 ---
 
@@ -42,18 +44,19 @@ refine rather than restart.
 |------|------|
 | `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. External zone pop/wp/damping values are read from `tuner_config.json` (lat/lon centroids remain hardcoded in the script). **Population distribution:** for each DZ, OSM building centroids (residential tags + `addr:housenumber`, cached in `data/cache_osm_buildings.geojson`) are snapped to the nearest road edge via Shapely STRtree; population is split between the two endpoint nodes proportional to the building's position along that edge. DZs with <3 buildings or pop/building ≥ 10 fall back to road-length weighting. A per-DZ quality table is printed on each run. **Business demand:** NISRA workplace population is allocated by POI count within each DZ, then augmented with OSM car park polygon area (cached in `data/cache_osm_parking.geojson`): public car parks add `area/25` equivalent persons per node; `access=private` car parks add `area/50` (half weight). This gives W_BIZ a spatially concentrated signal from major retail car parks (Ards Shopping Centre, Castlebawn, supermarkets) rather than relying solely on workplace headcount. The map includes a parking layer (blue = public, red = private) for realism checking. |
 | `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. Produces **k=3 alternative paths** per OD pair (k=2/k=3 via progressive edge penalisation ×10) for stochastic logit routing. Build time ~30 min (3 Dijkstra passes). |
-| `simulation/model.py` | **Shared constants and functions** imported by both `build_assignment.py` and `tune_assignment.py`: `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel, used by `build_assignment.py` only), `site_flow()`, `compute_chi2()` (Woodbury-corrected, used by `build_assignment.py` only), `print_chi2_table()` (used by both). **Note:** `tune_assignment.py` has its own parallel `calibrate_K()` and vectorized chi² loop (in `objective()`) that implement the same Woodbury algebra as `model.py`'s `compute_chi2()` — but using precomputed arrays for speed. If you change the Woodbury formula or observation-weighting logic in one place, change it in both. |
-| `simulation/build_assignment.py` | Gravity model assignment. Loads `tuned_params.json` automatically if present. Uses stochastic logit routing (k=3 paths, THETA parameter) if the paths cache and tuned params both support it; otherwise falls back to all-or-nothing. Prints Woodbury-corrected χ²/N goodness-of-fit table via `model.py`'s `compute_chi2()`. |
+| `simulation/model.py` | **Shared constants and functions** imported by both `build_assignment.py` and `tune_assignment.py`: `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel, used by `build_assignment.py` only), `site_flow()`, `compute_chi2()` (Woodbury-corrected, used by `build_assignment.py` only), `print_chi2_table()` (used by both). **Note:** `tune_assignment.py` has its own two-component calibration that diverges from `model.py`'s single-K formulation; their reported χ²/N will differ. |
+| `simulation/build_assignment.py` | Gravity model assignment. Loads `tuned_params.json` automatically if present. Uses the legacy `K` key (= K_res + K_biz) for backward compatibility. Uses stochastic logit routing (k=3 paths, THETA parameter) if paths cache and tuned params support it; otherwise all-or-nothing. Prints Woodbury-corrected χ²/N via `model.py`. **Pending update:** should be updated to use K_res·flow_res + K_biz·flow_biz for the two-component model. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, and gravity param regularization. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ/THETA toward physically plausible values (prevents K-drift pathology). Default P=300 s sets the peak travel time; ALPHA=2 gives 1/d² tail decay; THETA=1.0 is the logit dispersion anchor. Edit to change external zone priors, allowed through routes, or gravity anchors. |
+| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, gravity param regularization, and temporal coupling. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ/THETA; `gamma_coupling_scale` controls the per-slot aggregate coupling (see Model Design). |
+| `analysis/parse_official_hourly.py` | Parses sheets 444/507/508 from the 2023 NI ODS traffic count file → `data/official_hourly.json`. Run once (or when the ODS file changes). Extracts Mon–Fri average (weekday), Saturday, Sunday counts per hour; weekday sigma from between-day variance with 10% floor, weekend sigma at 15% floor. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry now carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s` so the tuner can work in count space. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. When the paths cache has k=3 alternative paths, Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); otherwise 3. `--full` adds 14 city pop/wp + 6 dampings. Uses per-session observations from `link_aadt.json`. K and per-slot hourly fractions {f_s} are jointly calibrated at each evaluation via alternating minimisation; walking obs in count space, official sites in AADT space. Per-slot fraction priors derived from `hourly_fractions.csv` grouped by weekday/Saturday/Sunday. **Performance:** all-or-nothing (THETA=None/old cache): ~0.12 ms/eval stage 1, ~5.5 ms stage 2 via precomputed bin-matmul path. Stochastic (THETA given + k=3 paths): ~150 ms/eval via CSR SpMV scatter; ~1 min stage 1, ~8 min stage 2. Startup builds three sparse (N_links×N_OD) matrices (~0.6 s one-off). |
-| `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Reads `tuning_history.jsonl` and `tuner_config.json`; writes `reports/tune_report_{id}.txt` (5-section text report: summary, chi² by measurement, chi² by link, gravity params, external zones, slot fractions) and `reports/slot_pulls_{id}.png` (horizontal pull plot in particle-physics style). Usage: `python3 analysis/report_tune.py` (last entry) or `python3 analysis/report_tune.py <id_prefix>`. The gravity kernel curve is also written to `reports/gravity_model_curve.png` by `tune_assignment.py`. History entries include `initial_gravity`, `slot_prior`, and `label` fields on observations (added 2026-06-17) to support the report. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Two-component model:** gravity flows split into residential (pop→pop, `flow_res`) and business-adjacent (pb+bb, `flow_biz`) components, each with its own temporal profile (f_s_res, f_s_biz) and scale (K_res, K_biz). Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); `--full` adds 14 city pop/wp + 6 dampings. Uses 216 official hourly obs from `official_hourly.json` (replacing 3 AADT point estimates) plus per-session walking obs from `link_aadt.json`. **Alternating minimisation (4 blocks, 10 iters):** K-step (1D, total scale); phi-step (1D, K_biz/K ratio, Gaussian prior N(0.35, 0.15²) prevents K_biz→0); f_res-step (per-slot analytical); f_biz-step (symmetric) + aggregate coupling γ·(f_res+f_biz−2·f_agg)² per slot. **Performance (stochastic k=3):** ~300 ms/eval; ~5 min stage 1, ~15 min stage 2. |
+| `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Reads `tuning_history.jsonl` and `tuner_config.json`; writes `reports/tune_report_{id}.txt` and `reports/slot_pulls_{id}.png`. History `slot_prior` entries now carry 4 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz]`. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, THETA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
-| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Used for AADT estimation from short-duration counts. |
+| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Now includes `mean_fraction_res` and `mean_fraction_biz` columns: synthetic priors for the two-component temporal profiles (business: AM/PM weekday peaks; residential: complement). Used as prior means in the tuner. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
@@ -62,7 +65,7 @@ refine rather than restart.
 `reports/` — generated by `report_tune.py` and `tune_assignment.py`; not tracked.
 
 ### Tracked generated outputs
-`data/counts_processed.json`, `data/link_aadt.json`,
+`data/counts_processed.json`, `data/link_aadt.json`, `data/official_hourly.json`,
 `simulation/tuning_history.jsonl` — committed so history is preserved.
 `simulation/tuner_config.json` — committed as source config (gitignore exception).
 `analysis/hourly_fractions.csv` — committed as source data (single authoritative version).
@@ -70,8 +73,9 @@ refine rather than restart.
 ### Large reference data (gitignored, kept locally only)
 `data/*.ods`, `data/*.xlsx` — too large to commit; keep a local copy for reference.
 Currently present: `data/2023-northern-ireland-traffic-count-data-in-ods-format.ods`
-(the 3 AADT values already in use are in `simulation/model.py` `COUNT_SITES` — no
-further data from this file is needed) and `data/census-2021-apwp001.xlsx`.
+(used by `parse_official_hourly.py` to extract hourly counts for sites 444/507/508;
+annual AADT values in `model.py` `COUNT_SITES` are no longer used by the tuner but
+retained for `build_assignment.py`) and `data/census-2021-apwp001.xlsx`.
 
 ---
 
@@ -122,47 +126,74 @@ Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
 Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds, Dundonald↔LowerArds,
 Dundonald↔Donaghadee, Dundonald↔Millisle.
 
-### K and slot fractions: joint analytical calibration
-At each optimizer evaluation, K (global scale) and per-slot hourly fractions {f_s} are
-jointly calibrated via alternating minimisation (10 iterations, converges in 3–5).
+### Two-component flow decomposition
+The gravity OD flows are split into two spatial components at each tuner evaluation:
 
-**K-step** (for fixed {f_s}): K = B / A where A and B accumulate official AADT terms
-(AADT space) and walking count terms (count space, weight m·T·f_s).
+- **Residential** (`flow_res`): `all_bin_pp @ f_b` — purely pop×pop trips
+- **Business-adjacent** (`flow_biz`): `W_BIZ·(all_bin_pb @ f_b) + W_BIZ²·(all_bin_bb @ f_b)` — home↔work/retail trips
 
-**f_s-step** (for fixed K): each f_s = (Σ C_i + mean_f/std_f²) / (Σ C_i²/n_eff_i + 1/std_f²)
-where C_i = K · m_i · T_i/3600 and the second term is the Gaussian prior.
+Each component has its own temporal profile (f_s_res, f_s_biz) and scale (K_res, K_biz).
+Predicted count for observation i in slot s:
+`pred_i = K_res · flow_res[link_i] · (T_i/3600) · f_s_res[s] + K_biz · flow_biz[link_i] · (T_i/3600) · f_s_biz[s]`
 
-Slot key is (day_type, hour): day_type = 0 (weekday, Mon–Fri), 1 (Saturday), 2 (Sunday).
-Prior hyperparameters from `hourly_fractions.csv` via law of total variance:
-  std_f = sqrt(between_day_var + mean(within_day_var across dows in slot)).
+### Four-block analytical calibration
+At each optimizer evaluation, (K, phi, f_s_res, f_s_biz) are calibrated via alternating
+minimisation (10 iterations, converges in 3–5), where K_res = K·(1−phi), K_biz = K·phi.
+
+**K-step:** 1D solve (same structure as old single-K step), using combined coefficient
+`(1−phi)·c_r·f_res + phi·c_b·f_biz` per observation.
+
+**phi-step:** 1D solve for business fraction, with Gaussian prior phi ~ N(0.35, 0.15²).
+This prior prevents K_biz collapsing to 0 (the K_biz/W_BIZ degeneracy otherwise exploited
+by the optimizer). phi = 0 means all-residential; phi = 1 means all-business.
+
+**f_res-step / f_biz-step:** per-slot analytical update, anchored by component-specific
+priors from `hourly_fractions.csv` columns `mean_fraction_res` / `mean_fraction_biz`
+(synthetic profiles: business peaks weekday AM/PM; residential is complement).
+
+**Aggregate coupling:** each slot also carries a penalty γ·(f_res + f_biz − 2·f_agg)²
+where γ = `gamma_coupling_scale` / std_f_agg² (per-slot, from `tuner_config.json`).
+This prevents the two profiles collectively drifting from the known NI aggregate profile.
+`gamma_coupling_scale = 0.0` disables coupling; `1.0` gives coupling as strong as the
+individual component priors.
+
+Slot key: (day_type, hour), day_type = 0 (weekday), 1 (Saturday), 2 (Sunday).
+Prior std derived from `hourly_fractions.csv` via law of total variance.
+
+### Observations
+All 374 observations are in count space with per-obs weights:
+- **Official hourly** (216 obs, 24 h × 3 day-types × 3 sites): from `data/official_hourly.json`;
+  Gaussian error (sigma from between-weekday std, 10% floor); weight = 1/sigma².
+- **Walking** (158 obs): from `data/link_aadt.json`; Poisson error; weight = 1/n_eff.
 
 ### Goodness of fit
-`χ²/N` (mean squared z-score, target ~1.0). Three official AADT sites (±10%) plus
-all per-session walking-count observations from `link_aadt.json` observations lists.
+`χ²/N` (mean squared z-score; N=374 obs, N_eff = N − 2·N_slots = 374 − 144 = 230).
+Two df lost per slot (one each for f_s_res and f_s_biz). With coupling enabled,
+chi²/N includes the coupling penalty terms; pure data-fit chi²/N is lower.
 
-Walking obs compared in count space: chi²_walk = Σ (K·m·T·f_s/3600 − n_eff)² / n_eff,
-where n_eff = n + 0.5 (Jeffreys count). Shared f_s per (day_type, hour) slot is the
-correlation mechanism (all obs in a slot scale together), anchored by a Gaussian prior.
-Official sites compared in AADT space: chi²_off = Σ (K·m − y)² / σ².
-Total objective: chi² = chi²_off + chi²_walk + Σ (f_s − mean_f)² / std_f².
-
-`N_eff = N − N_slots` is printed as a diagnostic (each slot loses one effective df).
-With weekday/Sat/Sun grouping, 15 original (dow, hour) slots typically collapse to ~10
-(day_type, hour) slots, yielding N_eff = N − N_slots.
-
-**Note:** `model.py` / `build_assignment.py` still use the older Woodbury formulation
-for `compute_chi2()` — their reported χ²/N will differ slightly from the tuner's.
+**Note:** `model.py` / `build_assignment.py` still use the single-K Woodbury formulation —
+their reported χ²/N is not comparable to the tuner's two-component chi²/N.
 
 ---
 
 ## Count Data
 
-**Official AADT sites (fixed):**
-- Site 507: A21 Bangor Road — 21,202 AADT
-- Site 508: A48 Donaghadee Road — 10,792 AADT
-- Site 444: A20 Portaferry Road — 7,282 AADT
+**Official hourly obs (from ODS, parsed by `parse_official_hourly.py`):**
+- Site 507: A21 Bangor Road — 72 obs (24 h × 3 day-types); Gaussian sigma, 10%/15% floors
+- Site 508: A48 Donaghadee Road — 72 obs
+- Site 444: A20 Portaferry Road — 72 obs
 
-**Walking counts:** 5 CSV files, 130 sessions, 256 individual session-direction observations across 136 directed links. Day-type grouping (weekday/Sat/Sun) of the 15 original (dow, hour) time slots yields fewer (day_type, hour) slots (around 10), increasing N_eff. Combined with 3 official sites: N=258 total tuner observations. The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference.
+Annual AADT values (507: 21,202; 508: 10,792; 444: 7,282) are retained in `model.py`
+`COUNT_SITES` for `build_assignment.py` backward compatibility but are no longer used
+by the tuner directly.
+
+**Walking counts:** 5 CSV files, 130 sessions, 158 per-session observations currently
+loaded by the tuner (some sessions filtered by EXCLUDE_LINKS). The tuner uses per-session
+observations directly (not per-link aggregates); per-link aggregates are retained in
+`link_aadt.json` for reference.
+
+**Total: 374 observations (216 official hourly + 158 walking) in 72 time slots.
+N_eff = 374 − 2×72 = 230.**
 
 ---
 
@@ -183,13 +214,20 @@ for `compute_chi2()` — their reported χ²/N will differ slightly from the tun
 | 2026-06-15 | full | 161 | 24 | 1.1207 | through-routes active; LowerArds resolved (+92% not +514%) |
 | 2026-06-16 | gravity | 161 | 3 | 1.1565 | rational kernel (P/ALPHA replaces MU/SIGMA/ALPHA) |
 | 2026-06-16 | full | 161 | 23 | **1.0833** | rational kernel full tune; P=190s, ALPHA=4.88 |
+| 2026-06-17 | gravity | 374 | 4 | 1.3064 | two-component model; 216 ODS hourly obs; K_res=1.47e-05, K_biz=4.43e-06 (phi≈23%), γ=0 |
+| 2026-06-17 | gravity | 374 | 4 | **1.4286** | + aggregate coupling γ=1/std_f²; K_res=8.96e-05, K_biz=1.29e-05 (phi≈13%) |
 
-Current best full-tune: χ²/N = 1.0833 (161 obs, N_eff=151, 10 slots; rational kernel).
-Official sites: 507 z=−1.38, 508 z=−0.46, 444 z=+0.50.
-Persistent structural outliers: `719↔325` Messines Road (z=−4.36/−3.05), `328→326` Comber Road (z=−3.56), `18→21` Hardford Link (z=−3.15). All are internal-traffic corridors; external zone tuning cannot resolve them.
-All cities tuning well above tuner_config refs (Donaghadee +184%, Belfast +284%, LowerArds +226%, Bangor +30%) — refs need updating before next run.
+**Note on comparability:** runs from 2026-06-17 onward use a different observation set
+(374 obs vs 161, including temporal official hourly obs) and include coupling penalty
+terms in chi²/N. They are not directly comparable to earlier single-component runs.
+A full-stage (--full) two-component run is pending.
+
+Current gravity-stage: χ²/N = 1.4286 (374 obs, N_eff=230, 72 slots; two-component with coupling).
+W_BIZ=1.20, P=87s, ALPHA=3.75, THETA=0.07. phi≈13% business fraction.
+Persistent structural outliers (unchanged): `328→326` Comber Road (z=−3.29), `719→325` Messines Road (z=−3.27), `18→21` Hardford Link (z=−2.72).
+Site 444 early-morning weekday hours (z≈−5 at h04, −4 at h06) — sigma tight (10% of small counts ~3); may warrant a higher early-morning floor.
 `22→159` (model=0) was a data error (snap direction bug, fixed 2026-06-15): now recorded as 159→22.
-Belfast Road `20→18` zero-count obs gives z=−2.80 (obs=628, model=2,277) — persistent underprediction of internal Circular Road traffic.
+Belfast Road `20→18` persistent underprediction (z≈−2.5).
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
@@ -207,36 +245,30 @@ cache predated the through-route feature. This caused the LowerArds pop to blow 
 LowerArds settled at +92%.
 
 ### Known model behaviour
-- `W_BIZ` was converging to ~0 when `node_business_demand` was based solely on NISRA workplace population (spatially correlated with residential density). As of 2026-06-17, `node_business_demand` now includes OSM car park polygon area (public: area/25, private: area/50 equivalent persons), which adds a strongly spatially concentrated signal from major retail car parks. W_BIZ convergence after next tuning run should confirm whether this resolves the identifiability issue.
-- `K` is analytically set at each optimizer step to rescale the raw flow field to
-  match observed AADT. It absorbs the overall scale of unnormalized gravity flows,
-  which shifts by many orders of magnitude as ALPHA and P change (e.g. ALPHA 2→5
-  changes the tail by ~10^9 for a typical d=1000s path). The degeneracy is
-  between K and the gravity parameters, not K and the external zone populations
-  (which only vary O(100%) under L2 regularization and can only contribute O(4×)
-  to raw flows). χ²/N is reliable; K is not interpretable in isolation.
+- **Two-component K_biz/W_BIZ degeneracy:** Without the phi prior, the optimizer exploits
+  `K_biz × W_BIZ → 0 × ∞` to collapse K_biz to zero while using large W_BIZ to reshape
+  the spatial flow. The phi prior phi ~ N(0.35, 0.15²) prevents this by anchoring the
+  business fraction. phi ≈ 0.13–0.23 in current runs.
+- `W_BIZ` was converging to ~0 when `node_business_demand` was based solely on NISRA
+  workplace population. As of 2026-06-17, it includes OSM car park polygon area
+  (public: area/25, private: area/50 equivalent persons). W_BIZ=1.20 in current runs
+  (previously blowing up to ~10 when K_biz was unconstrained).
+- `K` (total scale) is analytically calibrated at each optimizer step, absorbing the
+  overall magnitude of unnormalised gravity flows (shifts by many orders of magnitude as
+  ALPHA/P change). K_res and K_biz are derived from K × (1−phi) and K × phi respectively.
+  K is not interpretable in isolation; chi²/N is reliable.
 - After a structural model change (e.g. adding through routes or new count data), a gravity-only
-  stage 1 run with fixed external zone weights will show inflated χ²/N and
-  spurious outliers at boundary sites (esp. site 508). A full 26-param re-tune
-  (8 cities × 2 + gravity + dampings) is needed to restore fit quality.
+  stage 1 run will show inflated chi²/N. A full `--full` re-tune is needed to restore fit quality.
 - **Dundonald virtual node (added 2026-06-17):** Node 10000 is a degree-1 stub connected
-  only to node 97, representing the Dundonald catchment on the A20 corridor. It shares
-  the same road-network entry point as Belfast's node 97 but has a different geographic
-  centroid (54.579°N, 5.845°W), giving a shorter off-network leg. Internal routing is
-  completely unaffected (no interior path ever uses a dead-end stub). Alternative paths
-  k=2/k=3 fall back to k=1 for all node 10000 OD pairs (only one connection to the network).
-- **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` stored canonical
-  `(min(u,v), max(u,v))` indices in `edge_geoms` instead of the actual directed
-  `(u, v)`. For one-way roads where u > v (e.g. 159→22), the dot-product sign was
-  correct but `link_with` was flipped. Fix: store `(u, v)` not `(pair[0], pair[1])`.
-  Only `f56b2ce4` was materially affected — re-snapped from 22→159 to 159→22.
-- Slot fractions f_s are inferred per (day_type, hour) — grouping weekday / Saturday / Sunday.
-  They are anchored by a Gaussian prior derived from `hourly_fractions.csv` via the law of
-  total variance (between-day variance + mean within-day variance). The prior prevents runaway
-  values in slots with sparse data. All obs in a slot share the same f_s, preserving the
-  within-slot correlation that Woodbury previously handled. `N_eff = N − N_slots` is the
-  effective degrees of freedom. With day_type grouping, N_slots is typically ~10 vs 15 with
-  the old (dow, hour) formulation, gaining ~5 effective degrees of freedom.
+  only to node 97, representing the Dundonald catchment on the A20 corridor. Alternative paths
+  k=2/k=3 fall back to k=1 for all node 10000 OD pairs.
+- **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` previously stored canonical
+  `(min(u,v), max(u,v))` — fixed to store actual directed `(u, v)`. Only session `f56b2ce4`
+  was materially affected (re-snapped from 22→159 to 159→22).
+- Two temporal profiles (f_s_res, f_s_biz) are inferred per (day_type, hour) slot, each
+  anchored by component-specific priors from `hourly_fractions.csv`. The aggregate coupling
+  (gamma_coupling_scale / std_f²) per slot keeps their sum near 2×f_agg. With 72 slots
+  and 2 df each, N_eff = N − 2×N_slots = 230.
 
 ---
 
