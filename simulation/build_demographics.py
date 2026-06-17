@@ -278,6 +278,7 @@ else:
         _bld_raw = pd.concat([_bld1, _bld2])
         _bld_raw = _bld_raw[~_bld_raw.index.duplicated(keep="first")]
         _bld_raw = _bld_raw[_bld_raw.geometry.notna()].copy()
+        _bld_raw = _bld_raw.to_crs("EPSG:32630")
         _bld_raw["geometry"] = _bld_raw.geometry.centroid
         _bld_raw = _bld_raw[_bld_raw.geometry.geom_type == "Point"]
         _bld_raw = _bld_raw[["geometry"]].to_crs("EPSG:4326")
