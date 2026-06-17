@@ -49,7 +49,7 @@ than restart.
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, gravity param regularization, and temporal coupling. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/W_BIZ/THETA; `gamma_coupling_scale` controls the per-slot aggregate coupling (see Model Design). |
 | `analysis/parse_official_hourly.py` | Parses sheets 444/507/508 from the 2023 NI ODS traffic count file → `data/official_hourly.json`. Run once (or when the ODS file changes). Extracts Mon–Fri average (weekday), Saturday, Sunday counts per hour; weekday sigma from between-day variance with 10% floor, weekend sigma at 15% floor. |
-| `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. |
+| `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. **`MANUAL_LINK_OVERRIDES`** dict at the top maps session IDs to forced directed links; use when the observer was on a parallel carriageway and GPS snap would land on the wrong road (e.g. A20 Kempe Stones sessions `e644eae2`/`760b0c8e` → link 8→7). After every new link assignment (manual or auto), validates that each non-null count direction maps to a real directed edge in G; raises `ValueError` if not, preventing counts from silently hitting a zero-flow phantom edge. Edges without geometry (virtual stub nodes such as Dundonald 10000) are skipped during snap candidate construction. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry now carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s` so the tuner can work in count space. Output: `data/link_aadt.json`. |
 | `analysis/tune_assignment.py` | Powell's method parameter tuning. **Two-component model:** gravity flows split into residential (pop→pop, `flow_res`) and business-adjacent (pb+bb, `flow_biz`) components, each with its own temporal profile (f_s_res, f_s_biz) and scale (K_res, K_biz). Stage 1 tunes 4 gravity params (W_BIZ, P, ALPHA, THETA); `--full` adds 14 city pop/wp + 6 dampings. Uses 216 official hourly obs from `official_hourly.json` (replacing 3 AADT point estimates) plus per-session walking obs from `link_aadt.json`. **Alternating minimisation (4 blocks, 10 iters):** K-step (1D, total scale); phi-step (1D, K_biz/K ratio, Gaussian prior N(0.35, 0.15²) prevents K_biz→0); f_res-step (per-slot analytical); f_biz-step (symmetric) + aggregate coupling γ·(f_res+f_biz−2·f_agg)² per slot. **Performance (stochastic k=3):** ~300 ms/eval; ~5 min stage 1, ~15 min stage 2. |
 | `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Reads `tuning_history.jsonl` and `tuner_config.json`; writes `reports/tune_report_{id}.txt` and `reports/slot_pulls_{id}.png`. History `slot_prior` entries now carry 4 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz]`. |
@@ -187,13 +187,10 @@ Annual AADT values (507: 21,202; 508: 10,792; 444: 7,282) are retained in `model
 `COUNT_SITES` for `build_assignment.py` backward compatibility but are no longer used
 by the tuner directly.
 
-**Walking counts:** 5 CSV files, 130 sessions, 158 per-session observations currently
-loaded by the tuner (some sessions filtered by EXCLUDE_LINKS). The tuner uses per-session
-observations directly (not per-link aggregates); per-link aggregates are retained in
-`link_aadt.json` for reference.
+**Walking counts:** 6 CSV files (traffic_2026-06-14.csv, _2.csv, _3.csv, traffic_2026-06-15.csv, traffic_2026-06-16.csv, traffic_2026-06-17.csv), 170 sessions, 329 per-session observations loaded by the tuner (after EXCLUDE_LINKS). Two sessions manually assigned: `e644eae2` and `760b0c8e` (A20 Kempe Stones eastbound, link 8→7; observer was on the westbound carriageway). The tuner uses per-session observations directly (not per-link aggregates); per-link aggregates are retained in `link_aadt.json` for reference. A re-tune is needed to incorporate the new data.
 
-**Total: 374 observations (216 official hourly + 158 walking) in 72 time slots.
-N_eff = 374 − 2×72 = 230.**
+**Total: 545 observations (216 official hourly + 329 walking) in 72 time slots.
+N_eff = 545 − 2×72 = 401.**
 
 ---
 
@@ -262,6 +259,7 @@ LowerArds settled at +92%.
 - **Dundonald virtual node (added 2026-06-17):** Node 10000 is a degree-1 stub connected
   only to node 97, representing the Dundonald catchment on the A20 corridor. Alternative paths
   k=2/k=3 fall back to k=1 for all node 10000 OD pairs.
+- **Manual link overrides:** `MANUAL_LINK_OVERRIDES` in `ingest_counts.py` hard-assigns specific sessions to a directed link, bypassing GPS snap. Use when the observer stood on a parallel carriageway (e.g. a dual one-way road) and the snap would land on the wrong physical road. The override is idempotent and takes effect even if `counts_processed.json` is wiped and rebuilt. After assignment (manual or auto), the script validates each non-null count direction against the directed graph and raises `ValueError` if the edge doesn't exist.
 - **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` previously stored canonical
   `(min(u,v), max(u,v))` — fixed to store actual directed `(u, v)`. Only session `f56b2ce4`
   was materially affected (re-snapped from 22→159 to 159→22).
