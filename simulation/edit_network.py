@@ -87,3 +87,25 @@ print(f"Raw after:  {G_raw.number_of_nodes()} nodes, {G_raw.number_of_edges()} e
 ox.save_graphml(G_raw, RAW_PATH)
 
 print("\nDone. Re-run build_demographics.py to regenerate the map.")
+
+# ── Virtual Dundonald boundary node ───────────────────────────────────────────
+# Node 10000: degree-1 stub connected only to node 97. Gives Dundonald its own
+# boundary node on the A20 corridor without altering internal routing (no
+# interior-to-interior path ever routes through a dead-end stub).
+
+DUNDONALD_NODE_ID = 10000
+
+if DUNDONALD_NODE_ID not in G_cons.nodes:
+    x97, y97 = float(G_cons.nodes[97]["x"]), float(G_cons.nodes[97]["y"])
+    G_cons.add_node(DUNDONALD_NODE_ID, x=x97, y=y97, street_count=1)
+    for u, v in [(97, DUNDONALD_NODE_ID), (DUNDONALD_NODE_ID, 97)]:
+        G_cons.add_edge(u, v, key=0,
+                        osmid=0, name="Dundonald virtual link",
+                        highway="unclassified", oneway=False,
+                        length=1.0, lanes=1, ref="")
+    print(f"  Added virtual Dundonald node {DUNDONALD_NODE_ID} (stub on node 97)")
+    ox.save_graphml(G_cons, CONS_PATH)
+    print(f"  Consolidated graph saved: "
+          f"{G_cons.number_of_nodes()} nodes, {G_cons.number_of_edges()} edges")
+else:
+    print(f"  Virtual Dundonald node {DUNDONALD_NODE_ID}: already present, skipping")

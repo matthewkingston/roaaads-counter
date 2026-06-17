@@ -75,6 +75,7 @@ _EXT_GEO = {
     731: ("Bangor",               54.6536, -5.6697),
     748: ("Millisle",             54.6015, -5.5031),
     749: ("Millisle",             54.6015, -5.5031),
+  10000: ("Dundonald",           54.5790, -5.8450),
 }
 
 with open("simulation/tuner_config.json") as _f:
@@ -596,7 +597,7 @@ import math
 BOUNDARY_NODE_IDS = {
     47, 65, 92, 97, 98, 99,
     119, 180, 617, 618, 620,
-    731, 748, 749,
+    731, 748, 749, 10000,
 }
 
 boundary_nodes_map = {}   # node_id → (wgs_lat, wgs_lon, dist, degree)

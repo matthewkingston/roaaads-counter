@@ -105,7 +105,7 @@ in the Dijkstra adjacency matrix. Pairs with no alternative fall back to k=1
 (which is equivalent to all-or-nothing for those pairs under any THETA).
 
 ### External zones
-14 boundary nodes grouped into 7 cities in `tuner_config.json`. Each city shares
+15 boundary nodes grouped into 8 cities in `tuner_config.json`. Each city shares
 one pop and one wp value; individual nodes scale by a fixed damping ratio.
 Nodes with damping=1.0 are fixed; nodes with damping<1.0 are tunable (but
 L2-penalised toward the config reference values).
@@ -119,7 +119,7 @@ that use an out-of-network bypass (e.g. Belfast↔Bangor via the A2 coast road).
 Changing the whitelist requires rebuilding the paths cache (`build_paths.py`).
 
 Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
-Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds.
+Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds, Dundonald↔LowerArds.
 
 ### K and slot fractions: joint analytical calibration
 At each optimizer evaluation, K (global scale) and per-slot hourly fractions {f_s} are
@@ -216,8 +216,14 @@ LowerArds settled at +92%.
   to raw flows). χ²/N is reliable; K is not interpretable in isolation.
 - After a structural model change (e.g. adding through routes or new count data), a gravity-only
   stage 1 run with fixed external zone weights will show inflated χ²/N and
-  spurious outliers at boundary sites (esp. site 508). A full 24-param re-tune
-  is needed to restore fit quality.
+  spurious outliers at boundary sites (esp. site 508). A full 26-param re-tune
+  (8 cities × 2 + gravity + dampings) is needed to restore fit quality.
+- **Dundonald virtual node (added 2026-06-17):** Node 10000 is a degree-1 stub connected
+  only to node 97, representing the Dundonald catchment on the A20 corridor. It shares
+  the same road-network entry point as Belfast's node 97 but has a different geographic
+  centroid (54.579°N, 5.845°W), giving a shorter off-network leg. Internal routing is
+  completely unaffected (no interior path ever uses a dead-end stub). Alternative paths
+  k=2/k=3 fall back to k=1 for all node 10000 OD pairs (only one connection to the network).
 - **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` stored canonical
   `(min(u,v), max(u,v))` indices in `edge_geoms` instead of the actual directed
   `(u, v)`. For one-way roads where u > v (e.g. 159→22), the dot-product sign was
@@ -240,6 +246,7 @@ updating them is something to *consider and discuss*, not an automatic step — 
 L2 regularization and changing them shifts the penalty basin for all future runs.
 
 Last updated: 2026-06-16 full tuning run (χ²/N=1.2546, 258 obs, stochastic k=3).
+Dundonald added 2026-06-17 (initial priors only, not yet tuned).
 
 | City | Nodes | ref_pop | ref_wp | Tunable dampings |
 |------|-------|---------|--------|-----------------|
@@ -247,6 +254,7 @@ Last updated: 2026-06-16 full tuning run (χ²/N=1.2546, 258 obs, stochastic k=3
 | Comber | 65, 617, 618, 620 | 53,571 | 2,996 | 617 (×0.38), 618 (×0.35), 620 (×0.43) |
 | LowerArds | 92 | 84,500 | 5,024 | — |
 | Belfast | 97, 119 | 1,034,719 | 183,661 | 119 (×0.31) |
+| Dundonald | 10000 | 150,000 | 8,000 | — |
 | Bangor | 98, 731 | 95,426 | 21,246 | 98 (×0.39) |
 | Holywood | 99 | 3,652 | 1,203 | — |
 | Millisle | 748, 749 | 2,570 | 498 | 749 (×0.47) |

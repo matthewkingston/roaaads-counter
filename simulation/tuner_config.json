@@ -1,12 +1,13 @@
 {
   "lambda": 1.0,
   "through_route_pairs": [
-    ["Comber",   "Donaghadee"],
-    ["Comber",   "LowerArds"],
-    ["Comber",   "Millisle"],
-    ["Comber",   "Bangor"],
-    ["Bangor",   "LowerArds"],
-    ["Belfast",  "LowerArds"]
+    ["Comber",      "Donaghadee"],
+    ["Comber",      "LowerArds"],
+    ["Comber",      "Millisle"],
+    ["Comber",      "Bangor"],
+    ["Bangor",      "LowerArds"],
+    ["Belfast",     "LowerArds"],
+    ["Dundonald",   "LowerArds"]
   ],
   "gravity_lambda": 0.05,
   "gravity_ref": {
@@ -39,6 +40,12 @@
       "ref_pop": 1034719,
       "ref_wp": 183661,
       "dampings": {"97": 1.0, "119": 0.3126}
+    },
+    "Dundonald": {
+      "nodes": [10000],
+      "ref_pop": 150000,
+      "ref_wp": 8000,
+      "dampings": {"10000": 1.0}
     },
     "Bangor": {
       "nodes": [98, 731],
