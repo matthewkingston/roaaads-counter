@@ -30,6 +30,16 @@ HOURLY_FRACTIONS = "analysis/hourly_fractions.csv"
 
 LOCAL_TZ = pytz.timezone("Europe/London")
 
+# Sessions where GPS snap would land on the wrong link (e.g. observer on the
+# parallel carriageway of a dual one-way road).  Maps session_id → forced
+# directed links.  Takes priority over auto-snap; idempotent on re-ingest.
+MANUAL_LINK_OVERRIDES = {
+    # A20 Kempe Stones eastbound: observer was on the westbound carriageway
+    # and could not access the eastbound side.
+    "e644eae2": {"link_with": [8, 7], "link_against": [7, 8]},
+    "760b0c8e": {"link_with": [8, 7], "link_against": [7, 8]},
+}
+
 
 def parse_iso(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
@@ -112,6 +122,8 @@ if needs_snap:
     seen_pairs = set()
     edge_geoms = []
     for u, v, edata in G.edges(data=True):
+        if "geometry" not in edata:
+            continue  # virtual edges (e.g. stub nodes) have no geometry
         pair = (min(u, v), max(u, v))
         if pair in seen_pairs:
             continue
@@ -235,15 +247,41 @@ for sid, data in sessions.items():
 
     # Snap if new or previously processed without snapping
     if "matched_link_with" not in processed["sessions"][sid]:
-        gps_pts = data["gps"]
-        if gps_pts:
-            link_with, link_against, rmse_m = snap_to_link(gps_pts)
-            processed["sessions"][sid]["matched_link_with"]    = link_with
-            processed["sessions"][sid]["matched_link_against"] = link_against
-            processed["sessions"][sid]["match_rmse_m"]         = rmse_m
-            print(f"  {sid}  link {link_with[0]}→{link_with[1]} "
-                  f"(against: {link_against[0]}→{link_against[1]})  "
-                  f"RMSE={rmse_m}m")
+        if sid in MANUAL_LINK_OVERRIDES:
+            ov = MANUAL_LINK_OVERRIDES[sid]
+            processed["sessions"][sid]["matched_link_with"]    = ov["link_with"]
+            processed["sessions"][sid]["matched_link_against"] = ov["link_against"]
+            processed["sessions"][sid]["match_rmse_m"]         = None
+            processed["sessions"][sid]["match_method"]         = "manual"
+            print(f"  {sid}  MANUAL link {ov['link_with'][0]}→{ov['link_with'][1]} "
+                  f"(against: {ov['link_against'][0]}→{ov['link_against'][1]})")
+        else:
+            gps_pts = data["gps"]
+            if gps_pts:
+                link_with, link_against, rmse_m = snap_to_link(gps_pts)
+                processed["sessions"][sid]["matched_link_with"]    = link_with
+                processed["sessions"][sid]["matched_link_against"] = link_against
+                processed["sessions"][sid]["match_rmse_m"]         = rmse_m
+                print(f"  {sid}  link {link_with[0]}→{link_with[1]} "
+                      f"(against: {link_against[0]}→{link_against[1]})  "
+                      f"RMSE={rmse_m}m")
+        # Validate that every non-null count maps to a real directed edge.
+        # A count on a non-existent edge silently contributes zero to the model.
+        rec = processed["sessions"][sid]
+        lw, la = rec.get("matched_link_with"), rec.get("matched_link_against")
+        if lw and la:
+            if rec.get("with_count") is not None and not G.has_edge(lw[0], lw[1]):
+                raise ValueError(
+                    f"\nSession {sid}: with_count={rec['with_count']} assigned to "
+                    f"{lw[0]}→{lw[1]} but that directed edge does not exist in the network. "
+                    f"Add an entry to MANUAL_LINK_OVERRIDES with the correct link."
+                )
+            if rec.get("against_count") is not None and not G.has_edge(la[0], la[1]):
+                raise ValueError(
+                    f"\nSession {sid}: against_count={rec['against_count']} assigned to "
+                    f"{la[0]}→{la[1]} but that directed edge does not exist in the network. "
+                    f"Add an entry to MANUAL_LINK_OVERRIDES with the correct link."
+                )
         snap_count += 1
 
     # AADT estimation via hourly fraction profile
