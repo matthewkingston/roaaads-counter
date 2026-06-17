@@ -26,7 +26,7 @@ import numpy as np
 import osmnx as ox
 from collections import defaultdict
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
-                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
+                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
                    gravity_assign, site_flow, compute_chi2, print_chi2_table)
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -62,6 +62,10 @@ for _city_a, _city_b in _tuner_cfg.get("through_route_pairs", []):
             allowed_through_pairs.add((_nb, _na))
 
 THETA  = None   # logit dispersion; None = all-or-nothing
+K_res  = None   # set from tuned_params if two-component params present
+K_biz  = None
+slot_fracs_res = {}
+slot_fracs_biz = {}
 
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
@@ -75,12 +79,24 @@ if os.path.exists(TUNED_PARAMS):
         node_population[int(_nid)] = _val
     for _nid, _val in _tp.get("external_node_biz", {}).items():
         node_business_demand[int(_nid)] = _val
+    # Two-component params (present in runs from 2026-06-17 onward)
+    if "K_res" in _tp and "K_biz" in _tp:
+        K_res = _tp["K_res"]
+        K_biz = _tp["K_biz"]
+        slot_fracs_res = {tuple(int(x) for x in k.split(",")): v
+                          for k, v in _tp.get("slot_fracs_res", {}).items()}
+        slot_fracs_biz = {tuple(int(x) for x in k.split(",")): v
+                          for k, v in _tp.get("slot_fracs_biz", {}).items()}
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}"
-          + (f"  THETA={THETA:.4f}" if THETA is not None else "") + "]")
+          + (f"  THETA={THETA:.4f}" if THETA is not None else "")
+          + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if K_res is not None else "") + "]")
 
 # ── Assignment ────────────────────────────────────────────────────────────────
 
-link_flow = {}   # (u, v) → raw (pre-K) flow
+link_flow = {}          # (u, v) → scaled flow (K * raw or K_res*res + K_biz*biz)
+link_flow_res = None    # (u, v) → K_res * flow_res  (set in fast path only)
+link_flow_biz = None    # (u, v) → K_biz * flow_biz  (set in fast path only)
+_use_2c       = False   # True when two-component params and official_hourly.json available
 
 if os.path.exists(PATHS_CACHE):
     # ── Fast path: vectorised numpy using precomputed paths ───────────────────
@@ -120,17 +136,29 @@ if os.path.exists(PATHS_CACHE):
     total_weight = (w_pop + W_BIZ * w_biz).sum()
     print(f"  {len(node_ids_arr)} nodes  total weight {total_weight:,.0f}  (W_BIZ={W_BIZ})")
 
-    N_links      = len(link_u)
-    raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                                  W_BIZ, P, ALPHA, w_pop, w_biz,
-                                  THETA=THETA,
-                                  od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
-                                  od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
+    N_links   = len(link_u)
+    _kw = dict(THETA=THETA,
+               od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
+               od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
+    _use_2c = (K_res is not None and os.path.exists(OFFICIAL_HOURLY))
 
-    link_flow = {
-        (int(link_u[k]), int(link_v[k])): raw_flow_arr[k]
-        for k in range(N_links) if raw_flow_arr[k] > 0
-    }
+    if _use_2c:
+        raw_res, raw_biz = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
+                                          W_BIZ, P, ALPHA, w_pop, w_biz,
+                                          return_components=True, **_kw)
+        link_flow_res = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
+                         for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
+        link_flow_biz = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
+                         for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
+        link_flow = {lnk: link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
+                     for lnk in set(link_flow_res) | set(link_flow_biz)}
+    else:
+        raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
+                                      W_BIZ, P, ALPHA, w_pop, w_biz, **_kw)
+        link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k]
+                     for k in range(N_links) if raw_flow_arr[k] > 0}
+        link_flow_res = link_flow_biz = None
+
     print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
 
     # Reconstruct node_ids list and weights (needed for map / boundary markers)
@@ -216,18 +244,27 @@ def _link_label(u, v):
     name = _link_name.get((u, v), "")
     return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
-# ── Scale by K and report ─────────────────────────────────────────────────────
+# ── Scale legacy path by K (two-component path already scaled above) ──────────
 
-link_flow = {k: v * K for k, v in link_flow.items()}
+if not _use_2c:
+    link_flow = {k: v * K for k, v in link_flow.items()}
 
-print(f"\nOfficial count sites  (K = {K})")
+print(f"\nOfficial count sites  (K = {K:.4e}"
+      + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if _use_2c else "") + ")")
 print(f"  {'Site':<45s}  {'Modelled':>9s}  {'Observed':>9s}  {'Ratio':>6s}")
 for s in COUNT_SITES:
     f = site_flow(link_flow, s)
     print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
-rows, chi2, n_obs, n_eff = compute_chi2(link_flow, label_fn=_link_label,
-                                        link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS)
+rows, chi2, n_obs, n_eff = compute_chi2(
+    link_flow_res if _use_2c else link_flow,
+    label_fn=_link_label,
+    link_aadt_file=LINK_AADT,
+    exclude_links=EXCLUDE_LINKS,
+    link_flow_biz_dict=link_flow_biz if _use_2c else None,
+    slot_fracs_res=slot_fracs_res if _use_2c else None,
+    slot_fracs_biz=slot_fracs_biz if _use_2c else None,
+)
 print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
 # ── Serialise flows ───────────────────────────────────────────────────────────
