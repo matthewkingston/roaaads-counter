@@ -1,30 +1,20 @@
 """
-Gravity model OD matrix + all-or-nothing shortest-path assignment.
+Gravity model OD matrix assignment.
 
-Loads node weights from simulation/node_weights.json (produced by
-build_demographics.py) and assigns traffic to links using a gravity model.
+Requires the precomputed paths cache (simulation/newtownards_paths.npz, built by
+build_paths.py). Re-run build_paths.py whenever the road network changes or
+through_route_pairs in tuner_config.json changes.
 
-Fast path (recommended): load precomputed paths from simulation/newtownards_paths.npz
-(produced by build_paths.py). Reduces parameter-tuning runs to < 1s.
-
-Slow fallback: if the paths cache is absent, runs NetworkX Dijkstra (~10s).
-Re-run build_paths.py whenever the road network or external zone coordinates change.
-
-Outputs newtownards_flows.json; run build_demographics.py afterwards to see
-flows on the map.
+Outputs newtownards_flows.json; run build_demographics.py --map-only afterwards to
+refresh the map.
 
 Usage:
   python3 simulation/build_assignment.py
-
-Tunable parameters: K, W_BIZ, P, ALPHA (see Config section).
-Chi²/N uses per-session observations (same data as tuner). No Woodbury correction
-is applied, so the value will be slightly higher than the tuner's figure.
 """
 
-import json, math, time, os
+import json, time, os
 import numpy as np
 import osmnx as ox
-from collections import defaultdict
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
                    gravity_assign, site_flow, compute_chi2, print_chi2_table)
@@ -35,10 +25,18 @@ K      = 1.73   # global flow scale factor
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
 P      = 300.0  # peak travel time (seconds); flow peaks at d = P
 ALPHA  = 2.0    # tail decay exponent; flow ~ 1/d^ALPHA for large d
-OFFSCREEN_SPEED_MS = 80_000 / 3600   # 80 km/h — assumed speed for off-network boundary legs
 
 OUT_DIR    = "simulation"
 CONS_GRAPH = "simulation/newtownards_consolidated.graphml"
+
+# ── Require paths cache ───────────────────────────────────────────────────────
+
+if not os.path.exists(PATHS_CACHE):
+    print(f"ERROR: paths cache not found: {PATHS_CACHE}")
+    print("  Run:  python3 simulation/build_paths.py")
+    print("  (build time ~6 min; re-run whenever the road network or")
+    print("   through_route_pairs in tuner_config.json changes)")
+    raise SystemExit(1)
 
 # ── Load node weights ─────────────────────────────────────────────────────────
 
@@ -48,22 +46,10 @@ with open(WEIGHTS_FILE) as f:
 
 node_population      = {int(k): v for k, v in weights["node_population"].items()}
 node_business_demand = {int(k): v for k, v in weights["node_business_demand"].items()}
-node_effective_utm   = {int(k): (v[0], v[1]) for k, v in weights["node_effective_utm"].items()}
-boundary_node_ids    = set(weights["boundary_node_ids"])
 
-with open(TUNER_CONFIG) as f:
-    _tuner_cfg = json.load(f)
-_city_nodes = {name: cfg["nodes"] for name, cfg in _tuner_cfg["cities"].items()}
-allowed_through_pairs = set()
-for _city_a, _city_b in _tuner_cfg.get("through_route_pairs", []):
-    for _na in _city_nodes[_city_a]:
-        for _nb in _city_nodes[_city_b]:
-            allowed_through_pairs.add((_na, _nb))
-            allowed_through_pairs.add((_nb, _na))
-
-THETA  = None   # logit dispersion; None = all-or-nothing
-K_res  = None   # set from tuned_params if two-component params present
-K_biz  = None
+THETA          = None
+K_res          = None
+K_biz          = None
 slot_fracs_res = {}
 slot_fracs_biz = {}
 
@@ -79,7 +65,6 @@ if os.path.exists(TUNED_PARAMS):
         node_population[int(_nid)] = _val
     for _nid, _val in _tp.get("external_node_biz", {}).items():
         node_business_demand[int(_nid)] = _val
-    # Two-component params (present in runs from 2026-06-17 onward)
     if "K_res" in _tp and "K_biz" in _tp:
         K_res = _tp["K_res"]
         K_biz = _tp["K_biz"]
@@ -93,148 +78,70 @@ if os.path.exists(TUNED_PARAMS):
 
 # ── Assignment ────────────────────────────────────────────────────────────────
 
-link_flow = {}          # (u, v) → scaled flow (K * raw or K_res*res + K_biz*biz)
-link_flow_res = None    # (u, v) → K_res * flow_res  (set in fast path only)
-link_flow_biz = None    # (u, v) → K_biz * flow_biz  (set in fast path only)
-_use_2c       = False   # True when two-component params and official_hourly.json available
+print(f"Loading paths cache ({PATHS_CACHE}) …")
+t0    = time.time()
+cache = np.load(PATHS_CACHE)
 
-if os.path.exists(PATHS_CACHE):
-    # ── Fast path: vectorised numpy using precomputed paths ───────────────────
-    print(f"Loading paths cache ({PATHS_CACHE}) …")
-    t0 = time.time()
-    cache = np.load(PATHS_CACHE)
+node_ids_arr = cache["node_ids"]
+od_src       = cache["od_src"]
+od_dst       = cache["od_dst"]
+od_dist      = cache["od_dist"].astype(np.float64)
+pair_idx     = cache["pair_idx"]
+link_idx     = cache["link_idx"]
+link_u       = cache["link_u"]
+link_v       = cache["link_v"]
 
-    node_ids_arr = cache["node_ids"]          # int32 (N,)
-    od_src       = cache["od_src"]            # int32 (P,)  source node index
-    od_dst       = cache["od_dst"]            # int32 (P,)  target node index
-    od_dist      = cache["od_dist"].astype(np.float64)  # (P,) effective travel time (seconds)
-    pair_idx     = cache["pair_idx"]          # int32 (E,)  which OD pair
-    link_idx     = cache["link_idx"]          # int32 (E,)  which link
-    link_u       = cache["link_u"]            # int32 (L,)
-    link_v       = cache["link_v"]            # int32 (L,)
-
-    # Load stochastic paths if available
-    _has_stoch = "pair_idx_2" in cache and THETA is not None
-    if _has_stoch:
-        od_dist_2 = cache["od_dist_2"].astype(np.float64)
-        pair_idx_2 = cache["pair_idx_2"]
-        link_idx_2 = cache["link_idx_2"]
-        od_dist_3 = cache["od_dist_3"].astype(np.float64)
-        pair_idx_3 = cache["pair_idx_3"]
-        link_idx_3 = cache["link_idx_3"]
-        print(f"  Stochastic k=3 paths loaded  THETA={THETA:.4f}")
-    else:
-        od_dist_2 = pair_idx_2 = link_idx_2 = None
-        od_dist_3 = pair_idx_3 = link_idx_3 = None
-        if THETA is not None:
-            print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
-            THETA = None
-
-    # Node weight vector in the same order as node_ids_arr
-    w_pop = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
-    w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
-    total_weight = (w_pop + W_BIZ * w_biz).sum()
-    print(f"  {len(node_ids_arr)} nodes  total weight {total_weight:,.0f}  (W_BIZ={W_BIZ})")
-
-    N_links   = len(link_u)
-    _kw = dict(THETA=THETA,
-               od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
-               od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
-    _use_2c = (K_res is not None and os.path.exists(OFFICIAL_HOURLY))
-
-    if _use_2c:
-        raw_res, raw_biz = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                                          W_BIZ, P, ALPHA, w_pop, w_biz,
-                                          return_components=True, **_kw)
-        link_flow_res = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
-                         for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
-        link_flow_biz = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
-                         for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
-        link_flow = {lnk: link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
-                     for lnk in set(link_flow_res) | set(link_flow_biz)}
-    else:
-        raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                                      W_BIZ, P, ALPHA, w_pop, w_biz, **_kw)
-        link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k]
-                     for k in range(N_links) if raw_flow_arr[k] > 0}
-        link_flow_res = link_flow_biz = None
-
-    print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
-
-    # Reconstruct node_ids list and weights (needed for map / boundary markers)
-    node_ids    = [int(nid) for nid in node_ids_arr]
-    G           = ox.load_graphml(CONS_GRAPH)
-    node_weight = {int(nid): float(wp + W_BIZ * wb)
-                   for nid, wp, wb in zip(node_ids_arr, w_pop, w_biz)}
-
+_has_stoch = "pair_idx_2" in cache and THETA is not None
+if _has_stoch:
+    od_dist_2  = cache["od_dist_2"].astype(np.float64)
+    pair_idx_2 = cache["pair_idx_2"]
+    link_idx_2 = cache["link_idx_2"]
+    od_dist_3  = cache["od_dist_3"].astype(np.float64)
+    pair_idx_3 = cache["pair_idx_3"]
+    link_idx_3 = cache["link_idx_3"]
+    print(f"  Stochastic k=3 paths loaded  THETA={THETA:.4f}")
 else:
-    # ── Slow fallback: per-source NetworkX Dijkstra (~10s) ────────────────────
-    print("WARNING: paths cache not found — run build_paths.py for faster iterations")
-    import networkx as nx
+    od_dist_2 = pair_idx_2 = link_idx_2 = None
+    od_dist_3 = pair_idx_3 = link_idx_3 = None
+    if THETA is not None:
+        print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
+        THETA = None
 
-    print("Loading consolidated graph …")
-    G = ox.load_graphml(CONS_GRAPH)
-    G = ox.routing.add_edge_speeds(G)
-    G = ox.routing.add_edge_travel_times(G)
-    node_ids = list(G.nodes())
-    print(f"  {len(node_ids)} nodes  {G.number_of_edges()} edges")
+w_pop = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
+w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
+print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
-    node_weight = {}
-    for nid in node_ids:
-        pop = node_population.get(nid, 0)
-        biz = node_business_demand.get(nid, 0)
-        node_weight[nid] = pop + W_BIZ * biz
+N_links = len(link_u)
+_kw = dict(THETA=THETA,
+           od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
+           od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
+_use_2c = (K_res is not None and os.path.exists(OFFICIAL_HOURLY))
 
-    boundary_offscreen = {}
-    for nid in boundary_node_ids:
-        if nid not in G.nodes:
-            continue
-        nd = G.nodes[nid]
-        nx_pos, ny_pos = float(nd["x"]), float(nd["y"])
-        cx, cy = node_effective_utm[nid]
-        boundary_offscreen[nid] = math.sqrt((nx_pos - cx) ** 2 + (ny_pos - cy) ** 2) / OFFSCREEN_SPEED_MS
+if _use_2c:
+    raw_res, raw_biz = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
+                                      W_BIZ, P, ALPHA, w_pop, w_biz,
+                                      return_components=True, **_kw)
+    link_flow_res = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
+                     for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
+    link_flow_biz = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
+                     for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
+    link_flow = {lnk: link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
+                 for lnk in set(link_flow_res) | set(link_flow_biz)}
+else:
+    raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
+                                  W_BIZ, P, ALPHA, w_pop, w_biz, **_kw)
+    link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k] * K
+                 for k in range(N_links) if raw_flow_arr[k] > 0}
+    link_flow_res = link_flow_biz = None
 
-    for nid, extra in boundary_offscreen.items():
-        print(f"  Node {nid:4d}  offscreen leg: {extra:.0f} s")
+print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
 
-    print("Running assignment …")
-    t0 = time.time()
-    lf = defaultdict(float)
+# ── Street name lookup ────────────────────────────────────────────────────────
 
-    for idx, source in enumerate(node_ids):
-        w_i = node_weight[source]
-        if w_i <= 0:
-            continue
-        src_is_boundary = source in boundary_node_ids
-        try:
-            lengths, paths = nx.single_source_dijkstra(G, source, weight="travel_time")
-        except Exception:
-            continue
-        for target, path in paths.items():
-            if target == source or len(path) < 2:
-                continue
-            if src_is_boundary and target in boundary_node_ids:
-                if (source, target) not in allowed_through_pairs:
-                    continue
-            w_j = node_weight[target]
-            if w_j <= 0:
-                continue
-            dist = (lengths[target]
-                    + boundary_offscreen.get(target, 0)
-                    + boundary_offscreen.get(source, 0))
-            if dist < 1.0:
-                continue
-            _u   = dist / P
-            t_ij = w_i * w_j * (ALPHA + 1) * _u / (ALPHA + _u ** (ALPHA + 1))
-            for u, v in zip(path[:-1], path[1:]):
-                lf[(u, v)] += t_ij
-        if (idx + 1) % 100 == 0:
-            print(f"  {idx + 1}/{len(node_ids)} nodes  ({time.time()-t0:.1f}s)")
-
-    link_flow = dict(lf)
-    print(f"  Assignment complete in {time.time()-t0:.1f}s  ({len(link_flow)} loaded links)")
-
-# ── Street name lookup (from already-loaded graph) ────────────────────────────
+node_ids    = [int(nid) for nid in node_ids_arr]
+G           = ox.load_graphml(CONS_GRAPH)
+node_weight = {int(nid): float(wp + W_BIZ * wb)
+               for nid, wp, wb in zip(node_ids_arr, w_pop, w_biz)}
 
 _link_name = {(int(u), int(v)): d["name"]
               for u, v, d in G.edges(data=True) if d.get("name")}
@@ -244,10 +151,7 @@ def _link_label(u, v):
     name = _link_name.get((u, v), "")
     return f"{u}→{v}  {name}" if name else f"{u}→{v}"
 
-# ── Scale legacy path by K (two-component path already scaled above) ──────────
-
-if not _use_2c:
-    link_flow = {k: v * K for k, v in link_flow.items()}
+# ── Report ────────────────────────────────────────────────────────────────────
 
 print(f"\nOfficial count sites  (K = {K:.4e}"
       + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if _use_2c else "") + ")")
