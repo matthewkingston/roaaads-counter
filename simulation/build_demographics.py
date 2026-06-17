@@ -420,24 +420,25 @@ else:
     pois_utm["geometry"] = pois_utm.geometry.centroid
     print(f"  {len(pois_utm)} POIs after filtering")
 
-    # Snap each POI to its nearest consolidated node
-    kdtree = cKDTree(node_coords_utm)
-    poi_coords = [(geom.x, geom.y) for geom in pois_utm.geometry]
-    _, nearest_indices = kdtree.query(poi_coords)
-    pois_utm["nearest_node"] = [node_ids[int(i)] for i in nearest_indices]
+    # Snap each POI centroid to nearest road edge; split weight (1-t)/t between endpoints
+    node_poi_weight = {}
+    for _, _poi_row in pois_utm.iterrows():
+        _pt = _poi_row.geometry
+        _eidx = _edge_strtree.nearest(_pt)
+        _eu, _ev = _edge_keys[_eidx]
+        _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
+        node_poi_weight[_eu] = node_poi_weight.get(_eu, 0.0) + (1.0 - _t)
+        node_poi_weight[_ev] = node_poi_weight.get(_ev, 0.0) + _t
 
-    # POI count per node
-    node_poi_count = pois_utm.groupby("nearest_node").size().to_dict()
-
-    # Allocate workplace population to nodes within each DZ by POI weight
+    # Allocate workplace population to nodes within each DZ by edge-snapped POI weight
     node_business_demand = {}
     for dz_code, nodes_in_dz in dz_to_nodes.items():
         dz_wp = float(wp_lookup.get(dz_code, 0) or 0)
-        poi_weights = {n: node_poi_count.get(n, 0) for n in nodes_in_dz}
-        total_pois = sum(poi_weights.values())
+        poi_weights_dz = {n: node_poi_weight.get(n, 0.0) for n in nodes_in_dz}
+        total_weight = sum(poi_weights_dz.values())
         for n in nodes_in_dz:
-            if total_pois > 0:
-                node_business_demand[n] = dz_wp * poi_weights[n] / total_pois
+            if total_weight > 0:
+                node_business_demand[n] = dz_wp * poi_weights_dz[n] / total_weight
             else:
                 node_business_demand[n] = dz_wp / len(nodes_in_dz)
 
@@ -474,19 +475,22 @@ else:
         else pd.Series(False, index=_park_utm.index)
     )
 
-    _park_coords = [(_r.centroid_geom.x, _r.centroid_geom.y) for _, _r in _park_utm.iterrows()]
-    _, _park_nn = kdtree.query(_park_coords)  # reuse kdtree built for POIs
-    _park_utm["nearest_node"] = [node_ids[int(i)] for i in _park_nn]
-
+    # Snap each parking centroid to nearest road edge; split equiv between endpoints by t
     PARKING_SCALE_PUBLIC  = 25.0
     PARKING_SCALE_PRIVATE = 50.0
     node_parking_equiv = {}
     for _, _row in _park_utm.iterrows():
+        _pt = _row["centroid_geom"]
+        _eidx = _edge_strtree.nearest(_pt)
+        _eu, _ev = _edge_keys[_eidx]
+        _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
         _scale = PARKING_SCALE_PRIVATE if _row["is_private"] else PARKING_SCALE_PUBLIC
-        n = _row["nearest_node"]
         _equiv = _row["area_m2"] / _scale
-        node_business_demand[n] = node_business_demand.get(n, 0.0) + _equiv
-        node_parking_equiv[n]   = node_parking_equiv.get(n, 0.0) + _equiv
+        _eu_share, _ev_share = (1.0 - _t) * _equiv, _t * _equiv
+        node_business_demand[_eu] = node_business_demand.get(_eu, 0.0) + _eu_share
+        node_business_demand[_ev] = node_business_demand.get(_ev, 0.0) + _ev_share
+        node_parking_equiv[_eu]   = node_parking_equiv.get(_eu, 0.0) + _eu_share
+        node_parking_equiv[_ev]   = node_parking_equiv.get(_ev, 0.0) + _ev_share
 
     _n_priv  = int(_park_utm["is_private"].sum())
     _n_pub   = len(_park_utm) - _n_priv
