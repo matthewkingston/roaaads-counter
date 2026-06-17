@@ -705,9 +705,9 @@ for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
         color="#7b2d8b", fill=True, fill_color="#b05ec0", fill_opacity=0.65, weight=1,
         tooltip=(
             f"<b>Node {node_id}</b><br>"
-            f"workplace demand: {wp_demand:.1f}<br>"
-            f"parking equiv: {park_eq:.1f}<br>"
-            f"total demand: {biz:.1f}<br>"
+            f"workplace population: {wp_demand:.1f}<br>"
+            f"parking eq.: {park_eq:.1f}<br>"
+            f"business demand: {biz:.1f}<br>"
             f"est. pop: {node_pop:.1f}"
         ),
     ).add_to(biz_fg)
