@@ -1,6 +1,6 @@
 {
   "lambda": 1.0,
-  "gamma_coupling": 0.0,
+  "gamma_coupling_scale": 1.0,
   "through_route_pairs": [
     ["Comber",      "Donaghadee"],
     ["Comber",      "LowerArds"],

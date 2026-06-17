@@ -193,8 +193,11 @@ def _link_label(u, v):
 with open(TUNER_CONFIG) as f:
     config = json.load(f)
 
-lam          = config["lambda"]
-gamma_coupling = config.get("gamma_coupling", 0.0)   # coupling between f_res+f_biz and aggregate
+lam                  = config["lambda"]
+# Coupling scale: gamma per slot = gamma_coupling_scale / std_f_agg²
+# Set to 0.0 to disable, 1.0 for coupling as strong as the component priors.
+gamma_coupling_scale = config.get("gamma_coupling_scale",
+                                   config.get("gamma_coupling", 1.0))
 city_list    = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
@@ -493,7 +496,7 @@ for sk, idxs in slot_list:
         obs_Th[ia],        # T/3600 per obs
         mfr, inv_var,      # residential prior
         mfb, inv_var,      # business prior (same std as aggregate)
-        mfa, gamma_coupling,  # aggregate coupling
+        mfa, gamma_coupling_scale * inv_var,  # aggregate coupling: scale/std_f² per slot
     ))
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
