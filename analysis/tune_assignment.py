@@ -5,7 +5,7 @@ objective across all traffic count observations.
 Two-component model: residential (pop→pop) and business-adjacent (pb+bb) flows each
 carry their own temporal profile (f_s_res, f_s_biz) and global scale (K_res, K_biz).
 All four are jointly calibrated at each evaluation via 4-block alternating minimisation:
-  K-step   (2×2 linear system for K_res, K_biz)
+  K-step   (1D solve for total K; phi-step splits into K_res, K_biz)
   f_res-step  (per-slot analytical update, anchored by NTS residential prior)
   f_biz-step  (per-slot analytical update, anchored by NTS business prior)
   + aggregate coupling γ·(f_res + f_biz − 2·f_agg)² per slot to prevent collective drift.
@@ -166,8 +166,6 @@ base_w_biz = np.array([node_biz_full.get(nid, 0.0) for nid in node_ids], dtype=n
 
 link_name = {}
 if os.path.exists(CONS_GRAPH):
-    _ns  = "http://graphml.graphstruct.org/graphml"
-    _ns2 = "http://graphml.graphstruct.org/graphml"
     try:
         _tree = ET.parse(CONS_GRAPH)
         _root = _tree.getroot()
@@ -698,13 +696,6 @@ def objective(log_params, log_ref=None):
         for i_td, (_, node_id, _) in enumerate(tunable_dampings):
             curr_dampings[node_id] = math.exp(log_params[n_gravity + n_city + i_td])
 
-        # Apply to node arrays
-        for city_name, city_cfg in city_list:
-            for node_id in city_cfg["nodes"]:
-                damp = curr_dampings[node_id]
-                # Find this node's index in node_ids
-                pass  # done below via ext_indices
-
         # Use ext_indices for efficient override
         ext_pop_map = {}
         ext_biz_map = {}
@@ -985,9 +976,6 @@ tuned = {
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
     "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
-    # legacy key: combined average slot fracs for build_assignment.py
-    "slot_fracs": {f"{dt},{h}": round((slot_fracs_res[(dt,h)] + slot_fracs_biz[(dt,h)]) / 2, 8)
-                   for (dt, h) in slot_fracs_res},
     "external_node_pop": {str(k): round(v) for k, v in ext_pop_map.items()},
     "external_node_biz": {str(k): round(v) for k, v in ext_biz_map.items()},
     "chi2":       round(chi2, 3),

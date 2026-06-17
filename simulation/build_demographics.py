@@ -10,7 +10,7 @@ Outputs:
   model/newtownards_map.html              — updated map (overwrites previous)
 """
 
-import json, sys, urllib.request
+import json, os, sys, urllib.request
 import geopandas as gpd
 import pandas as pd
 import osmnx as ox
@@ -132,7 +132,6 @@ for _nid, (name, lat, lon) in _EXT_GEO.items():
 # in tuner_config.json (not when lat/lon has changed).
 
 if "--zones-only" in sys.argv:
-    import os as _os
     weights_path = f"{OUT_DIR}/node_weights.json"
     with open(weights_path) as f:
         w = json.load(f)
@@ -148,13 +147,16 @@ if "--zones-only" in sys.argv:
     print("Next: python3 simulation/build_assignment.py")
     sys.exit(0)
 
+# Sentinels: set by full run path; remain None in --map-only path.
+_park_utm = None
+pois_utm  = None
+
 # ── Fast path: --map-only ──────────────────────────────────────────────────────
 # Rebuilds only the map HTML, reusing node_weights.json and
 # newtownards_demographics.geojson written by a prior full run.
 # Use after retuning (build_assignment.py already updates the flows).
 
 if "--map-only" in sys.argv:
-    import os as _os
     print("--map-only: loading saved outputs …")
     transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
     transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
@@ -176,8 +178,7 @@ if "--map-only" in sys.argv:
 else:
     # ── 1. Download population data ────────────────────────────────────────────
 
-    import os as _os
-    if _os.path.exists(POPULATION_CACHE):
+    if os.path.exists(POPULATION_CACHE):
         print(f"Loading NISRA population from cache ({POPULATION_CACHE}) …")
         pop_df = pd.read_csv(POPULATION_CACHE)
     else:
@@ -357,7 +358,7 @@ else:
 
     # ── Download and cache OSM buildings ─────────────────────────────────────────
 
-    if _os.path.exists(BUILDING_CACHE):
+    if os.path.exists(BUILDING_CACHE):
         print(f"Loading OSM buildings from cache ({BUILDING_CACHE}) …")
         _bld_raw = gpd.read_file(BUILDING_CACHE)
     else:
@@ -497,7 +498,7 @@ else:
     print(f"  Study area workplace pop: {int(dz_final['workplace_pop'].sum()):,}")
 
 
-    if _os.path.exists(POI_CACHE):
+    if os.path.exists(POI_CACHE):
         print(f"Loading OSM POIs from cache ({POI_CACHE}) …")
         pois_raw = gpd.read_file(POI_CACHE)
     else:
@@ -564,7 +565,7 @@ else:
     # OSM parking polygons proxy vehicle trip attraction (visitor/customer demand).
     # Public: area/25 ≈ equivalent persons.  Private (access=private): area/50 (half weight).
 
-    if _os.path.exists(PARKING_CACHE):
+    if os.path.exists(PARKING_CACHE):
         print(f"Loading OSM parking from cache ({PARKING_CACHE}) …")
         _park_raw = gpd.read_file(PARKING_CACHE)
     else:
@@ -712,11 +713,7 @@ for htype in all_types:
 
 import math
 
-BOUNDARY_NODE_IDS = {
-    47, 65, 92, 97, 98, 99,
-    119, 180, 617, 618, 620,
-    731, 748, 749, 10000,
-}
+BOUNDARY_NODE_IDS = set(_EXT_GEO.keys())
 
 boundary_nodes_map = {}   # node_id → (wgs_lat, wgs_lon, dist, degree)
 interior_nodes_map = {}
@@ -838,9 +835,9 @@ biz_fg.add_to(m)
 
 # 5f. Parking polygons — realism check layer (red = private, blue = public/untagged)
 _park_wgs = None
-if "_park_utm" in dir():  # full run: variable already in scope
+if _park_utm is not None:  # full run: set in else branch above
     _park_wgs = _park_utm.to_crs("EPSG:4326")
-elif _os.path.exists(PARKING_CACHE):  # --map-only: reload and reprocess from cache
+elif os.path.exists(PARKING_CACHE):  # --map-only: reload and reprocess from cache
     _p = gpd.read_file(PARKING_CACHE).to_crs("EPSG:32630")
     _p = _p[_p.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     _p["area_m2"] = _p.geometry.area
@@ -874,9 +871,9 @@ if _park_wgs is not None:
 
 # 5g. POI layer — amenity/shop/office features used for workplace allocation
 _poi_wgs = None
-if "pois_utm" in dir():  # full run: already filtered + centroid geometry in UTM
+if pois_utm is not None:  # full run: set in else branch above
     _poi_wgs = pois_utm.to_crs("EPSG:4326")
-elif _os.path.exists(POI_CACHE):  # --map-only: reload and re-filter from cache
+elif os.path.exists(POI_CACHE):  # --map-only: reload and re-filter from cache
     _pp = gpd.read_file(POI_CACHE)
     if "amenity" in _pp.columns:
         _pp = _pp[_pp["amenity"].isna() | ~_pp["amenity"].isin(EXCLUDE_AMENITY)]
@@ -908,9 +905,8 @@ if _poi_wgs is not None:
     print(f"Added POI layer ({len(_poi_wgs)} POIs: orange=amenity, green=shop, blue=office)")
 
 # ── Optional flow layers (loaded from newtownards_flows.json if it exists) ────
-import os as _os, math as _math
 _flows_path = f"{OUT_DIR}/newtownards_flows.json"
-if _os.path.exists(_flows_path):
+if os.path.exists(_flows_path):
     import pyproj as _pyproj
     _tr_flow = _pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
 
@@ -934,12 +930,12 @@ if _os.path.exists(_flows_path):
             return 0.0, 1.0
         p10 = vals[max(0, int(len(vals) * 0.10))]
         p90 = vals[min(len(vals) - 1, int(len(vals) * 0.90))]
-        return _math.log10(max(p10, 1)), _math.log10(max(p90, 1))
+        return math.log10(max(p10, 1)), math.log10(max(p90, 1))
 
     def _t(flow, lmin, lmax):
         if flow <= 0:
             return 0.0
-        return max(0.0, min(1.0, (_math.log10(max(flow, 1)) - lmin) / max(lmax - lmin, 1e-6)))
+        return max(0.0, min(1.0, (math.log10(max(flow, 1)) - lmin) / max(lmax - lmin, 1e-6)))
 
     def _weight(t):
         return 1 + 7 * t
@@ -996,19 +992,7 @@ if _os.path.exists(_flows_path):
         fg.add_to(m)
 
     # ── Combined layer (always shown) ─────────────────────────────────────────
-    def _tt_combined(name, flow, length):
-        tip = f"{name or 'link'}<br>est. AADT: {flow:,.0f}"
-        if _has_components:
-            r = _link_flow_res.get((_u, _v), 0) + _link_flow_res.get((_v, _u), 0)
-            b = _link_flow_biz.get((_u, _v), 0) + _link_flow_biz.get((_v, _u), 0)
-            tot = r + b
-            if tot > 0:
-                tip += f"<br>  residential: {r:,.0f} ({100*r/tot:.0f}%)"
-                tip += f"<br>  business: {b:,.0f} ({100*b/tot:.0f}%)"
-        tip += f"<br>length: {length:.0f}m"
-        return tip
-
-    # The combined tooltip references (u,v) from the outer loop — build it inline
+    # Tooltip built inline because it needs per-edge (u,v) to look up res/biz components.
     lmin_c, lmax_c = _log_scale(_link_flow)
     fg_combined = folium.FeatureGroup(name="Road flows — est. AADT", show=True)
     for _u, _v, _data in G_cons.edges(data=True):

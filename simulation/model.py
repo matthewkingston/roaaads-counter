@@ -249,8 +249,6 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))
 
     n_obs   = len(rows)
-    n_slots = len(n_slots_seen) + (n_official // 3 if n_official else 0)
-    n_eff   = n_obs - 2 * (len(n_slots_seen) + (24 * 3 if n_official else 0))
     # N_eff: 2 df per slot (f_res and f_biz each); official hourly has 72 slots (24h × 3 day-types)
     n_eff   = n_obs - 2 * (len(n_slots_seen) + (72 if n_official else 0))
 

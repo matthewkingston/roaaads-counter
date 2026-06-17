@@ -45,6 +45,11 @@ def parse_iso(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def _u(n):
+    """Jeffreys-prior Poisson uncertainty: sqrt(n + 0.5); None-safe."""
+    return round(math.sqrt(n + 0.5), 3) if n is not None else None
+
+
 # ── Load hourly fraction profile ─────────────────────────────────────────────
 
 hourly_fracs = {}  # (day_of_week, hour) → (mean_fraction, std_fraction)
@@ -237,8 +242,6 @@ for sid, data in sessions.items():
     # Gives non-zero uncertainty for N=0; converges to sqrt(N) for large N.
     if processed["sessions"][sid].get("uncertainty_method") != "jeffreys":
         rec = processed["sessions"][sid]
-        def _u(n):
-            return round(math.sqrt(n + 0.5), 3) if n is not None else None
         rec["with_uncertainty"]    = _u(rec["with_count"])
         rec["against_uncertainty"] = _u(rec["against_count"])
         rec["total_uncertainty"]   = _u(rec["total_count"])
