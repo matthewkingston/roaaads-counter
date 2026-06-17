@@ -46,6 +46,27 @@ EXCLUDE_AMENITY = {
     "shelter", "telephone", "grit_bin",
 }
 
+# Per-tag trip-generation weights relative to baseline (café/small shop = 1.0).
+# Parking layer already handles large retail anchors; weights here add signal
+# from institutional employers and high-turnover stops without parking polygons.
+POI_WEIGHTS = {
+    # amenity tag → weight
+    "hospital":        5.0,
+    "school":          3.0,
+    "college":         3.0,
+    "university":      3.0,
+    "cinema":          3.0,
+    "theatre":         3.0,
+    "fuel":            2.0,
+    "fast_food":       1.5,
+    "place_of_worship": 0.5,
+    "atm":             0.5,
+    "toilets":         0.25,
+    # shop tag → weight
+    "supermarket":     1.5,
+    # office tag → weight (applied via _get_poi_weight below)
+}
+
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
     "trunk_link":    {"color": "#f5a623", "weight": 2},
@@ -428,8 +449,21 @@ else:
         _eidx = _edge_strtree.nearest(_pt)
         _eu, _ev = _edge_keys[_eidx]
         _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
-        node_poi_weight[_eu] = node_poi_weight.get(_eu, 0.0) + (1.0 - _t)
-        node_poi_weight[_ev] = node_poi_weight.get(_ev, 0.0) + _t
+        # Determine trip-generation weight: check amenity and shop tags first,
+        # then default to 2.0 for any office, else 1.0.
+        _amenity = _poi_row.get("amenity") if "amenity" in pois_utm.columns else None
+        _shop    = _poi_row.get("shop")    if "shop"    in pois_utm.columns else None
+        _office  = _poi_row.get("office")  if "office"  in pois_utm.columns else None
+        if pd.notna(_amenity) and _amenity in POI_WEIGHTS:
+            _w = POI_WEIGHTS[_amenity]
+        elif pd.notna(_shop) and _shop in POI_WEIGHTS:
+            _w = POI_WEIGHTS[_shop]
+        elif pd.notna(_office):
+            _w = 2.0
+        else:
+            _w = 1.0
+        node_poi_weight[_eu] = node_poi_weight.get(_eu, 0.0) + _w * (1.0 - _t)
+        node_poi_weight[_ev] = node_poi_weight.get(_ev, 0.0) + _w * _t
 
     # Allocate workplace population to nodes within each DZ by edge-snapped POI weight
     node_business_demand = {}
