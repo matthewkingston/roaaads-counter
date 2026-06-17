@@ -3,7 +3,7 @@ Fetch NISRA Census 2021 Data Zone population data, filter to the Newtownards
 study area, and generate an interactive map showing:
   - Road network (colour-coded by type)
   - DZ boundaries as a population-density choropleth
-  - Road nodes with road-length-weighted population estimates
+  - Road nodes with OSM-building-snapped population estimates (road-length fallback per DZ)
 
 Outputs:
   model/newtownards_demographics.geojson  — DZ polygons + population for study area
@@ -16,7 +16,8 @@ import pandas as pd
 import osmnx as ox
 import folium
 import numpy as np
-from shapely.geometry import Point
+from shapely.geometry import Point, LineString
+from shapely.strtree import STRtree
 from scipy.spatial import cKDTree
 import pyproj
 
@@ -35,6 +36,7 @@ GRAPH_PATH          = "simulation/newtownards_consolidated.graphml"
 WORKPLACE_DATA_FILE = "data/census-2021-apwp001.xlsx"
 POPULATION_CACHE    = "data/cache_nisra_population.csv"
 POI_CACHE           = "data/cache_osm_pois.geojson"
+BUILDING_CACHE      = "data/cache_osm_buildings.geojson"
 
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
@@ -229,9 +231,9 @@ else:
     # For each node within a DZ, sum outgoing edge lengths as its "road weight".
     # Each node receives: DZ_pop_estimated × (node_road_length / total_DZ_road_length)
 
-    print("Computing road-length-weighted node populations …")
+    print("Computing road-length-weighted node populations (fallback) …")
 
-    # Sum of outgoing edge lengths for every node in the consolidated graph
+    # Sum of outgoing edge lengths for every node in the consolidated graph (fallback)
     node_road_length = {
         n: sum(float(d.get("length", 0)) for _, _, d in G_cons.out_edges(n, data=True))
         for n in node_ids
@@ -240,17 +242,127 @@ else:
     # joined maps each node to its DZ; build dz_code → [node_id, ...] lookup
     dz_to_nodes = joined.groupby("DZ2021_cd")["node_id"].apply(list).to_dict()
 
-    node_population = {}   # node_id → float population share
+    # ── Build edge STRtree for rigorous "snap building to nearest road" ──────────
+    # STRtree.nearest() finds the true closest point on edge geometry, not midpoint.
+
+    _edge_keys = []
+    _edge_geom_list = []
+    for _eu, _ev, _edata in G_cons.edges(data=True):
+        _egeom = _edata.get("geometry")
+        if _egeom is None:
+            _ux, _uy = float(G_cons.nodes[_eu]["x"]), float(G_cons.nodes[_eu]["y"])
+            _vx, _vy = float(G_cons.nodes[_ev]["x"]), float(G_cons.nodes[_ev]["y"])
+            _egeom = LineString([(_ux, _uy), (_vx, _vy)])
+        _edge_keys.append((_eu, _ev))
+        _edge_geom_list.append(_egeom)
+    _edge_strtree = STRtree(_edge_geom_list)
+    print(f"  Built edge STRtree ({len(_edge_keys)} edges)")
+
+    # ── Download and cache OSM buildings ─────────────────────────────────────────
+
+    if _os.path.exists(BUILDING_CACHE):
+        print(f"Loading OSM buildings from cache ({BUILDING_CACHE}) …")
+        _bld_raw = gpd.read_file(BUILDING_CACHE)
+    else:
+        print("Downloading OSM buildings …")
+        _bld1 = ox.features_from_point(
+            CENTRE,
+            tags={"building": ["house", "detached", "semidetached_house", "terrace",
+                               "apartments", "bungalow", "residential", "flat",
+                               "dormitory", "cottage", "yes"]},
+            dist=RADIUS_M,
+        )
+        _bld2 = ox.features_from_point(
+            CENTRE, tags={"addr:housenumber": True}, dist=RADIUS_M
+        )
+        _bld_raw = pd.concat([_bld1, _bld2])
+        _bld_raw = _bld_raw[~_bld_raw.index.duplicated(keep="first")]
+        _bld_raw = _bld_raw[_bld_raw.geometry.notna()].copy()
+        _bld_raw["geometry"] = _bld_raw.geometry.centroid
+        _bld_raw = _bld_raw[_bld_raw.geometry.geom_type == "Point"]
+        _bld_raw = _bld_raw[["geometry"]].to_crs("EPSG:4326")
+        _bld_raw.to_file(BUILDING_CACHE, driver="GeoJSON")
+        print(f"  Cached → {BUILDING_CACHE}")
+
+    # Reset to clean integer index so sjoin indices are valid positional offsets
+    buildings_utm = _bld_raw.to_crs("EPSG:32630").reset_index(drop=True)
+    print(f"  {len(buildings_utm)} buildings in study area")
+
+    # Spatial join: which buildings fall inside each DZ?
+    _bld_dz = gpd.sjoin(
+        buildings_utm,
+        dz_final[["DZ2021_cd", "geometry"]],
+        how="inner", predicate="within",
+    )
+    dz_bld_idx = _bld_dz.groupby("DZ2021_cd").apply(lambda df: list(df.index)).to_dict()
+
+    # ── Building-snapped or road-length-weighted population per node ─────────────
+
+    FALLBACK_THRESHOLD = 3    # min buildings per DZ to use OSM method
+    POP_PER_BLD_WARN   = 10.0 # pop/building above this suggests missing data
+
+    node_population = {}
     pop_lookup = dz_final.set_index("DZ2021_cd")["pop_estimated"]
+    _quality_rows = []
 
     for dz_code, nodes_in_dz in dz_to_nodes.items():
         dz_pop = float(pop_lookup.get(dz_code, 0) or 0)
-        total_len = sum(node_road_length[n] for n in nodes_in_dz)
-        for n in nodes_in_dz:
-            if total_len > 0:
-                node_population[n] = dz_pop * node_road_length[n] / total_len
+        bld_indices = dz_bld_idx.get(dz_code, [])
+        n_bld = len(bld_indices)
+        pop_per_bld = dz_pop / n_bld if n_bld > 0 else float("inf")
+
+        too_few   = n_bld < FALLBACK_THRESHOLD
+        too_dense = pop_per_bld >= POP_PER_BLD_WARN
+        use_osm   = not too_few and not too_dense
+
+        weights = {}
+        if use_osm:
+            weights = {n: 0.0 for n in nodes_in_dz}
+            per_bld = 1.0 / n_bld
+            nodes_in_dz_set = set(nodes_in_dz)
+            dz_node_coords = [(G_cons.nodes[n]["x"], G_cons.nodes[n]["y"]) for n in nodes_in_dz]
+            _dz_kd = cKDTree(dz_node_coords)
+            for _, row in buildings_utm.iloc[bld_indices].iterrows():
+                pt = row.geometry
+                nearest_edge_idx = _edge_strtree.nearest(pt)
+                eu, ev = _edge_keys[nearest_edge_idx]
+                line = _edge_geom_list[nearest_edge_idx]
+                t = line.project(pt, normalized=True)  # 0=u end, 1=v end
+                in_dz = nodes_in_dz_set.intersection({eu, ev})
+                if len(in_dz) == 2:
+                    weights[eu] += (1 - t) * per_bld
+                    weights[ev] += t * per_bld
+                elif len(in_dz) == 1:
+                    weights[next(iter(in_dz))] += per_bld
+                else:
+                    # Neither edge endpoint is in this DZ — assign to nearest DZ node
+                    _, _nn = _dz_kd.query((pt.x, pt.y))
+                    weights[nodes_in_dz[_nn]] += per_bld
+            method = f"OSM buildings (n={n_bld}, pop/bld={pop_per_bld:.1f})"
+
+        if not use_osm:
+            total_len = sum(node_road_length[n] for n in nodes_in_dz)
+            for n in nodes_in_dz:
+                weights[n] = (node_road_length[n] / total_len) if total_len > 0 else 1.0 / len(nodes_in_dz)
+            if too_few:
+                method = f"road-length fallback (only {n_bld} buildings)"
             else:
-                node_population[n] = dz_pop / len(nodes_in_dz)
+                method = f"road-length fallback (pop/bld={pop_per_bld:.1f} >= {POP_PER_BLD_WARN})"
+
+        for n, w in weights.items():
+            node_population[n] = node_population.get(n, 0.0) + dz_pop * w
+
+        _quality_rows.append((dz_code, n_bld, pop_per_bld, method))
+
+    # Quality report
+    _n_osm = sum(1 for *_, m in _quality_rows if "fallback" not in m)
+    _n_fb  = len(_quality_rows) - _n_osm
+    print(f"\nDZ population distribution ({_n_osm} OSM buildings / {_n_fb} road-length fallback):")
+    print(f"  {'DZ code':<15} | {'n_bld':>5} | {'pop/bld':>7} | method")
+    for _dz_code, _n_bld, _ppb, _method in sorted(_quality_rows):
+        _ppb_str = f"{_ppb:.1f}" if _ppb != float("inf") else "    inf"
+        print(f"  {_dz_code:<15} | {_n_bld:>5} | {_ppb_str:>7} | {_method}")
+    print(f"  Totals: {len(_quality_rows)} DZs  |  OSM: {_n_osm}  |  Fallback: {_n_fb}")
 
     assigned = sum(1 for v in node_population.values() if v > 0)
     print(f"  {assigned} nodes assigned population (of {len(node_ids)} total)")
