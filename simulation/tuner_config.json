@@ -7,7 +7,9 @@
     ["Comber",      "Bangor"],
     ["Bangor",      "LowerArds"],
     ["Belfast",     "LowerArds"],
-    ["Dundonald",   "LowerArds"]
+    ["Dundonald",   "LowerArds"],
+    ["Dundonald",   "Donaghadee"],
+    ["Dundonald",   "Millisle"]
   ],
   "gravity_lambda": 0.05,
   "gravity_ref": {

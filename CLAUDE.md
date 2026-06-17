@@ -119,7 +119,8 @@ that use an out-of-network bypass (e.g. Belfast↔Bangor via the A2 coast road).
 Changing the whitelist requires rebuilding the paths cache (`build_paths.py`).
 
 Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
-Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds, Dundonald↔LowerArds.
+Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds, Dundonald↔LowerArds,
+Dundonald↔Donaghadee, Dundonald↔Millisle.
 
 ### K and slot fractions: joint analytical calibration
 At each optimizer evaluation, K (global scale) and per-slot hourly fractions {f_s} are
