@@ -16,3 +16,6 @@ cache/
 # Large reference data files — kept locally but not committed
 data/*.ods
 data/*.xlsx
+
+# Generated reports (produced by report_tune.py and tune_assignment.py)
+reports/

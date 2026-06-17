@@ -22,7 +22,7 @@ Node 180 (pop=50, wp=0) is excluded from stage 2 — too small to tune.
 Results:
   simulation/tuned_params.json   best params from this run (read by build_assignment.py)
   simulation/tuning_history.jsonl  appended record of every run
-  simulation/gravity_model_curve.png  kernel shape plot
+  reports/gravity_model_curve.png  kernel shape plot
 
 Usage:
   python3 analysis/tune_assignment.py
@@ -45,7 +45,7 @@ from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
 
 CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
 HISTORY_FILE      = "simulation/tuning_history.jsonl"
-CURVE_PNG         = "simulation/gravity_model_curve.png"
+CURVE_PNG         = "reports/gravity_model_curve.png"
 HOURLY_FRACS_FILE = "analysis/hourly_fractions.csv"
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
@@ -687,6 +687,11 @@ if _has_stoch:
     _log_p0_vals.append(math.log(max(grav_start["THETA"], _LOG_MIN)))
 log_p0 = np.array(_log_p0_vals, dtype=np.float64)
 
+# Capture starting gravity params for history (before any optimization)
+initial_gravity = {k: grav_start[k] for k in ("W_BIZ", "P", "ALPHA") if k in grav_start}
+if _has_stoch and "THETA" in grav_start:
+    initial_gravity["THETA"] = grav_start["THETA"]
+
 log_ref = None
 
 if stage == "full":
@@ -909,6 +914,7 @@ try:
     ax.legend()
     ax.grid(True, which="both", alpha=0.3)
     fig.tight_layout()
+    os.makedirs("reports", exist_ok=True)
     fig.savefig(CURVE_PNG, dpi=150)
     plt.close(fig)
     print(f"Saved → {CURVE_PNG}")
@@ -946,12 +952,22 @@ history_entry = {
     "chi2":      round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),
     "params":    params,
+    "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
+    "slot_prior": {
+        f"{dt},{h}": [round(mean_f, 8), round(std_f, 8)]
+        for (dt, h), (mean_f, std_f) in slot_prior.items()
+    },
     "observations": [
         {
             "kind":     observations[i_obs][0],
             "target":   (list(observations[i_obs][1])
                          if isinstance(observations[i_obs][1], tuple)
                          else observations[i_obs][1]),
+            "label":    (next(s["label"] for s in COUNT_SITES
+                              if s["node"] == observations[i_obs][1])
+                         if observations[i_obs][0] == "official"
+                         else _link_label(observations[i_obs][1][0],
+                                          observations[i_obs][1][1])),
             "observed": round(float(obs_eff[i_obs]), 1),
             "sigma":    round(float(sig_eff[i_obs]), 1),
             "model":    round(float(K * m_arr[i_obs]), 1),
