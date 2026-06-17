@@ -823,7 +823,7 @@ if _poi_wgs is not None:
     poi_fg.add_to(m)
     print(f"Added POI layer ({len(_poi_wgs)} POIs: orange=amenity, green=shop, blue=office)")
 
-# ── Optional flow layer (loaded from newtownards_flows.json if it exists) ────────
+# ── Optional flow layers (loaded from newtownards_flows.json if it exists) ────
 import os as _os, math as _math
 _flows_path = f"{OUT_DIR}/newtownards_flows.json"
 if _os.path.exists(_flows_path):
@@ -832,24 +832,36 @@ if _os.path.exists(_flows_path):
 
     with open(_flows_path) as _f:
         _flows_data = json.load(_f)
-    _link_flow = {tuple(int(x) for x in k.split(",")): v
-                  for k, v in _flows_data["flows"].items()}
 
-    # Percentile-anchored log colour scale (same logic as build_assignment.py)
-    _sorted = sorted(v for v in _link_flow.values() if v > 0)
-    if _sorted:
-        _p10 = _sorted[max(0, int(len(_sorted) * 0.10))]
-        _p90 = _sorted[min(len(_sorted) - 1, int(len(_sorted) * 0.90))]
-        _lmin = _math.log10(max(_p10, 1))
-        _lmax = _math.log10(max(_p90, 1))
-    else:
-        _lmin, _lmax = 0.0, 1.0
+    def _parse_flows(key):
+        return {tuple(int(x) for x in k.split(",")): v
+                for k, v in _flows_data.get(key, {}).items()}
 
-    def _flow_color(flow):
+    _link_flow     = _parse_flows("flows")
+    _link_flow_res = _parse_flows("flows_res")
+    _link_flow_biz = _parse_flows("flows_biz")
+    _has_components = bool(_link_flow_res)
+
+    # ── colour helpers ────────────────────────────────────────────────────────
+    def _log_scale(flow_dict):
+        """Return (lmin, lmax) from P10/P90 of a flow dict."""
+        vals = sorted(v for v in flow_dict.values() if v > 0)
+        if not vals:
+            return 0.0, 1.0
+        p10 = vals[max(0, int(len(vals) * 0.10))]
+        p90 = vals[min(len(vals) - 1, int(len(vals) * 0.90))]
+        return _math.log10(max(p10, 1)), _math.log10(max(p90, 1))
+
+    def _t(flow, lmin, lmax):
         if flow <= 0:
-            return "#cccccc"
-        t = (_math.log10(max(flow, 1)) - _lmin) / max(_lmax - _lmin, 1e-6)
-        t = max(0.0, min(1.0, t))
+            return 0.0
+        return max(0.0, min(1.0, (_math.log10(max(flow, 1)) - lmin) / max(lmax - lmin, 1e-6)))
+
+    def _weight(t):
+        return 1 + 7 * t
+
+    def _color_combined(t):
+        """Blue → yellow → red."""
         if t < 0.33:
             r, g, b = 0, int(180 * (t / 0.33)), int(200 * (1 - t / 0.33))
         elif t < 0.66:
@@ -860,34 +872,107 @@ if _os.path.exists(_flows_path):
             r, g, b = 220 + int(35 * s), int(180 * (1 - s)), 0
         return f"#{r:02x}{g:02x}{b:02x}"
 
-    def _flow_weight(flow):
-        if flow <= 0:
-            return 1
-        t = (_math.log10(max(flow, 1)) - _lmin) / max(_lmax - _lmin, 1e-6)
-        return 1 + 7 * max(0.0, min(1.0, t))
+    def _color_res(t):
+        """Light teal → dark forest green."""
+        r = int(30  + 80  * (1 - t))
+        g = int(140 + 80  * (1 - t * 0.5))
+        b = int(80  + 80  * (1 - t))
+        return f"#{r:02x}{g:02x}{b:02x}"
 
-    flow_fg = folium.FeatureGroup(name="Road flows — est. AADT", show=True)
-    for u, v, data in G_cons.edges(data=True):
-        flow = _link_flow.get((u, v), 0) + _link_flow.get((v, u), 0)
-        geom = data.get("geometry")
-        if geom and hasattr(geom, "coords"):
-            _coords = [_tr_flow.transform(x, y)[::-1] for x, y in geom.coords]
+    def _color_biz(t):
+        """Amber → dark orange-red."""
+        r = min(255, int(200 + 55 * t))
+        g = int(160 * (1 - t * 0.85))
+        b = int(20  * (1 - t))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    # ── helper to build one FeatureGroup ─────────────────────────────────────
+    def _add_flow_fg(flow_dict, name, color_fn, tooltip_fn, show):
+        lmin, lmax = _log_scale(flow_dict)
+        fg = folium.FeatureGroup(name=name, show=show)
+        for u, v, data in G_cons.edges(data=True):
+            flow = flow_dict.get((u, v), 0) + flow_dict.get((v, u), 0)
+            geom = data.get("geometry")
+            if geom and hasattr(geom, "coords"):
+                coords = [_tr_flow.transform(x, y)[::-1] for x, y in geom.coords]
+            else:
+                ud, vd = G_cons.nodes[u], G_cons.nodes[v]
+                lon_u, lat_u = _tr_flow.transform(float(ud["x"]), float(ud["y"]))
+                lon_v, lat_v = _tr_flow.transform(float(vd["x"]), float(vd["y"]))
+                coords = [(lat_u, lon_u), (lat_v, lon_v)]
+            ti = _t(flow, lmin, lmax)
+            folium.PolyLine(
+                coords,
+                color=color_fn(ti) if flow > 0 else "#cccccc",
+                weight=_weight(ti),
+                opacity=0.85,
+                tooltip=tooltip_fn(data.get("name", ""), flow,
+                                   float(data.get("length", 0))),
+            ).add_to(fg)
+        fg.add_to(m)
+
+    # ── Combined layer (always shown) ─────────────────────────────────────────
+    def _tt_combined(name, flow, length):
+        tip = f"{name or 'link'}<br>est. AADT: {flow:,.0f}"
+        if _has_components:
+            r = _link_flow_res.get((_u, _v), 0) + _link_flow_res.get((_v, _u), 0)
+            b = _link_flow_biz.get((_u, _v), 0) + _link_flow_biz.get((_v, _u), 0)
+            tot = r + b
+            if tot > 0:
+                tip += f"<br>  residential: {r:,.0f} ({100*r/tot:.0f}%)"
+                tip += f"<br>  business: {b:,.0f} ({100*b/tot:.0f}%)"
+        tip += f"<br>length: {length:.0f}m"
+        return tip
+
+    # The combined tooltip references (u,v) from the outer loop — build it inline
+    lmin_c, lmax_c = _log_scale(_link_flow)
+    fg_combined = folium.FeatureGroup(name="Road flows — est. AADT", show=True)
+    for _u, _v, _data in G_cons.edges(data=True):
+        _flow = _link_flow.get((_u, _v), 0) + _link_flow.get((_v, _u), 0)
+        _geom = _data.get("geometry")
+        if _geom and hasattr(_geom, "coords"):
+            _coords = [_tr_flow.transform(x, y)[::-1] for x, y in _geom.coords]
         else:
-            ud, vd = G_cons.nodes[u], G_cons.nodes[v]
-            lon_u, lat_u = _tr_flow.transform(float(ud["x"]), float(ud["y"]))
-            lon_v, lat_v = _tr_flow.transform(float(vd["x"]), float(vd["y"]))
-            _coords = [(lat_u, lon_u), (lat_v, lon_v)]
-        name = data.get("name", "")
-        length = float(data.get("length", 0))
+            _ud, _vd = G_cons.nodes[_u], G_cons.nodes[_v]
+            _lon_u, _lat_u = _tr_flow.transform(float(_ud["x"]), float(_ud["y"]))
+            _lon_v, _lat_v = _tr_flow.transform(float(_vd["x"]), float(_vd["y"]))
+            _coords = [(_lat_u, _lon_u), (_lat_v, _lon_v)]
+        _ti = _t(_flow, lmin_c, lmax_c)
+        _tip = f"{_data.get('name', '') or 'link'}<br>est. AADT: {_flow:,.0f}"
+        if _has_components:
+            _r = _link_flow_res.get((_u, _v), 0) + _link_flow_res.get((_v, _u), 0)
+            _b = _link_flow_biz.get((_u, _v), 0) + _link_flow_biz.get((_v, _u), 0)
+            _tot = _r + _b
+            if _tot > 0:
+                _tip += f"<br>&nbsp;&nbsp;residential: {_r:,.0f} ({100*_r/_tot:.0f}%)"
+                _tip += f"<br>&nbsp;&nbsp;business: {_b:,.0f} ({100*_b/_tot:.0f}%)"
+        _tip += f"<br>length: {float(_data.get('length', 0)):.0f}m"
         folium.PolyLine(
             _coords,
-            color=_flow_color(flow),
-            weight=_flow_weight(flow),
-            opacity=0.85,
-            tooltip=f"{name or 'link'}<br>est. AADT: {flow:,.0f}<br>length: {length:.0f}m",
-        ).add_to(flow_fg)
-    flow_fg.add_to(m)
-    print(f"Added flow layer from {_flows_path} ({len(_link_flow)} links)")
+            color=_color_combined(_ti) if _flow > 0 else "#cccccc",
+            weight=_weight(_ti), opacity=0.85, tooltip=_tip,
+        ).add_to(fg_combined)
+    fg_combined.add_to(m)
+
+    # ── Component layers (off by default, only added when data available) ─────
+    if _has_components:
+        _add_flow_fg(
+            _link_flow_res, "Road flows — residential (pop→pop)", _color_res,
+            lambda name, flow, length: (
+                f"{name or 'link'}<br>residential AADT: {flow:,.0f}<br>length: {length:.0f}m"
+            ),
+            show=False,
+        )
+        _add_flow_fg(
+            _link_flow_biz, "Road flows — business-adjacent (pb+bb)", _color_biz,
+            lambda name, flow, length: (
+                f"{name or 'link'}<br>business AADT: {flow:,.0f}<br>length: {length:.0f}m"
+            ),
+            show=False,
+        )
+        print(f"Added flow layers from {_flows_path} (combined + res + biz, {len(_link_flow)} links)")
+    else:
+        print(f"Added flow layer from {_flows_path} ({len(_link_flow)} links)")
 else:
     print(f"No flow data found at {_flows_path} — skipping flow layer")
 

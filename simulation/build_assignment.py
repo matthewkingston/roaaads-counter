@@ -174,10 +174,17 @@ print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 # ── Serialise flows ───────────────────────────────────────────────────────────
 
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
+out = {
+    "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "K": K,
+    "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
+}
+if _use_2c:
+    out["K_res"] = K_res
+    out["K_biz"] = K_biz
+    out["flows_res"] = {f"{u},{v}": v for (u, v), v in link_flow_res.items()}
+    out["flows_biz"] = {f"{u},{v}": v for (u, v), v in link_flow_biz.items()}
 with open(flows_path, "w") as f:
-    json.dump({
-        "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "K": K,
-        "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
-    }, f)
-print(f"\nSaved {len(link_flow)} link flows → {flows_path}")
+    json.dump(out, f)
+print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
+      + (f"  (+ res/biz components)" if _use_2c else ""))
 print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}")
