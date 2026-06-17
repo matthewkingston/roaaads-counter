@@ -276,6 +276,18 @@ LowerArds settled at +92%.
   anchored by component-specific priors from `hourly_fractions.csv`. The aggregate coupling
   (gamma_coupling_scale / std_f²) per slot keeps their sum near 2×f_agg. With 72 slots
   and 2 df each, N_eff = N − 2×N_slots = 230.
+- **Dead-end street absorption (ghost edges, fixed 2026-06-18):** OSMnx `simplify_graph`
+  treats bidirectional dead-end terminus nodes as degree-2 (in=1, out=1 in the directed
+  graph) and removes them, causing the dead-end edge to vanish from the consolidated graph.
+  Without correction, buildings on absorbed dead-end streets would snap to the nearest
+  surviving consolidated edge — often the main road but not reliably so for longer stubs
+  in dense areas. `build_demographics.py` now detects these absorbed termini by comparing
+  raw and consolidated network nodes, reconstructs their UTM geometry from the raw network,
+  and adds ~761 "ghost" edges to the STRtree. Buildings snapping to a ghost edge have all
+  their demand attributed to the surviving junction consolidated node (the only network
+  entry point for that street). No change to `build_paths.py`, `model.py`, or the paths
+  cache. Running `build_demographics.py` now prints "Added N ghost dead-end edges to
+  STRtree (absorbed termini)".
 
 ---
 

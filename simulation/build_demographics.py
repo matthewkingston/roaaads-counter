@@ -287,7 +287,73 @@ else:
         _edge_keys.append((_eu, _ev))
         _edge_geom_list.append(_egeom)
     _edge_strtree = STRtree(_edge_geom_list)
-    print(f"  Built edge STRtree ({len(_edge_keys)} edges)")
+    print(f"  Built edge STRtree ({len(_edge_keys)} consolidated edges)")
+
+    # ── Ghost edges for absorbed dead-end streets ─────────────────────────────────
+    # OSMnx simplify_graph treats bidirectional dead-end termini as degree-2 nodes
+    # (in=1, out=1 in the directed graph) and removes them, causing the dead-end edge
+    # to vanish from the consolidated graph. Buildings on those streets then snap to
+    # the nearest surviving edge — often but not always the correct junction road.
+    # Ghost edges restore the raw dead-end geometry to the STRtree so buildings snap
+    # to the right location; all their demand is then routed to the surviving junction
+    # consolidated node (since all traffic must enter the network there).
+    import ast as _ast
+    _G_raw = ox.load_graphml(f"{OUT_DIR}/newtownards_network.graphml")
+
+    # Build raw OSM node id → consolidated node id from osmid_original attribute
+    _raw_to_cons = {}
+    for _cid, _cdata in G_cons.nodes(data=True):
+        _oids = _cdata.get("osmid_original", [])
+        if isinstance(_oids, int):
+            _oids = [_oids]
+        elif isinstance(_oids, str):
+            _s = _oids.strip()
+            _oids = _ast.literal_eval(_s) if _s.startswith("[") else [int(_s)]
+        for _oid in _oids:
+            _raw_to_cons[int(_oid)] = _cid
+
+    _cons_node_set = set(G_cons.nodes())
+    _ghost_junction = {}   # STRtree index → consolidated junction node id
+
+    for _rn in list(_G_raw.nodes()):
+        # Dead-end terminus: directed degree 2 (in=1 out=1 on a bidirectional stub)
+        if _G_raw.in_degree(_rn) != 1 or _G_raw.out_degree(_rn) != 1:
+            continue
+        # Must not have survived into the consolidated graph
+        if _rn in _cons_node_set or int(_rn) in _raw_to_cons:
+            continue
+        # Find the single junction neighbour
+        _junc_raw = next(iter(_G_raw.successors(_rn)), None)
+        if _junc_raw is None:
+            continue
+        _junc_cons = _raw_to_cons.get(int(_junc_raw))
+        if _junc_cons is None:
+            continue
+        # Get raw edge geometry (WGS84 lon/lat) and project to UTM
+        _raw_edata = next(iter(_G_raw[_rn][_junc_raw].values()), {})
+        _raw_geom = _raw_edata.get("geometry")
+        if _raw_geom is not None:
+            _pts = [transformer_to_utm.transform(x, y) for x, y in _raw_geom.coords]
+        else:
+            _rnd = _G_raw.nodes[_rn]
+            _jnd = _G_raw.nodes[_junc_raw]
+            _pts = [
+                transformer_to_utm.transform(float(_rnd["x"]), float(_rnd["y"])),
+                transformer_to_utm.transform(float(_jnd["x"]), float(_jnd["y"])),
+            ]
+        if len(_pts) < 2:
+            continue
+        _ghost_geom = LineString(_pts)
+        if _ghost_geom.length < 0.1:
+            continue
+        _ghost_idx = len(_edge_keys)
+        _edge_keys.append(None)
+        _edge_geom_list.append(_ghost_geom)
+        _ghost_junction[_ghost_idx] = _junc_cons
+
+    # Rebuild STRtree to include ghost edges
+    _edge_strtree = STRtree(_edge_geom_list)
+    print(f"  Added {len(_ghost_junction)} ghost dead-end edges (absorbed termini)")
 
     # ── Download and cache OSM buildings ─────────────────────────────────────────
 
@@ -357,19 +423,28 @@ else:
             for _, row in buildings_utm.iloc[bld_indices].iterrows():
                 pt = row.geometry
                 nearest_edge_idx = _edge_strtree.nearest(pt)
-                eu, ev = _edge_keys[nearest_edge_idx]
-                line = _edge_geom_list[nearest_edge_idx]
-                t = line.project(pt, normalized=True)  # 0=u end, 1=v end
-                in_dz = nodes_in_dz_set.intersection({eu, ev})
-                if len(in_dz) == 2:
-                    weights[eu] += (1 - t) * per_bld
-                    weights[ev] += t * per_bld
-                elif len(in_dz) == 1:
-                    weights[next(iter(in_dz))] += per_bld
+                if nearest_edge_idx in _ghost_junction:
+                    # Absorbed dead-end: all demand → surviving junction consolidated node
+                    _junc = _ghost_junction[nearest_edge_idx]
+                    if _junc in nodes_in_dz_set:
+                        weights[_junc] += per_bld
+                    else:
+                        _, _nn = _dz_kd.query((pt.x, pt.y))
+                        weights[nodes_in_dz[_nn]] += per_bld
                 else:
-                    # Neither edge endpoint is in this DZ — assign to nearest DZ node
-                    _, _nn = _dz_kd.query((pt.x, pt.y))
-                    weights[nodes_in_dz[_nn]] += per_bld
+                    eu, ev = _edge_keys[nearest_edge_idx]
+                    line = _edge_geom_list[nearest_edge_idx]
+                    t = line.project(pt, normalized=True)  # 0=u end, 1=v end
+                    in_dz = nodes_in_dz_set.intersection({eu, ev})
+                    if len(in_dz) == 2:
+                        weights[eu] += (1 - t) * per_bld
+                        weights[ev] += t * per_bld
+                    elif len(in_dz) == 1:
+                        weights[next(iter(in_dz))] += per_bld
+                    else:
+                        # Neither edge endpoint is in this DZ — assign to nearest DZ node
+                        _, _nn = _dz_kd.query((pt.x, pt.y))
+                        weights[nodes_in_dz[_nn]] += per_bld
             method = f"OSM buildings (n={n_bld}, pop/bld={pop_per_bld:.1f})"
 
         if not use_osm:
@@ -447,8 +522,6 @@ else:
     for _, _poi_row in pois_utm.iterrows():
         _pt = _poi_row.geometry
         _eidx = _edge_strtree.nearest(_pt)
-        _eu, _ev = _edge_keys[_eidx]
-        _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
         # Determine trip-generation weight: check amenity and shop tags first,
         # then default to 2.0 for any office, else 1.0.
         _amenity = _poi_row.get("amenity") if "amenity" in pois_utm.columns else None
@@ -462,8 +535,14 @@ else:
             _w = 2.0
         else:
             _w = 1.0
-        node_poi_weight[_eu] = node_poi_weight.get(_eu, 0.0) + _w * (1.0 - _t)
-        node_poi_weight[_ev] = node_poi_weight.get(_ev, 0.0) + _w * _t
+        if _eidx in _ghost_junction:
+            _junc = _ghost_junction[_eidx]
+            node_poi_weight[_junc] = node_poi_weight.get(_junc, 0.0) + _w
+        else:
+            _eu, _ev = _edge_keys[_eidx]
+            _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
+            node_poi_weight[_eu] = node_poi_weight.get(_eu, 0.0) + _w * (1.0 - _t)
+            node_poi_weight[_ev] = node_poi_weight.get(_ev, 0.0) + _w * _t
 
     # Allocate workplace population to nodes within each DZ by edge-snapped POI weight
     node_business_demand = {}
@@ -517,15 +596,20 @@ else:
     for _, _row in _park_utm.iterrows():
         _pt = _row["centroid_geom"]
         _eidx = _edge_strtree.nearest(_pt)
-        _eu, _ev = _edge_keys[_eidx]
-        _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
         _scale = PARKING_SCALE_PRIVATE if _row["is_private"] else PARKING_SCALE_PUBLIC
         _equiv = _row["area_m2"] / _scale
-        _eu_share, _ev_share = (1.0 - _t) * _equiv, _t * _equiv
-        node_business_demand[_eu] = node_business_demand.get(_eu, 0.0) + _eu_share
-        node_business_demand[_ev] = node_business_demand.get(_ev, 0.0) + _ev_share
-        node_parking_equiv[_eu]   = node_parking_equiv.get(_eu, 0.0) + _eu_share
-        node_parking_equiv[_ev]   = node_parking_equiv.get(_ev, 0.0) + _ev_share
+        if _eidx in _ghost_junction:
+            _junc = _ghost_junction[_eidx]
+            node_business_demand[_junc] = node_business_demand.get(_junc, 0.0) + _equiv
+            node_parking_equiv[_junc]   = node_parking_equiv.get(_junc, 0.0) + _equiv
+        else:
+            _eu, _ev = _edge_keys[_eidx]
+            _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
+            _eu_share, _ev_share = (1.0 - _t) * _equiv, _t * _equiv
+            node_business_demand[_eu] = node_business_demand.get(_eu, 0.0) + _eu_share
+            node_business_demand[_ev] = node_business_demand.get(_ev, 0.0) + _ev_share
+            node_parking_equiv[_eu]   = node_parking_equiv.get(_eu, 0.0) + _eu_share
+            node_parking_equiv[_ev]   = node_parking_equiv.get(_ev, 0.0) + _ev_share
 
     _n_priv  = int(_park_utm["is_private"].sum())
     _n_pub   = len(_park_utm) - _n_priv
