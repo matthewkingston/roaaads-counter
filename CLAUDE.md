@@ -15,7 +15,7 @@ committing. This file is the authoritative record of model state.
 ```
 python3 simulation/build_network.py          # build road network from OSM
 python3 simulation/build_demographics.py     # node weights + map scaffold
-python3 simulation/build_paths.py            # precompute k=3 shortest paths (~30 min)
+python3 simulation/build_paths.py            # precompute k=3 shortest paths (~6 min)
 
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
 python3 analysis/aggregate_counts.py         # combine per-session AADT → link_aadt.json
