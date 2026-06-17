@@ -139,6 +139,7 @@ if "--map-only" in sys.argv:
         _w = json.load(_f)
     node_population      = {int(k): v for k, v in _w["node_population"].items()}
     node_business_demand = {int(k): v for k, v in _w["node_business_demand"].items()}
+    node_parking_equiv   = {int(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
     print("Loading DZ boundaries …")
     dz_final = gpd.read_file(f"{OUT_DIR}/newtownards_demographics.geojson")
     print(f"  {len(dz_final)} Data Zones · {len(node_ids)} nodes")
@@ -479,10 +480,13 @@ else:
 
     PARKING_SCALE_PUBLIC  = 25.0
     PARKING_SCALE_PRIVATE = 50.0
+    node_parking_equiv = {}
     for _, _row in _park_utm.iterrows():
         _scale = PARKING_SCALE_PRIVATE if _row["is_private"] else PARKING_SCALE_PUBLIC
         n = _row["nearest_node"]
-        node_business_demand[n] = node_business_demand.get(n, 0.0) + _row["area_m2"] / _scale
+        _equiv = _row["area_m2"] / _scale
+        node_business_demand[n] = node_business_demand.get(n, 0.0) + _equiv
+        node_parking_equiv[n]   = node_parking_equiv.get(n, 0.0) + _equiv
 
     _n_priv  = int(_park_utm["is_private"].sum())
     _n_pub   = len(_park_utm) - _n_priv
@@ -513,6 +517,7 @@ else:
         json.dump({
             "node_population":      {str(k): v for k, v in node_population.items()},
             "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
+            "node_parking_equiv":   {str(k): v for k, v in node_parking_equiv.items()},
             "node_effective_utm":   {str(k): list(v) for k, v in node_effective_utm.items()},
             "boundary_node_ids":    list(EXTERNAL_ZONES.keys()),
         }, f)
@@ -626,8 +631,8 @@ for node_id, (nlat, nlon, dist, deg) in boundary_nodes_map.items():
     ).add_to(boundary_fg)
 boundary_fg.add_to(m)
 
-# Interior nodes — OFF by default, small blue dots
-interior_fg = folium.FeatureGroup(name=f"Interior nodes ({len(interior_nodes_map)})", show=False)
+# Interior nodes — ON by default, small blue dots
+interior_fg = folium.FeatureGroup(name=f"Interior nodes ({len(interior_nodes_map)})", show=True)
 for node_id, (nlat, nlon, dist, deg) in interior_nodes_map.items():
     node_pop = node_population.get(node_id, 0)
     node_biz = node_business_demand.get(node_id, 0)
@@ -656,7 +661,7 @@ def pop_color(pop):
     b = int(255 * (1 - t * 0.3))
     return f"#{r:02x}{g:02x}{b:02x}"
 
-dz_fg = folium.FeatureGroup(name=f"Data Zones — pop estimate ({len(dz_plot)})", show=True)
+dz_fg = folium.FeatureGroup(name=f"Data Zones — pop estimate ({len(dz_plot)})", show=False)
 for _, row in dz_plot.iterrows():
     geojson_str = json.dumps(row.geometry.__geo_interface__)
     pop_est = int(row["pop_estimated"]) if pd.notna(row["pop_estimated"]) else None
@@ -683,21 +688,26 @@ for _, row in dz_plot.iterrows():
 dz_fg.add_to(m)
 
 # 5e. Business demand nodes — proportional purple circles, OFF by default
-max_biz = max(node_business_demand.values(), default=1)
-biz_fg = folium.FeatureGroup(name="Workplace population nodes", show=False)
+# Scale based on internal nodes only so boundary giants (Belfast) don't collapse the range.
+max_biz_internal = max((node_business_demand.get(n, 0) for n in interior_nodes_map), default=1)
+biz_fg = folium.FeatureGroup(name="Business demand nodes", show=False)
 all_nodes_map = {**boundary_nodes_map, **interior_nodes_map}
 for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
     biz = node_business_demand.get(node_id, 0)
     if biz <= 0:
         continue
-    radius = max(3, 14 * (biz / max_biz) ** 0.5)
-    node_pop = node_population.get(node_id, 0)
+    radius = max(3, 14 * (biz / max_biz_internal) ** 0.5)
+    node_pop  = node_population.get(node_id, 0)
+    park_eq   = node_parking_equiv.get(node_id, 0)
+    wp_demand = biz - park_eq
     folium.CircleMarker(
         location=[nlat, nlon], radius=radius,
         color="#7b2d8b", fill=True, fill_color="#b05ec0", fill_opacity=0.65, weight=1,
         tooltip=(
             f"<b>Node {node_id}</b><br>"
-            f"workplace pop: {biz:.1f}<br>"
+            f"workplace demand: {wp_demand:.1f}<br>"
+            f"parking equiv: {park_eq:.1f}<br>"
+            f"total demand: {biz:.1f}<br>"
             f"est. pop: {node_pop:.1f}"
         ),
     ).add_to(biz_fg)
