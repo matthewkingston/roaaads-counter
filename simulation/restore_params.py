@@ -1,9 +1,10 @@
 """
 Restore tuned_params.json from a specific entry in tuning_history.jsonl.
 
-For gravity-only history entries, only the 4 gravity params (K, W_BIZ, P,
-ALPHA) are written; existing external zone entries in tuned_params.json
-are left unchanged.  For full-stage entries, all tuned params are restored.
+All params stored in the history entry's 'params' dict are written directly to
+tuned_params.json (existing keys are overwritten; unrelated keys are preserved).
+For gravity-only runs the external zone params are absent from history, so any
+existing external zone values in tuned_params.json are retained unchanged.
 
 Usage:
   python3 simulation/restore_params.py --list          # show all runs
@@ -33,8 +34,8 @@ if "--list" in sys.argv or len(sys.argv) < 2:
         sys.exit(0)
     print(f"  {'#':>3}  {'ID':<10}  {'Date':<10}  {'Stage':<8}  {'N':>4}  {'χ²/N':>6}  {'git':<8}  Note")
     for i, e in enumerate(entries, 1):
-        date  = e.get("timestamp", "")[:10]
-        note  = e.get("note", "")
+        date = e.get("timestamp", "")[:10]
+        note = e.get("note", "")
         print(f"  {i:>3}  {e['id']:<10}  {date:<10}  {e['stage']:<8}"
               f"  {e['n_obs']:>4}  {e['chi2_per_n']:>6.3f}  {e['git_hash']:<8}  {note}")
     sys.exit(0)
@@ -59,9 +60,9 @@ if len(matches) > 1:
 entry = matches[0]
 
 if entry["params"].get("kernel") != "rational":
-    print("WARNING: this history entry uses the old lognormal kernel (no 'kernel' key or "
-          "kernel != 'rational'). Restoring it will produce incorrect results with the "
-          "current rational-kernel pipeline. Aborting.")
+    print("WARNING: this history entry uses the old lognormal kernel. "
+          "Restoring it will produce incorrect results with the current "
+          "rational-kernel pipeline. Aborting.")
     sys.exit(1)
 
 # ── Restore ───────────────────────────────────────────────────────────────────
@@ -73,29 +74,38 @@ if os.path.exists(TUNED_PARAMS):
 
 params = entry["params"]
 
-GRAVITY_KEYS = ("K", "W_BIZ", "P", "ALPHA")
-ALL_KEYS = list(params.keys())
-
 print(f"Restoring from run {entry['id']}  "
-      f"({entry['stage']}, {entry['timestamp'][:10]}, χ²/N={entry['chi2_per_n']:.3f})")
+      f"({entry['stage']}, {entry['timestamp'][:10]}, χ²/N={entry['chi2_per_n']:.4f})")
 if entry.get("note"):
     print(f"  note: {entry['note']}")
+hp = entry.get("tuner_hyperparams", {})
+if hp:
+    print(f"  hyperparams: " +
+          "  ".join(f"{k}={v}" for k, v in hp.items()))
 print()
 
-# Print before/after for scalar gravity params
-print(f"  {'param':<8}  {'before':>12}  {'after':>12}")
-for key in GRAVITY_KEYS:
-    before = existing.get(key, "—")
-    after  = params[key]
-    before_str = f"{before:.6g}" if isinstance(before, float) else str(before)
-    print(f"  {key:<8}  {before_str:>12}  {after:>12.6g}")
+# Scalar gravity params: show before/after
+SCALAR_KEYS = [k for k in ("K", "K_res", "K_biz", "W_BIZ", "P", "ALPHA", "THETA")
+               if k in params]
+if SCALAR_KEYS:
+    print(f"  {'param':<8}  {'before':>14}  {'after':>14}")
+    for key in SCALAR_KEYS:
+        before = existing.get(key, "—")
+        after  = params[key]
+        before_s = f"{before:.6g}" if isinstance(before, (int, float)) else str(before)
+        print(f"  {key:<8}  {before_s:>14}  {after:>14.6g}")
 
-non_scalar = [k for k in ALL_KEYS if k not in GRAVITY_KEYS]
-if non_scalar:
-    print(f"\n  External zone params restored: {', '.join(non_scalar)}")
+# Report what else is being written
+n_slot_r = len(params.get("slot_fracs_res", {}))
+n_slot_b = len(params.get("slot_fracs_biz", {}))
+if n_slot_r or n_slot_b:
+    print(f"\n  Slot fracs: {n_slot_r} res + {n_slot_b} biz slots")
+ext_keys = [k for k in params if k.startswith("external_")]
+if ext_keys:
+    print(f"  External zone params: {', '.join(ext_keys)}")
 
 existing.update(params)
-for _stale in ("MU", "SIGMA"):
+for _stale in ("MU", "SIGMA", "slot_fracs"):
     existing.pop(_stale, None)
 existing["chi2"]       = entry["chi2"]
 existing["chi2_per_n"] = entry["chi2_per_n"]

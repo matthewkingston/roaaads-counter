@@ -1078,6 +1078,13 @@ history_entry = {
     "chi2":      round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),
     "params":    params,
+    "tuner_hyperparams": {
+        "phi_prior":            phi_prior,
+        "phi_std":              phi_std,
+        "gamma_coupling_scale": gamma_coupling_scale,
+        "gravity_lambda":       grav_lam,
+        "lambda":               lam,
+    },
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
         f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8), round(mfb, 8)]

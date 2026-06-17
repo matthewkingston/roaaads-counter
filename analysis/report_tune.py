@@ -84,7 +84,7 @@ def _section_by_measurement(e):
     rows = sorted(obs, key=lambda o: abs(o["z"]), reverse=True)
     for o in rows:
         marker = "*" if abs(o["z"]) > 2 else " "
-        lbl = o.get("label", str(o["target"]))
+        lbl = o.get("label", "?")
         if len(lbl) > LW:
             lbl = lbl[:LW - 1] + "…"
         lines.append(
@@ -116,24 +116,30 @@ def _section_by_link(e):
     lines = [_rule("CHI² TABLE: BY LINK"), ""]
     LW = 54
 
-    # Group walking obs by canonical target key; official sites kept as-is
-    link_groups = {}  # key → list of obs
+    # Group observations by site/link.
+    # Walking obs: group by label (unique per directed link, same across sessions).
+    # Official hourly obs: group by site (strip the " hXX" hour suffix from label).
+    link_groups = {}
     for o in obs:
-        if o["kind"] in ("official", "official_hourly"):
-            key = ("official_hourly", o["label"])
+        kind = o["kind"]
+        lbl  = o.get("label", "?")
+        if kind in ("official", "official_hourly"):
+            # "731 h08" → "731";  "site 507, A21 ... h08" → "site 507, A21 ..."
+            site_key = lbl.rsplit(" h", 1)[0] if " h" in lbl else lbl
+            key = ("official_hourly", site_key)
         else:
-            key = ("walking", tuple(o["target"]))
+            key = ("walking", lbl)
         link_groups.setdefault(key, []).append(o)
 
     # Build rows: (Σz², max|z|, z_min, z_max, N_sess, lbl, kind)
     rows = []
-    for (kind, target), group in link_groups.items():
+    for (kind, grp_key), group in link_groups.items():
         zvals  = [o["z"] for o in group]
         sum_z2 = sum(z * z for z in zvals)
         z_min  = min(zvals)
         z_max  = max(zvals)
         max_az = max(abs(z) for z in zvals)
-        lbl    = group[0].get("label", str(target))
+        lbl    = group[0].get("label", str(grp_key))
         rows.append((sum_z2, max_az, z_min, z_max, len(group), lbl, kind))
 
     rows.sort(key=lambda r: r[0], reverse=True)
@@ -213,13 +219,24 @@ def _section_gravity(e, prev_entry, config):
             f"{d_s:>8}  {ref_s}  {dr_s:>8}  {pl_s}"
         )
 
-    # K (analytical, not tuned)
-    K = params.get("K")
+    # K components (analytical, not tuned)
+    K     = params.get("K")
+    K_res = params.get("K_res")
+    K_biz = params.get("K_biz")
     if K is not None:
         lines.append(
             f"  {'K':<8}  {'(analytical)':>12}  {K:>12.4e}  "
             f"{'':>8}  {'—':>12}  {'':>8}  {'':>9}"
         )
+    if K_res is not None and K_biz is not None and K:
+        phi = K_biz / K
+        lines.append(f"  {'K_res':<8}  {'':>12}  {K_res:>12.4e}  "
+                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*(1-phi):.1f}% of K)")
+        lines.append(f"  {'K_biz':<8}  {'':>12}  {K_biz:>12.4e}  "
+                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*phi:.1f}% of K, phi)")
+        phi_p = e.get("tuner_hyperparams", {}).get("phi_prior", 0.35)
+        lines.append(f"  {'phi':<8}  {'':>12}  {phi:>12.4f}  "
+                     f"{'':>8}  {phi_p:>12.4f}  {'':>8}  {'':>9}  (phi_prior)")
 
     lines.append("")
     lines.append(
@@ -305,44 +322,56 @@ def _section_external(e, config):
 # ── Section: SLOT FRACTIONS ───────────────────────────────────────────────────
 
 def _section_slots(e):
-    params     = e["params"]
-    slot_fracs = params.get("slot_fracs", {})
-    slot_prior = e.get("slot_prior", {})
+    params         = e["params"]
+    slot_fracs_res = params.get("slot_fracs_res", {})
+    slot_fracs_biz = params.get("slot_fracs_biz", {})
+    slot_prior     = e.get("slot_prior", {})
 
-    if not slot_fracs:
+    if not slot_fracs_res and not slot_fracs_biz:
         return [_rule("SLOT FRACTIONS"), "", "  (no slot fraction data)", ""]
 
     lines = [_rule("SLOT FRACTIONS"), ""]
+    # Columns: type, hour, prior_agg, f_res, pull_res, f_biz, pull_biz, coupling
     header = (
-        f"  {'Type':<5}  {'Hr':>2}  {'Prior':>10}  {'Inferred':>10}  "
-        f"{'Δ':>10}  {'Δ%':>7}  {'|Δ|/σ':>7}  {'N':>3}"
+        f"  {'Type':<5}  {'Hr':>2}  {'Prior_agg':>9}  "
+        f"{'f_res':>8}  {'Δ/σ_res':>7}  "
+        f"{'f_biz':>8}  {'Δ/σ_biz':>7}  "
+        f"{'f_r+f_b':>8}  {'2·prior':>8}"
     )
     lines.append(header)
     lines.append("  " + "─" * (len(header) - 2))
 
-    # Build rows sorted by |pull| descending
-    rows = []
-    for sk_str, f_s in slot_fracs.items():
-        dt_str, h_str = sk_str.split(",")
-        dt, h = int(dt_str), int(h_str)
+    all_keys = sorted(set(slot_fracs_res) | set(slot_fracs_biz),
+                      key=lambda s: (int(s.split(",")[0]), int(s.split(",")[1])))
+
+    for sk_str in all_keys:
+        dt, h = int(sk_str.split(",")[0]), int(sk_str.split(",")[1])
+        f_r = slot_fracs_res.get(sk_str, float("nan"))
+        f_b = slot_fracs_biz.get(sk_str, float("nan"))
+
         if sk_str in slot_prior:
-            mean_f, std_f = slot_prior[sk_str][:2]
+            mfa, std_f, mfr, mfb = slot_prior[sk_str]
         else:
-            mean_f, std_f = f_s, float("nan")
-        pull    = abs(f_s - mean_f) / std_f if std_f > 0 and not math.isnan(std_f) else float("nan")
-        delta   = f_s - mean_f
-        dpct    = 100.0 * delta / mean_f if mean_f != 0 else float("nan")
-        rows.append((pull, dt, h, mean_f, std_f, f_s, delta, dpct))
+            mfa = std_f = mfr = mfb = float("nan")
 
-    rows.sort(key=lambda r: r[0] if not math.isnan(r[0]) else -1, reverse=True)
+        def _pull(f, prior):
+            if std_f > 0 and not any(math.isnan(x) for x in (f, prior, std_f)):
+                return (f - prior) / std_f
+            return float("nan")
 
-    for (pull, dt, h, mean_f, std_f, f_s, delta, dpct) in rows:
-        pull_s = f"{pull:>7.2f}σ" if not math.isnan(pull) else f"{'—':>7s} "
-        dpct_s = _fmt_pct(dpct) if not math.isnan(dpct) else "    —"
-        # N: not stored in history; show "?" to indicate unknown count
+        pr = _pull(f_r, mfr)
+        pb = _pull(f_b, mfb)
+        f_sum  = f_r + f_b if not (math.isnan(f_r) or math.isnan(f_b)) else float("nan")
+        f_agg2 = 2 * mfa if not math.isnan(mfa) else float("nan")
+
+        def _fs(v): return f"{v:>8.5f}" if not math.isnan(v) else f"{'—':>8}"
+        def _ps(v): return f"{v:>+7.2f}" if not math.isnan(v) else f"{'—':>7}"
+
         lines.append(
-            f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mean_f:>10.6f}  {f_s:>10.6f}  "
-            f"{delta:>+10.6f}  {dpct_s:>7}  {pull_s}  {'?':>3}"
+            f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.5f}  "
+            f"{_fs(f_r)}  {_ps(pr)}  "
+            f"{_fs(f_b)}  {_ps(pb)}  "
+            f"{_fs(f_sum)}  {_fs(f_agg2)}"
         )
 
     lines.append("")
@@ -352,6 +381,11 @@ def _section_slots(e):
 # ── Pull plot ─────────────────────────────────────────────────────────────────
 
 def _make_pull_plot(e, out_path):
+    """
+    Two side-by-side heatmaps: residential pull and business pull.
+    Each heatmap is 24 rows (hour 0–23) × 3 columns (Wkday / Sat / Sun).
+    Cell colour = (f_inferred − f_prior_component) / σ_agg  (diverging: blue < 0 < red).
+    """
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -361,69 +395,77 @@ def _make_pull_plot(e, out_path):
         print("matplotlib not available — skipping pull plot")
         return
 
-    params     = e["params"]
-    slot_fracs = params.get("slot_fracs", {})
-    slot_prior = e.get("slot_prior", {})
+    params         = e["params"]
+    slot_fracs_res = params.get("slot_fracs_res", {})
+    slot_fracs_biz = params.get("slot_fracs_biz", {})
+    slot_prior     = e.get("slot_prior", {})
 
-    if not slot_fracs or not slot_prior:
+    if (not slot_fracs_res and not slot_fracs_biz) or not slot_prior:
         print("  No slot prior data — skipping pull plot")
         return
 
-    # Build (pull, label) pairs sorted by |pull| descending
-    rows = []
-    for sk_str, f_s in slot_fracs.items():
-        if sk_str not in slot_prior:
+    # Build pull matrices: shape (24 hours, 3 day-types)
+    # Day-type columns: 0=Wkday, 1=Sat, 2=Sun
+    pull_res = np.full((24, 3), np.nan)
+    pull_biz = np.full((24, 3), np.nan)
+
+    for sk_str, prior_vals in slot_prior.items():
+        dt, h = int(sk_str.split(",")[0]), int(sk_str.split(",")[1])
+        if len(prior_vals) < 4:
             continue
-        mean_f, std_f = slot_prior[sk_str]
+        mfa, std_f, mfr, mfb = prior_vals
         if std_f <= 0 or math.isnan(std_f):
             continue
-        pull  = (f_s - mean_f) / std_f
-        dt, h = int(sk_str.split(",")[0]), int(sk_str.split(",")[1])
-        label = f"{_DT_NAMES[dt]} {h:02d}h"
-        rows.append((abs(pull), pull, label))
+        f_r = slot_fracs_res.get(sk_str)
+        f_b = slot_fracs_biz.get(sk_str)
+        if f_r is not None:
+            pull_res[h, dt] = (f_r - mfr) / std_f
+        if f_b is not None:
+            pull_biz[h, dt] = (f_b - mfb) / std_f
 
-    rows.sort(key=lambda r: r[0], reverse=True)
-    if not rows:
-        print("  No usable slot fraction data — skipping pull plot")
-        return
-
-    _, pulls, labels = zip(*rows)
-    pulls  = np.array(pulls)
-    y_pos  = np.arange(len(pulls))
-
-    fig_h  = max(3.5, len(pulls) * 0.55 + 1.0)
-    fig, ax = plt.subplots(figsize=(8, fig_h))
-
-    # Shaded ±1 band
-    ax.axvspan(-1, 1, color="lightgray", alpha=0.35, zorder=0)
-
-    # Reference lines
-    for xv, ls in [(-2, ":"), (-1, "--"), (0, "-"), (1, "--"), (2, ":")]:
-        ax.axvline(xv, color="gray", linewidth=0.8, linestyle=ls, zorder=1)
-
-    # Error bars: dot at pull, bar from (pull−1) to (pull+1)
-    xerr_lo = np.ones_like(pulls)
-    xerr_hi = np.ones_like(pulls)
-    ax.errorbar(
-        pulls, y_pos,
-        xerr=[xerr_lo, xerr_hi],
-        fmt="o", color="steelblue", ecolor="steelblue",
-        markersize=6, capsize=4, linewidth=1.4, zorder=3
+    vmax = max(
+        np.nanmax(np.abs(pull_res)) if not np.all(np.isnan(pull_res)) else 1.0,
+        np.nanmax(np.abs(pull_biz)) if not np.all(np.isnan(pull_biz)) else 1.0,
+        1.0,
     )
+    vmax = math.ceil(vmax * 10) / 10   # round up to 1 d.p.
 
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels, fontsize=9)
-    ax.set_xlabel("Pull  (f_inferred − f_prior) / σ_prior")
-    ax.set_title(
-        f"Slot fraction pulls — run {e['id'][:8]}  "
+    col_labels = ["Wkday", "Sat", "Sun"]
+    hour_labels = [f"{h:02d}h" for h in range(24)]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 9), sharey=True)
+    fig.subplots_adjust(wspace=0.08)
+
+    for ax, pull_mat, comp_label, prior_key in [
+        (axes[0], pull_res, "Residential (f_res)", "mean_f_res"),
+        (axes[1], pull_biz, "Business (f_biz)",    "mean_f_biz"),
+    ]:
+        im = ax.imshow(pull_mat, aspect="auto", cmap="RdBu_r",
+                       vmin=-vmax, vmax=vmax, origin="upper")
+        ax.set_xticks([0, 1, 2])
+        ax.set_xticklabels(col_labels, fontsize=9)
+        ax.set_title(f"{comp_label}\npull = (f − prior) / σ_agg", fontsize=9)
+        # Annotate cells with pull value
+        for h in range(24):
+            for dt in range(3):
+                v = pull_mat[h, dt]
+                if not math.isnan(v):
+                    ax.text(dt, h, f"{v:+.1f}", ha="center", va="center",
+                            fontsize=6.5, color="white" if abs(v) > vmax * 0.6 else "black")
+
+    axes[0].set_yticks(range(24))
+    axes[0].set_yticklabels(hour_labels, fontsize=8)
+    axes[0].set_ylabel("Hour of day")
+
+    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.025, pad=0.02)
+    cbar.set_label("Pull (σ)", fontsize=9)
+
+    fig.suptitle(
+        f"Temporal profile pulls — run {e['id'][:8]}  "
         f"χ²/N={e['chi2_per_n']:.4f}  stage={e['stage']}",
-        fontsize=10
+        fontsize=10, y=0.995
     )
-    ax.set_xlim(min(-3.0, pulls.min() - 1.2), max(3.0, pulls.max() + 1.2))
-    ax.invert_yaxis()
-    ax.grid(axis="x", alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {out_path}")
 
