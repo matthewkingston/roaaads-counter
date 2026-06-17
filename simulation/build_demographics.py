@@ -406,7 +406,7 @@ else:
     else:
         print("Downloading OSM POIs (amenity / shop / office) …")
         pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
-        _save_cols = [c for c in ["amenity", "shop", "office"] if c in pois_raw.columns]
+        _save_cols = [c for c in ["amenity", "shop", "office", "name"] if c in pois_raw.columns]
         pois_raw[_save_cols + ["geometry"]].to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
         print(f"  Cached → {POI_CACHE}")
 
@@ -748,6 +748,43 @@ if _park_wgs is not None:
         ).add_to(park_fg)
     park_fg.add_to(m)
     print(f"Added parking layer ({len(_park_wgs)} polygons)")
+
+# 5g. POI layer — amenity/shop/office features used for workplace allocation
+_poi_wgs = None
+if "pois_utm" in dir():  # full run: already filtered + centroid geometry in UTM
+    _poi_wgs = pois_utm.to_crs("EPSG:4326")
+elif _os.path.exists(POI_CACHE):  # --map-only: reload and re-filter from cache
+    _pp = gpd.read_file(POI_CACHE)
+    _EXCL = {"parking","parking_space","parking_entrance","fuel","atm","vending_machine",
+             "post_box","waste_basket","bench","bicycle_parking","recycling","toilets","shelter","telephone"}
+    if "amenity" in _pp.columns:
+        _pp = _pp[_pp["amenity"].isna() | ~_pp["amenity"].isin(_EXCL)]
+    _pp = _pp[_pp.geometry.notna()].copy()
+    _pp["geometry"] = _pp.geometry.centroid
+    _poi_wgs = _pp
+
+if _poi_wgs is not None:
+    _POI_COLOURS = {"amenity": "#e67e22", "shop": "#27ae60", "office": "#2980b9"}
+    poi_fg = folium.FeatureGroup(name=f"POIs — workplace allocation ({len(_poi_wgs)})", show=False)
+    for _, _row in _poi_wgs.iterrows():
+        _kind, _val, _color = None, None, "#888888"
+        for _col in ("amenity", "shop", "office"):
+            if _col in _poi_wgs.columns and pd.notna(_row.get(_col)):
+                _kind, _val, _color = _col, _row[_col], _POI_COLOURS[_col]
+                break
+        _name = ""
+        if "name" in _poi_wgs.columns and pd.notna(_row.get("name")):
+            _name = str(_row["name"])
+        _type_str = f"{_kind}: {_val}" if _kind else "unknown"
+        _tip = f"<b>{_name}</b><br>{_type_str}" if _name else f"<b>{_type_str}</b>"
+        folium.CircleMarker(
+            location=[_row.geometry.y, _row.geometry.x],
+            radius=5,
+            color=_color, fill=True, fill_color=_color, fill_opacity=0.85, weight=1,
+            tooltip=folium.Tooltip(_tip),
+        ).add_to(poi_fg)
+    poi_fg.add_to(m)
+    print(f"Added POI layer ({len(_poi_wgs)} POIs: orange=amenity, green=shop, blue=office)")
 
 # ── Optional flow layer (loaded from newtownards_flows.json if it exists) ────────
 import os as _os, math as _math
