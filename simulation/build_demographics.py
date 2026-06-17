@@ -37,6 +37,7 @@ WORKPLACE_DATA_FILE = "data/census-2021-apwp001.xlsx"
 POPULATION_CACHE    = "data/cache_nisra_population.csv"
 POI_CACHE           = "data/cache_osm_pois.geojson"
 BUILDING_CACHE      = "data/cache_osm_buildings.geojson"
+PARKING_CACHE       = "data/cache_osm_parking.geojson"
 
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
@@ -443,6 +444,54 @@ else:
     total_biz = sum(node_business_demand.values())
     print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
 
+    # ── Car park area → additional business demand ────────────────────────────────
+    # OSM parking polygons proxy vehicle trip attraction (visitor/customer demand).
+    # Public: area/25 ≈ equivalent persons.  Private (access=private): area/50 (half weight).
+
+    if _os.path.exists(PARKING_CACHE):
+        print(f"Loading OSM parking from cache ({PARKING_CACHE}) …")
+        _park_raw = gpd.read_file(PARKING_CACHE)
+    else:
+        print("Downloading OSM parking polygons …")
+        _park_raw = ox.features_from_point(
+            CENTRE,
+            tags={"amenity": "parking", "landuse": "parking"},
+            dist=RADIUS_M,
+        )
+        _park_raw = _park_raw[_park_raw.geometry.notna()].copy()
+        _save_park_cols = [c for c in ["amenity", "landuse", "access", "name"] if c in _park_raw.columns]
+        _park_raw[_save_park_cols + ["geometry"]].to_crs("EPSG:4326").to_file(PARKING_CACHE, driver="GeoJSON")
+        print(f"  Cached → {PARKING_CACHE}")
+
+    # Polygon features only — excludes point-tagged parking_entrance, parking_space nodes
+    _park_utm = _park_raw.to_crs("EPSG:32630").copy()
+    _park_utm = _park_utm[_park_utm.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+    _park_utm["area_m2"] = _park_utm.geometry.area
+    _park_utm["centroid_geom"] = _park_utm.geometry.centroid
+    _park_utm["is_private"] = (
+        _park_utm["access"].isin(["private"]) if "access" in _park_utm.columns
+        else pd.Series(False, index=_park_utm.index)
+    )
+
+    _park_coords = [(_r.centroid_geom.x, _r.centroid_geom.y) for _, _r in _park_utm.iterrows()]
+    _, _park_nn = kdtree.query(_park_coords)  # reuse kdtree built for POIs
+    _park_utm["nearest_node"] = [node_ids[int(i)] for i in _park_nn]
+
+    PARKING_SCALE_PUBLIC  = 25.0
+    PARKING_SCALE_PRIVATE = 50.0
+    for _, _row in _park_utm.iterrows():
+        _scale = PARKING_SCALE_PRIVATE if _row["is_private"] else PARKING_SCALE_PUBLIC
+        n = _row["nearest_node"]
+        node_business_demand[n] = node_business_demand.get(n, 0.0) + _row["area_m2"] / _scale
+
+    _n_priv  = int(_park_utm["is_private"].sum())
+    _n_pub   = len(_park_utm) - _n_priv
+    _eq_pub  = _park_utm[~_park_utm["is_private"]]["area_m2"].sum() / PARKING_SCALE_PUBLIC
+    _eq_priv = _park_utm[_park_utm["is_private"]]["area_m2"].sum()  / PARKING_SCALE_PRIVATE
+    print(f"  {len(_park_utm)} parking polygons "
+          f"({_n_pub} public +{_eq_pub:.0f} eq-persons, "
+          f"{_n_priv} private +{_eq_priv:.0f} eq-persons)")
+
     # node_id → effective UTM centroid used for gravity-model distances:
     #   internal nodes  → their own network coordinates
     #   boundary nodes  → external destination centroid (or own coords for node 180)
@@ -653,6 +702,42 @@ for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
         ),
     ).add_to(biz_fg)
 biz_fg.add_to(m)
+
+# 5f. Parking polygons — realism check layer (red = private, blue = public/untagged)
+_park_wgs = None
+if "_park_utm" in dir():  # full run: variable already in scope
+    _park_wgs = _park_utm.to_crs("EPSG:4326")
+elif _os.path.exists(PARKING_CACHE):  # --map-only: reload and reprocess from cache
+    _p = gpd.read_file(PARKING_CACHE).to_crs("EPSG:32630")
+    _p = _p[_p.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+    _p["area_m2"] = _p.geometry.area
+    _p["is_private"] = _p["access"].isin(["private"]) if "access" in _p.columns else False
+    _park_wgs = _p.to_crs("EPSG:4326")
+
+if _park_wgs is not None:
+    park_fg = folium.FeatureGroup(name=f"Car parks — OSM ({len(_park_wgs)})", show=False)
+    for _, _row in _park_wgs.iterrows():
+        _access_col = "access" in _park_wgs.columns
+        _access_val = _row["access"] if _access_col else None
+        _access_label = str(_access_val) if (_access_col and pd.notna(_access_val)) else "public/untagged"
+        _area = _row["area_m2"]
+        _name_val = _row["name"] if "name" in _park_wgs.columns and pd.notna(_row.get("name")) else ""
+        _is_priv = bool(_row.get("is_private", False))
+        _color = "#cc4444" if _is_priv else "#4488cc"
+        _tip = (
+            f"<b>{_name_val or 'Car park'}</b><br>"
+            f"access: {_access_label}<br>"
+            f"area: {_area:,.0f} m²"
+        )
+        folium.GeoJson(
+            _row.geometry.__geo_interface__,
+            style_function=lambda f, c=_color: {
+                "fillColor": c, "color": c, "weight": 1.5, "fillOpacity": 0.4,
+            },
+            tooltip=folium.Tooltip(_tip),
+        ).add_to(park_fg)
+    park_fg.add_to(m)
+    print(f"Added parking layer ({len(_park_wgs)} polygons)")
 
 # ── Optional flow layer (loaded from newtownards_flows.json if it exists) ────────
 import os as _os, math as _math
