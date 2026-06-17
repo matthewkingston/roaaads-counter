@@ -64,7 +64,7 @@ POI_WEIGHTS = {
     "toilets":         0.25,
     # shop tag → weight
     "supermarket":     1.5,
-    # office tag → weight (applied via _get_poi_weight below)
+    # any office tag → 2.0 (applied inline; not listed here as the value covers all subtypes)
 }
 
 HIGHWAY_STYLE = {
