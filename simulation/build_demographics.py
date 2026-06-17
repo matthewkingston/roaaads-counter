@@ -39,6 +39,13 @@ POI_CACHE           = "data/cache_osm_pois.geojson"
 BUILDING_CACHE      = "data/cache_osm_buildings.geojson"
 PARKING_CACHE       = "data/cache_osm_parking.geojson"
 
+EXCLUDE_AMENITY = {
+    "parking", "parking_space", "parking_entrance",
+    "vending_machine", "post_box", "waste_basket",
+    "bench", "bicycle_parking", "recycling",
+    "shelter", "telephone", "grit_bin",
+}
+
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
     "trunk_link":    {"color": "#f5a623", "weight": 2},
@@ -389,17 +396,10 @@ else:
 
     # Join to dz_final so we only keep study-area DZs
     dz_final = dz_final.merge(wp_df[["DZ2021_cd", "workplace_pop"]], on="DZ2021_cd", how="left")
-    dz_final["workplace_pop"] = dz_final["workplace_pop"].fillna(0)
+    dz_final["workplace_pop"] = dz_final["workplace_pop"].fillna(0) * dz_final["area_pct"]
     wp_lookup = dz_final.set_index("DZ2021_cd")["workplace_pop"]
     print(f"  Study area workplace pop: {int(dz_final['workplace_pop'].sum()):,}")
 
-
-    EXCLUDE_AMENITY = {
-        "parking", "parking_space", "parking_entrance", "fuel",
-        "atm", "vending_machine", "post_box", "waste_basket",
-        "bench", "bicycle_parking", "recycling", "toilets",
-        "shelter", "telephone",
-    }
 
     if _os.path.exists(POI_CACHE):
         print(f"Loading OSM POIs from cache ({POI_CACHE}) …")
@@ -760,10 +760,8 @@ if "pois_utm" in dir():  # full run: already filtered + centroid geometry in UTM
     _poi_wgs = pois_utm.to_crs("EPSG:4326")
 elif _os.path.exists(POI_CACHE):  # --map-only: reload and re-filter from cache
     _pp = gpd.read_file(POI_CACHE)
-    _EXCL = {"parking","parking_space","parking_entrance","fuel","atm","vending_machine",
-             "post_box","waste_basket","bench","bicycle_parking","recycling","toilets","shelter","telephone"}
     if "amenity" in _pp.columns:
-        _pp = _pp[_pp["amenity"].isna() | ~_pp["amenity"].isin(_EXCL)]
+        _pp = _pp[_pp["amenity"].isna() | ~_pp["amenity"].isin(EXCLUDE_AMENITY)]
     _pp = _pp[_pp.geometry.notna()].copy()
     _pp["geometry"] = _pp.geometry.centroid
     _poi_wgs = _pp
