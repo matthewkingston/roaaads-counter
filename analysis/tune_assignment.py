@@ -2,14 +2,19 @@
 Powell's-method tuning of gravity model parameters against combined chi-squared
 objective across all traffic count observations.
 
-K (global scale) and per-slot hourly fractions {f_s} are jointly calibrated at each
-evaluation via alternating minimisation (not in the optimizer).  Walking observations
-are compared to the model in count space (numerator: Jeffreys count n_eff = n + 0.5;
-denominator: n_eff, i.e. Poisson weight).  Official AADT sites remain in AADT space.
-A Gaussian prior on each f_s anchors it to the NI-average hourly fraction; the prior
-mean and std are derived from hourly_fractions.csv via the law of total variance,
-grouping days into weekday / Saturday / Sunday.  Replaces the former Woodbury rank-1
-correction; both approaches preserve one df per time slot (N_eff = N - N_slots).
+Two-component model: residential (pop→pop) and business-adjacent (pb+bb) flows each
+carry their own temporal profile (f_s_res, f_s_biz) and global scale (K_res, K_biz).
+All four are jointly calibrated at each evaluation via 4-block alternating minimisation:
+  K-step   (2×2 linear system for K_res, K_biz)
+  f_res-step  (per-slot analytical update, anchored by NTS residential prior)
+  f_biz-step  (per-slot analytical update, anchored by NTS business prior)
+  + aggregate coupling γ·(f_res + f_biz − 2·f_agg)² per slot to prevent collective drift.
+
+Observations:
+  Official sites: hourly count obs from data/official_hourly.json (24 h × 3 day-types
+    × 3 sites = 216 obs), with Gaussian error (sigma from between-day variance).
+  Walking obs: per-session count obs from data/link_aadt.json, Poisson error (n_eff).
+Both types are in count space, unified in _slot_data with per-obs weights and rhs.
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
@@ -37,7 +42,7 @@ import numpy as np
 import scipy.optimize
 
 sys.path.insert(0, "simulation")
-from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
+from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
                    print_chi2_table)
 
@@ -47,6 +52,7 @@ CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
 HISTORY_FILE      = "simulation/tuning_history.jsonl"
 CURVE_PNG         = "reports/gravity_model_curve.png"
 HOURLY_FRACS_FILE = "analysis/hourly_fractions.csv"
+OFFICIAL_HOURLY   = "data/official_hourly.json"
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -187,8 +193,9 @@ def _link_label(u, v):
 with open(TUNER_CONFIG) as f:
     config = json.load(f)
 
-lam       = config["lambda"]
-city_list = list(config["cities"].items())
+lam          = config["lambda"]
+gamma_coupling = config.get("gamma_coupling", 0.0)   # coupling between f_res+f_biz and aggregate
+city_list    = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam = config.get("gravity_lambda", 0.0)
@@ -337,72 +344,120 @@ if not _has_stoch:
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 _DT_DOWS     = {0: list(range(5)), 1: [5], 2: [6]}
 
-_raw_fracs = {}  # {(dow, hour): (mean_f, std_f)}
+_raw_fracs = {}  # {(dow, hour): (mean_f, std_f, mean_f_res, mean_f_biz)}
 with open(HOURLY_FRACS_FILE, newline="") as _fh:
     for _row in csv.DictReader(_fh):
         _dow  = int(_row["day_of_week"])
         _hour = int(_row["hour"].split(":")[0])
-        _raw_fracs[(_dow, _hour)] = (float(_row["mean_fraction"]), float(_row["std_fraction"]))
+        _mfr  = float(_row["mean_fraction_res"]) if "mean_fraction_res" in _row else None
+        _mfb  = float(_row["mean_fraction_biz"]) if "mean_fraction_biz" in _row else None
+        _raw_fracs[(_dow, _hour)] = (float(_row["mean_fraction"]), float(_row["std_fraction"]),
+                                     _mfr, _mfb)
 
-slot_prior = {}  # {(day_type, hour): (mean_f, std_f)}
+# slot_prior[key] = (mean_f_agg, std_f_agg, mean_f_res, mean_f_biz)
+# std_f is the same for both components (aggregate day-to-day variability as proxy)
+slot_prior = {}
 for _dt, _dows in _DT_DOWS.items():
     for _h in range(24):
-        _means = [_raw_fracs[(_d, _h)][0] for _d in _dows if (_d, _h) in _raw_fracs]
-        _stds  = [_raw_fracs[(_d, _h)][1] for _d in _dows if (_d, _h) in _raw_fracs]
-        if not _means:
+        _entries = [_raw_fracs[(_d, _h)] for _d in _dows if (_d, _h) in _raw_fracs]
+        if not _entries:
             continue
+        _means = [e[0] for e in _entries]
+        _stds  = [e[1] for e in _entries]
         _mf      = sum(_means) / len(_means)
-        _between = sum((_m - _mf) ** 2 for _m in _means) / len(_means)  # population var
+        _between = sum((_m - _mf) ** 2 for _m in _means) / len(_means)
         _within  = sum(_s ** 2 for _s in _stds) / len(_stds)
-        slot_prior[(_dt, _h)] = (_mf, math.sqrt(_between + _within))
+        _std     = math.sqrt(_between + _within)
+        # component means: average over day-type's days
+        _mfr = (sum(e[2] for e in _entries) / len(_entries)
+                if _entries[0][2] is not None else _mf)
+        _mfb = (sum(e[3] for e in _entries) / len(_entries)
+                if _entries[0][3] is not None else _mf)
+        slot_prior[(_dt, _h)] = (_mf, _std, _mfr, _mfb)
 
 # ── Build observation list ────────────────────────────────────────────────────
+# All observations are slotted (day_type, hour) in count space:
+#   official_hourly: Gaussian error, weight = 1/sigma², T_s = 3600 s
+#   walking:         Poisson error,  weight = 1/n_eff,  T_s = duration_s
 
-observations  = []
-obs_slot_keys = []   # (day_type, hour) per obs, or None for official/unslotted
-obs_n_eff_lst = []   # Jeffreys count (n + 0.5) per obs, None for official
-obs_dur_lst   = []   # duration_s per obs, None for official
+observations  = []   # (kind, link_key, link_idxs_placeholder, rhs, sigma, Ts_s)
+obs_slot_keys = []   # (day_type, hour) per obs
+obs_weights   = []   # 1/sigma² (official) or 1/n_eff (walking)
+obs_rhs       = []   # target value in count space
+obs_Th_lst    = []   # T_s / 3600
 
-for s in COUNT_SITES:
-    observations.append(("official", s["node"], s["links"],
-                         float(s["observed"]), 0.10 * s["observed"]))
-    obs_slot_keys.append(None)
-    obs_n_eff_lst.append(None)
-    obs_dur_lst.append(None)
+# Official hourly obs from ODS-derived JSON (replace single AADT constraints)
+n_official_hourly = 0
+if os.path.exists(OFFICIAL_HOURLY):
+    with open(OFFICIAL_HOURLY) as _f:
+        _oh = json.load(_f)
+    for _site_id, _site in _oh.items():
+        _node  = _site["node"]
+        _links = [tuple(lnk) for lnk in _site["links"]] if _site["links"] else None
+        for _obs in _site["observations"]:
+            _ts    = tuple(_obs["time_slot"])
+            _sk    = (_ts[0], _ts[1])   # time_slot already encodes (day_type, hour)
+            _count = float(_obs["count"])
+            _sigma = float(_obs["sigma"])
+            observations.append(("official_hourly", _node, _links, _count, _sigma, 3600.0))
+            obs_slot_keys.append(_sk if _sk in slot_prior else None)
+            obs_weights.append(1.0 / (_sigma ** 2))
+            obs_rhs.append(_count)
+            obs_Th_lst.append(1.0)  # T=3600 s → T/3600 = 1
+            n_official_hourly += 1
+else:
+    print(f"  Warning: {OFFICIAL_HOURLY} not found — no official hourly observations")
 
+# Walking obs from link_aadt.json
 if os.path.exists(LINK_AADT):
-    with open(LINK_AADT) as f:
-        link_aadt_data = json.load(f)["links"]
-    for key, entry in sorted(link_aadt_data.items()):
-        u, v = map(int, key.split(","))
-        if (u, v) in EXCLUDE_LINKS:
+    with open(LINK_AADT) as _f:
+        link_aadt_data = json.load(_f)["links"]
+    for _key, _entry in sorted(link_aadt_data.items()):
+        _u, _v = map(int, _key.split(","))
+        if (_u, _v) in EXCLUDE_LINKS:
             continue
-        for sess_obs in entry["observations"]:
-            observations.append(("walking", (u, v), None,
-                float(sess_obs["aadt"]), float(sess_obs["aadt_uncertainty"])))
-            ts   = sess_obs.get("time_slot")
-            neff = sess_obs.get("n_eff")
-            dur  = sess_obs.get("duration_s")
-            if ts is not None:
-                sk = (_DOW_TO_TYPE[ts[0]], ts[1])
-                obs_slot_keys.append(sk if sk in slot_prior else None)
+        for _sess in _entry["observations"]:
+            _neff = float(_sess.get("n_eff", 0.5))
+            _dur  = float(_sess.get("duration_s", 0.0))
+            _ts   = _sess.get("time_slot")
+            _aadt = float(_sess["aadt"])
+            _aadt_unc = float(_sess["aadt_uncertainty"])
+            observations.append(("walking", (_u, _v), None, _aadt, _aadt_unc, _dur))
+            if _ts is not None:
+                _sk = (_DOW_TO_TYPE[_ts[0]], _ts[1])
+                obs_slot_keys.append(_sk if _sk in slot_prior else None)
             else:
                 obs_slot_keys.append(None)
-            obs_n_eff_lst.append(float(neff) if neff is not None else None)
-            obs_dur_lst.append(float(dur)  if dur  is not None else None)
+            obs_weights.append(1.0 / _neff)    # Poisson: weight = 1/n_eff
+            obs_rhs.append(_neff)              # Poisson: compare to n_eff
+            obs_Th_lst.append(_dur / 3600.0)
 
-n_obs    = len(observations)
-obs_arr  = np.array([o[3] for o in observations], dtype=np.float64)
-sig_arr  = np.array([o[4] for o in observations], dtype=np.float64)
+n_obs      = len(observations)
+obs_Th     = np.array(obs_Th_lst,    dtype=np.float64)
+obs_w_arr  = np.array(obs_weights,   dtype=np.float64)
+obs_rhs_arr= np.array(obs_rhs,       dtype=np.float64)
 
-# Count-space arrays for walking obs (T in fractional hours)
-obs_n_eff = np.zeros(n_obs)
-obs_Th    = np.zeros(n_obs)   # T / 3600
-for i in range(n_obs):
-    if obs_n_eff_lst[i] is not None:
-        obs_n_eff[i] = obs_n_eff_lst[i]
-    if obs_dur_lst[i] is not None:
-        obs_Th[i] = obs_dur_lst[i] / 3600.0
+# Precompute link index sets per observation for fast model flow extraction
+obs_link_idxs = []
+for kind, target, links, *_ in observations:
+    if kind == "official_hourly":
+        if links:
+            idxs = [link_index[lnk] for lnk in links if lnk in link_index]
+        else:
+            idxs = [k for k in range(N_links)
+                    if int(link_u[k]) == target or int(link_v[k]) == target]
+    else:  # walking
+        k = link_index.get(target, -1)
+        idxs = [k] if k >= 0 else []
+    obs_link_idxs.append(idxs)
+
+# Walking obs: vectorized link index array
+_walk_link_raw = np.array(
+    [obs_link_idxs[i][0] if obs_link_idxs[i] else -1
+     for i in range(n_official_hourly, n_obs)],
+    dtype=np.int64)
+_walk_link_safe = np.where(_walk_link_raw >= 0, _walk_link_raw, 0)
+_walk_valid     = _walk_link_raw >= 0
 
 # Group slotted observations by (day_type, hour)
 slot_groups = {}
@@ -411,175 +466,204 @@ for i, sk in enumerate(obs_slot_keys):
         slot_groups.setdefault(sk, []).append(i)
 slot_list = list(slot_groups.items())
 
-unslotted_idxs = [i for i, sk in enumerate(obs_slot_keys) if sk is None]
-
 n_slots   = len(slot_list)
+n_walking = n_obs - n_official_hourly
 n_slotted = sum(len(idxs) for _, idxs in slot_list)
-n_eff     = n_obs - n_slots
-n_official = len(COUNT_SITES)
-print(f"  {n_obs} observations ({n_official} official, {n_obs - n_official} walking"
-      f" in {n_slots} time slot(s))")
-if n_slotted < n_obs - n_official:
-    print(f"  Warning: {n_obs - n_official - n_slotted} walking obs have no time-slot"
-          f" data — treated as independent (AADT space, original uncertainty)")
+# Two df per slot (f_s_res and f_s_biz each consume one df)
+n_eff = n_obs - 2 * n_slots
+print(f"  {n_obs} observations ({n_official_hourly} official hourly, {n_walking} walking"
+      f" in {n_slots} time slot(s))  N_eff={n_eff}")
 for sk, idxs in sorted(slot_list):
-    if len(idxs) > 2:
+    if len(idxs) > 3:
         print(f"  Slot {sk}: {len(idxs)} observations")
 
-# Precompute link index sets per observation for fast model flow extraction
-obs_link_idxs = []
-for kind, target, links, *_ in observations:
-    if kind == "official":
-        if links:
-            idxs = [link_index[lnk] for lnk in links if lnk in link_index]
-        else:
-            idxs = [k for k in range(N_links)
-                    if int(link_u[k]) == target or int(link_v[k]) == target]
-    else:
-        k = link_index.get(target, -1)
-        idxs = [k] if k >= 0 else []
-    obs_link_idxs.append(idxs)
-
-# ── Precomputed arrays for vectorised model_obs / calibrate_K_and_fracs / chi2 ─
-
-# Walking obs each have exactly 1 link; store as a numpy index array
-_walk_link_raw = np.array(
-    [obs_link_idxs[i][0] if obs_link_idxs[i] else -1
-     for i in range(n_official, n_obs)],
-    dtype=np.int64)
-_walk_link_safe = np.where(_walk_link_raw >= 0, _walk_link_raw, 0)
-_walk_valid     = _walk_link_raw >= 0
-
-# Unslotted obs (official sites) as numpy arrays
-_uns_arr    = np.array(unslotted_idxs, dtype=np.int64)
-_uns_sig_sq = sig_arr[_uns_arr] ** 2
-_uns_obs    = obs_arr[_uns_arr]
-
-# Per-slot count-space arrays for calibrate_K_and_fracs and chi²
-# Each entry: (slot_key, idxs, n_effs_arr, Ths_arr, mean_f, inv_var_f)
-# inv_var_f = 1/std_f² is the Gaussian prior precision on f_s
-_slot_data = [
-    (sk,
-     np.array(idxs, dtype=np.int64),
-     obs_n_eff[np.array(idxs)],
-     obs_Th[np.array(idxs)],
-     slot_prior[sk][0],
-     1.0 / slot_prior[sk][1] ** 2)
-    for sk, idxs in slot_list
-]
+# Per-slot data for calibrate_Ks_and_fracs and chi²
+# Each entry: (slot_key, ia, weights, rhs, Ths,
+#              mean_f_res, inv_var_res, mean_f_biz, inv_var_biz,
+#              mean_f_agg, gamma)
+_slot_data = []
+for sk, idxs in slot_list:
+    ia       = np.array(idxs, dtype=np.int64)
+    mfa, std_f, mfr, mfb = slot_prior[sk]
+    inv_var  = 1.0 / (std_f ** 2)
+    _slot_data.append((
+        sk, ia,
+        obs_w_arr[ia],     # weights: 1/sigma² or 1/n_eff per obs
+        obs_rhs_arr[ia],   # rhs: count or n_eff per obs
+        obs_Th[ia],        # T/3600 per obs
+        mfr, inv_var,      # residential prior
+        mfb, inv_var,      # business prior (same std as aggregate)
+        mfa, gamma_coupling,  # aggregate coupling
+    ))
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
 def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
-    """Gravity assignment with optional stochastic logit routing.
+    """Gravity assignment → (flow_res, flow_biz).
 
-    THETA=None  → fast binned all-or-nothing:
-      Stage 1: ~0.12 ms (3 f32 matmuls).  Stage 2: ~5.5 ms (+ exact ext scatter).
-    THETA given → CSR SpMV scatter over k=3 paths with logit weights (~150 ms).
-      share(r) ∝ exp(−THETA · d_r / P).  Works identically for stage 1 and 2.
+    flow_res = pop→pop component (purely residential).
+    flow_biz = W_BIZ·pb + W_BIZ²·bb component (home↔work/retail).
+
+    THETA=None  → fast binned all-or-nothing (bin-matrix matmul path).
+    THETA given → CSR SpMV scatter over k=3 paths with logit weights.
     """
     if THETA is None or not _has_stoch:
-        # Fast bin-matrix path (all-or-nothing)
         f_b = _kern_b(P, ALPHA)
         W   = np.float32(W_BIZ)
         W2  = np.float32(W_BIZ ** 2)
         if stage == "full":
-            flow = (int_bin_pp @ f_b
-                    + W  * (int_bin_pb @ f_b)
-                    + W2 * (int_bin_bb @ f_b)).astype(np.float64)
-            w_src = w_pop[_ext_src] + W_BIZ * w_biz[_ext_src]
-            w_dst = w_pop[_ext_dst] + W_BIZ * w_biz[_ext_dst]
+            flow_res = (int_bin_pp @ f_b).astype(np.float64)
+            flow_biz = (W * (int_bin_pb @ f_b) + W2 * (int_bin_bb @ f_b)).astype(np.float64)
+            # Exact scatter for external-involved OD pairs
+            w_src = w_pop[_ext_src]
+            w_dst = w_pop[_ext_dst]
+            b_src = w_biz[_ext_src]
+            b_dst = w_biz[_ext_dst]
             u_e   = _ext_dist / P
-            t_e   = w_src * w_dst * (ALPHA + 1) * u_e / (ALPHA + u_e ** (ALPHA + 1))
-            flow += np.bincount(_ext_link, weights=t_e[_ext_lp], minlength=N_links)
+            f_e   = (ALPHA + 1) * u_e / (ALPHA + u_e ** (ALPHA + 1))
+            t_pp  = w_src * w_dst * f_e
+            t_pb  = (w_src * b_dst + b_src * w_dst) * f_e
+            t_bb  = b_src * b_dst * f_e
+            flow_res += np.bincount(_ext_link, weights=t_pp[_ext_lp], minlength=N_links)
+            flow_biz += np.bincount(_ext_link,
+                                    weights=(W_BIZ * t_pb + W_BIZ**2 * t_bb)[_ext_lp],
+                                    minlength=N_links)
         else:
-            flow = (all_bin_pp @ f_b
-                    + W  * (all_bin_pb @ f_b)
-                    + W2 * (all_bin_bb @ f_b)).astype(np.float64)
-        return flow
+            flow_res = (all_bin_pp @ f_b).astype(np.float64)
+            flow_biz = (W * (all_bin_pb @ f_b) + W2 * (all_bin_bb @ f_b)).astype(np.float64)
+        return flow_res, flow_biz
 
-    # Stochastic logit: exact scatter over 3 paths.
-    # All per-OD-pair (820K) arrays use float32.
-    # Scatter via prebuilt CSR SpMV (~38ms × 3) rather than gather+bincount
-    # (~102+350ms × 3), for ~9× scatter speedup.
-    w_vec = (w_pop + W_BIZ * w_biz).astype(np.float32)
-    t_ij  = w_vec[od_src] * w_vec[od_dst]  # float32, N_OD
+    # Stochastic logit: exact scatter over 3 paths, split by component.
+    # Per-OD weight products needed to separate pp from pb+bb.
+    w_pop32 = w_pop.astype(np.float32)
+    w_biz32 = w_biz.astype(np.float32)
+    W32     = np.float32(W_BIZ)
+    pp_od   = w_pop32[od_src] * w_pop32[od_dst]
+    pb_od   = w_pop32[od_src] * w_biz32[od_dst] + w_biz32[od_src] * w_pop32[od_dst]
+    bb_od   = w_biz32[od_src] * w_biz32[od_dst]
 
-    # Logit shares (float32, stable via row-wise max subtraction)
+    # Logit shares
     d_mat  = np.stack([_od_dist_f32, _od_dist_2_f32, _od_dist_3_f32], axis=1)
     log_w  = np.float32(-THETA / P) * d_mat
     log_w -= log_w.max(axis=1, keepdims=True)
     shares = np.exp(log_w)
-    shares /= shares.sum(axis=1, keepdims=True)  # float32, (N_OD, 3)
+    shares /= shares.sum(axis=1, keepdims=True)
 
-    # Kernel via precomputed log(d): avoids log() call per eval
     log_P   = np.float32(math.log(P))
     alpha1  = np.float32(ALPHA + 1)
     alpha_f = np.float32(ALPHA)
 
-    flow = np.zeros(N_links, dtype=np.float64)
+    flow_res = np.zeros(N_links, dtype=np.float64)
+    flow_biz = np.zeros(N_links, dtype=np.float64)
     for r, (A_r, d_f32, log_d) in enumerate([
         (_A1, _od_dist_f32,   _log_od_dist),
         (_A2, _od_dist_2_f32, _log_od_dist_2),
         (_A3, _od_dist_3_f32, _log_od_dist_3),
     ]):
-        log_u = log_d - log_P
-        u_pow = np.exp(alpha1 * log_u)
-        u_r   = d_f32 * np.float32(1.0 / P)
-        f_r   = alpha1 * u_r / (alpha_f + u_pow)   # float32, N_OD
-        w_r   = t_ij * shares[:, r] * f_r           # float32, N_OD
-        flow += A_r @ w_r                            # SpMV: (N_links, N_OD) × (N_OD,)
-    return flow
+        log_u  = log_d - log_P
+        u_pow  = np.exp(alpha1 * log_u)
+        u_r    = d_f32 * np.float32(1.0 / P)
+        f_r    = alpha1 * u_r / (alpha_f + u_pow)      # (N_OD,) kernel
+        sr     = shares[:, r]
+        flow_res += A_r @ (pp_od * sr * f_r)
+        flow_biz += A_r @ ((W32 * pb_od + W32**2 * bb_od) * sr * f_r)
+    return flow_res, flow_biz
 
 
-def model_obs(raw_flow):
-    m = np.empty(n_obs)
-    for i, idxs in enumerate(obs_link_idxs[:n_official]):
-        m[i] = raw_flow[idxs].sum() if idxs else 0.0
-    m[n_official:] = np.where(_walk_valid, raw_flow[_walk_link_safe], 0.0)
-    return m
+def model_obs_2c(flow_res, flow_biz):
+    """Extract per-observation modelled flows for both components."""
+    m_r = np.empty(n_obs)
+    m_b = np.empty(n_obs)
+    for i, idxs in enumerate(obs_link_idxs[:n_official_hourly]):
+        m_r[i] = flow_res[idxs].sum() if idxs else 0.0
+        m_b[i] = flow_biz[idxs].sum() if idxs else 0.0
+    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe], 0.0)
+    m_b[n_official_hourly:] = np.where(_walk_valid, flow_biz[_walk_link_safe], 0.0)
+    return m_r, m_b
 
 
-def calibrate_K_and_fracs(m_arr):
-    """Jointly calibrate K and per-slot hourly fractions via alternating minimisation.
+def calibrate_Ks_and_fracs(m_res, m_biz):
+    """4-block alternating minimisation: (K, phi, f_s_res, f_s_biz).
 
-    Walking obs are in count space: chi²_walk = Σ (K·m·T·f_s/3600 − n_eff)²/n_eff.
-    Official obs remain in AADT space: chi²_off = Σ (K·m − y)²/σ².
-    K and each f_s appear as K·f_s products, so coordinate descent alternates:
-      K-step  (quadratic in K for fixed {f_s})
-      f_s-step (quadratic in f_s for fixed K, one per slot)
+    Reparameterised as K_total = K_res + K_biz and phi = K_biz / K_total.
+    This breaks the K_biz / W_BIZ degeneracy that otherwise collapses K_biz → 0.
+
+    K-step:   1D solve (linear in K, same as single-component case).
+    phi-step: 1D solve with Gaussian prior phi ~ N(PHI_PRIOR, PHI_STD²).
+    f_res-step: per-slot analytical, anchored by NTS residential prior.
+    f_biz-step: symmetric.
+    Coupling: γ·(f_res + f_biz − 2·f_agg)² per slot (2 lines each f-step).
     Converges in 3–5 iterations; 10 iterations is ample.
-    Returns (K, slot_fracs) where slot_fracs = {(day_type, hour): f_s}.
+    Returns (K_res, K_biz, slot_fracs_res, slot_fracs_biz).
     """
-    slot_fracs = {sk: mean_f for sk, _, _, _, mean_f, _ in _slot_data}
-    K = 1.0
+    PHI_PRIOR = 0.35    # expected fraction of total scale that is business
+    PHI_STD   = 0.15    # std: allows phi ∈ [0.05, 0.65] within 2σ
+    INV_PHI_V = 1.0 / (PHI_STD ** 2)
+
+    slot_fracs_res = {sk: mfr for sk, _, _, _, _, mfr, _, _, _, _, _ in _slot_data}
+    slot_fracs_biz = {sk: mfb for sk, _, _, _, _, _, _, mfb, _, _, _ in _slot_data}
+    K   = 1.0
+    phi = PHI_PRIOR
+
     for _ in range(10):
-        # K-step: K = B / A
-        # A = Σ_off m²/σ²  + Σ_walk (m·T/3600·f_s)²/n_eff
-        # B = Σ_off m·y/σ² + Σ_walk m·T/3600·f_s        (n_eff/n_eff = 1)
-        A = float(np.sum(m_arr[_uns_arr] ** 2 / _uns_sig_sq))
-        B = float(np.sum(m_arr[_uns_arr] * _uns_obs / _uns_sig_sq))
-        for sk, ia, n_effs, Ths, mean_f, inv_var_f in _slot_data:
-            B_i = m_arr[ia] * Ths * slot_fracs[sk]  # m · (T/3600) · f_s
-            A  += float(np.sum(B_i ** 2 / n_effs))
-            B  += float(np.sum(B_i))
-        K = B / A if A > 0 else 1.0
+        K_res = K * (1 - phi)
+        K_biz = K * phi
 
-        # f_s-step: f_s = (Σ C_i + mean_f/std_f²) / (Σ C_i²/n_eff_i + 1/std_f²)
-        # where C_i = K · m_i · T_i/3600
-        for sk, ia, n_effs, Ths, mean_f, inv_var_f in _slot_data:
-            C_i = K * m_arr[ia] * Ths
-            num = float(np.sum(C_i)) + mean_f * inv_var_f
-            den = float(np.sum(C_i ** 2 / n_effs)) + inv_var_f
-            slot_fracs[sk] = num / den if den > 0 else mean_f
+        # ── K-step: 1D solve (linear in K) ───────────────────────────────────
+        A = B = 0.0
+        for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
+            f_r = slot_fracs_res[sk]
+            f_b = slot_fracs_biz[sk]
+            # combined coefficient per obs: (1-phi)*c_r*f_r + phi*c_b*f_b
+            coeff = ((1 - phi) * m_res[ia] * Ths * f_r
+                     + phi     * m_biz[ia] * Ths * f_b)
+            A += float(np.dot(w * coeff, coeff))
+            B += float(np.dot(w * coeff, rhs))
+        K = max(B / A, 1e-30) if A > 0 else K
 
-    return K, slot_fracs
+        # ── phi-step: 1D solve (linear in phi) ───────────────────────────────
+        A_p = B_p = 0.0
+        for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
+            f_r  = slot_fracs_res[sk]
+            f_b  = slot_fracs_biz[sk]
+            base = m_res[ia] * Ths * f_r             # c_r·f_r
+            delt = m_biz[ia] * Ths * f_b - base      # c_b·f_b − c_r·f_r
+            # pred = K*(base + phi*delt); minimise Σ w*(K*(base+phi*delt)−rhs)²
+            A_p += float(np.dot(w * delt, delt)) * K ** 2
+            B_p += float(np.dot(w * delt, rhs - K * base)) * K
+        A_p += INV_PHI_V
+        B_p += PHI_PRIOR * INV_PHI_V
+        phi = max(0.01, min(0.99, B_p / A_p)) if A_p > 0 else phi
+        K_res = K * (1 - phi)
+        K_biz = K * phi
+
+        # ── f_res-step (per slot, holding K_res, K_biz, f_biz fixed) ─────────
+        for sk, ia, w, rhs, Ths, mfr, ivr, mfb_prior, ivb, mfa, gam in _slot_data:
+            f_b = slot_fracs_biz[sk]
+            cr  = m_res[ia] * Ths
+            cb  = m_biz[ia] * Ths
+            h_i = rhs - K_biz * cb * f_b
+            num = K_res * float(np.dot(w * cr, h_i)) + mfr * ivr + gam * (2*mfa - f_b)
+            den = K_res**2 * float(np.dot(w * cr, cr)) + ivr + gam
+            slot_fracs_res[sk] = max(num / den, 1e-12) if den > 0 else mfr
+
+        # ── f_biz-step (symmetric) ────────────────────────────────────────────
+        for sk, ia, w, rhs, Ths, mfr_prior, ivr, mfb, ivb, mfa, gam in _slot_data:
+            f_r = slot_fracs_res[sk]
+            cr  = m_res[ia] * Ths
+            cb  = m_biz[ia] * Ths
+            h_i = rhs - K_res * cr * f_r
+            num = K_biz * float(np.dot(w * cb, h_i)) + mfb * ivb + gam * (2*mfa - f_r)
+            den = K_biz**2 * float(np.dot(w * cb, cb)) + ivb + gam
+            slot_fracs_biz[sk] = max(num / den, 1e-12) if den > 0 else mfb
+
+    return K_res, K_biz, slot_fracs_res, slot_fracs_biz
 
 
 # ── Objective function ────────────────────────────────────────────────────────
 
 eval_count = [0]
-best       = {"chi2": float("inf"), "log_params": None, "K": 1.0}
+best       = {"chi2": float("inf"), "log_params": None, "K_res": 1.0, "K_biz": 1.0}
 t0         = time.time()
 
 
@@ -633,17 +717,18 @@ def objective(log_params, log_ref=None):
         w_pop = base_w_pop
         w_biz = base_w_biz
 
-    raw_flow      = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA)
-    m_arr         = model_obs(raw_flow)
-    K, slot_fracs = calibrate_K_and_fracs(m_arr)
-    # Official obs: AADT space
-    r_u  = K * m_arr[_uns_arr] - _uns_obs
-    chi2 = float(np.sum(r_u ** 2 / _uns_sig_sq))
-    # Walking obs: count space + Gaussian prior on each slot fraction
-    for sk, ia, n_effs, Ths, mean_f, inv_var_f in _slot_data:
-        pred  = K * m_arr[ia] * Ths * slot_fracs[sk]  # expected counts
-        chi2 += float(np.sum((pred - n_effs) ** 2 / n_effs))
-        chi2 += (slot_fracs[sk] - mean_f) ** 2 * inv_var_f
+    flow_res, flow_biz                          = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA)
+    m_res, m_biz                               = model_obs_2c(flow_res, flow_biz)
+    K_res, K_biz, slot_fracs_res, slot_fracs_biz = calibrate_Ks_and_fracs(m_res, m_biz)
+    chi2 = 0.0
+    for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
+        f_r  = slot_fracs_res[sk]
+        f_b  = slot_fracs_biz[sk]
+        pred = K_res * m_res[ia] * Ths * f_r + K_biz * m_biz[ia] * Ths * f_b
+        chi2 += float(np.dot(w * (pred - rhs), pred - rhs))
+        chi2 += (f_r - mfr) ** 2 * ivr
+        chi2 += (f_b - mfb) ** 2 * ivb
+        chi2 += gam * (f_r + f_b - 2 * mfa) ** 2
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
@@ -654,7 +739,8 @@ def objective(log_params, log_ref=None):
     if chi2 < best["chi2"]:
         best["chi2"]       = chi2
         best["log_params"] = log_params.copy()
-        best["K"]          = K
+        best["K_res"]      = K_res
+        best["K_biz"]      = K_biz
 
     if eval_count[0] % 20 == 0:
         elapsed = time.time() - t0
@@ -766,7 +852,7 @@ if stage == "full":
             ext_pop_map[node_id] = city_pops_out[city_name] * damp
             ext_biz_map[node_id] = city_wps_out[city_name]  * damp
 
-# Final evaluation for clean chi2, K, and slot_fracs (no L2 term)
+# Final evaluation for clean chi2, K_res, K_biz, and slot_fracs (no L2 term)
 w_pop_f = base_w_pop.copy() if ext_pop_map else base_w_pop
 w_biz_f = base_w_biz.copy() if ext_biz_map else base_w_biz
 for arr_i, nid in ext_indices:
@@ -774,36 +860,64 @@ for arr_i, nid in ext_indices:
         w_pop_f[arr_i] = ext_pop_map[nid]
         w_biz_f[arr_i] = ext_biz_map[nid]
 
-raw_flow      = run_assignment(W_BIZ, P, ALPHA, w_pop_f, w_biz_f, THETA)
-m_arr         = model_obs(raw_flow)
-K, slot_fracs = calibrate_K_and_fracs(m_arr)
-# Official obs: AADT space
-r_u   = K * m_arr[_uns_arr] - _uns_obs
-chi2  = float(np.sum(r_u ** 2 / _uns_sig_sq))
-# Walking obs: count space + Gaussian prior on each slot fraction
-for sk, ia, n_effs, Ths, mean_f, inv_var_f in _slot_data:
-    pred  = K * m_arr[ia] * Ths * slot_fracs[sk]
-    chi2 += float(np.sum((pred - n_effs) ** 2 / n_effs))
-    chi2 += (slot_fracs[sk] - mean_f) ** 2 * inv_var_f
+flow_res, flow_biz                             = run_assignment(W_BIZ, P, ALPHA, w_pop_f, w_biz_f, THETA)
+m_res, m_biz                                   = model_obs_2c(flow_res, flow_biz)
+K_res, K_biz, slot_fracs_res, slot_fracs_biz  = calibrate_Ks_and_fracs(m_res, m_biz)
+K = K_res + K_biz   # total scale (for display and backward compat)
+chi2 = 0.0
+for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
+    f_r  = slot_fracs_res[sk]
+    f_b  = slot_fracs_biz[sk]
+    pred = K_res * m_res[ia] * Ths * f_r + K_biz * m_biz[ia] * Ths * f_b
+    chi2 += float(np.dot(w * (pred - rhs), pred - rhs))
+    chi2 += (f_r - mfr) ** 2 * ivr
+    chi2 += (f_b - mfb) ** 2 * ivb
+    chi2 += gam * (f_r + f_b - 2 * mfa) ** 2
 chi2_per_n = chi2 / n_obs
 
-# Effective AADT and sigma for each obs (using inferred slot fractions for walking obs).
-# z-score is identical in count and AADT space (numerator and denominator scale the same way).
-obs_eff = obs_arr.copy()
-sig_eff = sig_arr.copy()
-for i in range(n_official, n_obs):
+# Build per-obs residuals for the fit table.
+# Convert count-space obs to an effective hourly-average for display:
+#   for walking obs: n_eff / (T/3600) = expected hourly count (un-slots the fraction)
+#   for official hourly obs: count is already vehicles/hour
+# The total modelled hourly count is K_res*m_res*f_res + K_biz*m_biz*f_biz.
+obs_eff = np.empty(n_obs)
+sig_eff = np.empty(n_obs)
+mod_eff = np.empty(n_obs)
+for i, (kind, target, links, _obs, _sig, Ts) in enumerate(observations):
     sk = obs_slot_keys[i]
-    if sk is not None and sk in slot_fracs and obs_Th[i] > 0 and obs_n_eff[i] > 0:
-        f_s = slot_fracs[sk]
-        th  = obs_Th[i]
-        obs_eff[i] = obs_n_eff[i] / (th * f_s)              # effective AADT
-        sig_eff[i] = math.sqrt(obs_n_eff[i]) / (th * f_s)   # Poisson sigma in AADT space
-resid = (K * m_arr - obs_eff) / sig_eff
+    Th = obs_Th[i]
+    if kind == "official_hourly":
+        obs_eff[i] = obs_rhs_arr[i]                   # vehicles/hour
+        sig_eff[i] = _sig
+        if sk is not None:
+            f_r = slot_fracs_res.get(sk, slot_prior[sk][2])
+            f_b = slot_fracs_biz.get(sk, slot_prior[sk][3])
+            mod_eff[i] = K_res * m_res[i] * Th * f_r + K_biz * m_biz[i] * Th * f_b
+        else:
+            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i]) * Th
+    else:  # walking: show as vehicles/hour using slot fraction
+        n_eff_i = obs_rhs_arr[i]
+        if sk is not None and Th > 0 and n_eff_i > 0:
+            f_r = slot_fracs_res.get(sk, slot_prior[sk][2])
+            f_b = slot_fracs_biz.get(sk, slot_prior[sk][3])
+            # Combined f_s for this obs (weighted by component flow at this link)
+            m_r_i, m_b_i = m_res[i], m_biz[i]
+            m_tot = m_r_i * f_r + m_b_i * f_b
+            f_eff = m_tot / (m_r_i + m_b_i) if (m_r_i + m_b_i) > 0 else (f_r + f_b) / 2
+            obs_eff[i] = n_eff_i / (Th * f_eff)
+            sig_eff[i] = math.sqrt(n_eff_i) / (Th * f_eff)
+            mod_eff[i] = (K_res * m_r_i * f_r + K_biz * m_b_i * f_b) / f_eff
+        else:
+            obs_eff[i] = n_eff_i / max(Th, 1e-9)
+            sig_eff[i] = math.sqrt(n_eff_i) / max(Th, 1e-9)
+            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i])
+resid = np.where(sig_eff > 0, (mod_eff - obs_eff) / sig_eff, 0.0)
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
 _theta_str = f"  THETA={THETA:.4f}" if THETA is not None else ""
-print(f"  K={K:.4e}  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}{_theta_str}")
+print(f"  K_res={K_res:.4e}  K_biz={K_biz:.4e}  (K={K:.4e})")
+print(f"  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}{_theta_str}")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -828,29 +942,29 @@ if stage == "full":
 # ── Per-slot fraction table ───────────────────────────────────────────────────
 
 _DT_NAMES = {0: "Wkday", 1: "Sat", 2: "Sun"}
-print(f"\n  Per-slot hourly fractions (inferred vs NI prior):")
-print(f"  {'Type':<5}  {'Hr':>2}  {'Prior':>9}  {'Inferred':>9}  {'Δ%':>6}  {'|Δ|/σ':>6}  N")
-for sk in sorted(slot_fracs):
-    dt, h         = sk
-    mean_f, std_f = slot_prior[sk]
-    f_s           = slot_fracs[sk]
-    n_in_slot     = len(slot_groups.get(sk, []))
-    delta_pct     = 100.0 * (f_s - mean_f) / mean_f if mean_f > 0 else 0.0
-    pull          = abs(f_s - mean_f) / std_f if std_f > 0 else 0.0
-    print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mean_f:>9.6f}  {f_s:>9.6f}"
-          f"  {delta_pct:>+5.1f}%  {pull:>6.2f}σ  {n_in_slot}")
+print(f"\n  Per-slot hourly fractions (res / biz vs NTS priors):")
+print(f"  {'Type':<5}  {'Hr':>2}  {'PriorAgg':>9}  {'f_res':>9}  {'f_biz':>9}  {'Δres%':>6}  {'Δbiz%':>6}  N")
+for sk in sorted(slot_fracs_res):
+    dt, h              = sk
+    mfa, std_f, mfr, mfb = slot_prior[sk]
+    f_r                = slot_fracs_res[sk]
+    f_b                = slot_fracs_biz[sk]
+    n_in_slot          = len(slot_groups.get(sk, []))
+    dr  = 100.0 * (f_r - mfr) / mfr if mfr > 0 else 0.0
+    db  = 100.0 * (f_b - mfb) / mfb if mfb > 0 else 0.0
+    print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.6f}  {f_r:>9.6f}  {f_b:>9.6f}"
+          f"  {dr:>+5.1f}%  {db:>+5.1f}%  {n_in_slot}")
 
 # ── Goodness-of-fit table (sorted by |z|) ────────────────────────────────────
 
 fit_rows = []
-for i_obs, (kind, target, links, _, _) in enumerate(observations):
-    if kind == "official":
-        lbl = next(s["label"] for s in COUNT_SITES if s["node"] == target)
+for i_obs, (kind, target, links, _, _, _) in enumerate(observations):
+    if kind == "official_hourly":
+        sk  = obs_slot_keys[i_obs]
+        lbl = f"{target} h{sk[1]:02d}{'WD' if sk[0]==0 else ('Sa' if sk[0]==1 else 'Su')}"
     else:
         lbl = _link_label(target[0], target[1])
-    mod = K * m_arr[i_obs]
-    z   = resid[i_obs]
-    fit_rows.append((kind, lbl, obs_eff[i_obs], sig_eff[i_obs], mod, z))
+    fit_rows.append((kind, lbl, obs_eff[i_obs], sig_eff[i_obs], mod_eff[i_obs], resid[i_obs]))
 
 fit_rows.sort(key=lambda r: abs(r[5]), reverse=True)
 print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
@@ -858,13 +972,19 @@ print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 
 tuned = {
-    "kernel": "rational",
-    "K":      round(K, 6),
-    "W_BIZ":  round(W_BIZ, 6),
-    "P":      round(P, 4),
-    "ALPHA":  round(ALPHA, 6),
+    "kernel":  "rational",
+    "K":       round(K, 6),      # K_res + K_biz (backward compat for build_assignment.py)
+    "K_res":   round(K_res, 6),
+    "K_biz":   round(K_biz, 6),
+    "W_BIZ":   round(W_BIZ, 6),
+    "P":       round(P, 4),
+    "ALPHA":   round(ALPHA, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    "slot_fracs": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs.items()},
+    "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
+    "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
+    # legacy key: combined average slot fracs for build_assignment.py
+    "slot_fracs": {f"{dt},{h}": round((slot_fracs_res[(dt,h)] + slot_fracs_biz[(dt,h)]) / 2, 8)
+                   for (dt, h) in slot_fracs_res},
     "external_node_pop": {str(k): round(v) for k, v in ext_pop_map.items()},
     "external_node_biz": {str(k): round(v) for k, v in ext_biz_map.items()},
     "chi2":       round(chi2, 3),
@@ -926,11 +1046,14 @@ except Exception as _e:
 params = {
     "kernel": "rational",
     "K":      round(K, 6),
+    "K_res":  round(K_res, 6),
+    "K_biz":  round(K_biz, 6),
     "W_BIZ":  round(W_BIZ, 6),
     "P":      round(P, 4),
     "ALPHA":  round(ALPHA, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    "slot_fracs": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs.items()},
+    "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
+    "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
 }
 if stage == "full":
     params["external_node_pop"] = {str(k): round(v) for k, v in ext_pop_map.items()}
@@ -954,23 +1077,19 @@ history_entry = {
     "params":    params,
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
-        f"{dt},{h}": [round(mean_f, 8), round(std_f, 8)]
-        for (dt, h), (mean_f, std_f) in slot_prior.items()
+        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8), round(mfb, 8)]
+        for (dt, h), (mfa, std_f, mfr, mfb) in slot_prior.items()
     },
     "observations": [
         {
             "kind":     observations[i_obs][0],
-            "target":   (list(observations[i_obs][1])
-                         if isinstance(observations[i_obs][1], tuple)
-                         else observations[i_obs][1]),
-            "label":    (next(s["label"] for s in COUNT_SITES
-                              if s["node"] == observations[i_obs][1])
-                         if observations[i_obs][0] == "official"
+            "label":    (f"{observations[i_obs][1]} h{obs_slot_keys[i_obs][1]:02d}"
+                         if observations[i_obs][0] == "official_hourly"
                          else _link_label(observations[i_obs][1][0],
                                           observations[i_obs][1][1])),
             "observed": round(float(obs_eff[i_obs]), 1),
             "sigma":    round(float(sig_eff[i_obs]), 1),
-            "model":    round(float(K * m_arr[i_obs]), 1),
+            "model":    round(float(mod_eff[i_obs]), 1),
             "z":        round(float(resid[i_obs]), 3),
         }
         for i_obs in range(n_obs)

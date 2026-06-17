@@ -119,8 +119,8 @@ def _section_by_link(e):
     # Group walking obs by canonical target key; official sites kept as-is
     link_groups = {}  # key → list of obs
     for o in obs:
-        if o["kind"] == "official":
-            key = ("official", o["target"])
+        if o["kind"] in ("official", "official_hourly"):
+            key = ("official_hourly", o["label"])
         else:
             key = ("walking", tuple(o["target"]))
         link_groups.setdefault(key, []).append(o)
@@ -326,7 +326,7 @@ def _section_slots(e):
         dt_str, h_str = sk_str.split(",")
         dt, h = int(dt_str), int(h_str)
         if sk_str in slot_prior:
-            mean_f, std_f = slot_prior[sk_str]
+            mean_f, std_f = slot_prior[sk_str][:2]
         else:
             mean_f, std_f = f_s, float("nan")
         pull    = abs(f_s - mean_f) / std_f if std_f > 0 and not math.isnan(std_f) else float("nan")
