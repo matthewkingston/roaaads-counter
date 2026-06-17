@@ -194,10 +194,10 @@ with open(TUNER_CONFIG) as f:
     config = json.load(f)
 
 lam                  = config["lambda"]
-# Coupling scale: gamma per slot = gamma_coupling_scale / std_f_agg²
-# Set to 0.0 to disable, 1.0 for coupling as strong as the component priors.
 gamma_coupling_scale = config.get("gamma_coupling_scale",
                                    config.get("gamma_coupling", 1.0))
+phi_prior            = config.get("phi_prior", 0.35)
+phi_std              = config.get("phi_std",   0.15)
 city_list    = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
@@ -599,8 +599,8 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
     Converges in 3–5 iterations; 10 iterations is ample.
     Returns (K_res, K_biz, slot_fracs_res, slot_fracs_biz).
     """
-    PHI_PRIOR = 0.35    # expected fraction of total scale that is business
-    PHI_STD   = 0.15    # std: allows phi ∈ [0.05, 0.65] within 2σ
+    PHI_PRIOR = phi_prior
+    PHI_STD   = phi_std
     INV_PHI_V = 1.0 / (PHI_STD ** 2)
 
     slot_fracs_res = {sk: mfr for sk, _, _, _, _, mfr, _, _, _, _, _ in _slot_data}

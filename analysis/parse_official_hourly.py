@@ -92,11 +92,15 @@ for site_label, site_cfg in SITE_MAP.items():
     for tup in rows:
         hour, mon, tue, wed, thu, fri, sat, sun = tup
 
-        # Weekday (day_type 0): average of Mon–Fri, sigma from between-day variance
+        # Weekday (day_type 0): average of Mon–Fri, sigma from between-day variance.
+        # Three floors: between-day std, 10% relative, sqrt(count).
+        # sqrt(count) matters at overnight hours where between-day variance is near
+        # zero (all days similar) and 10% of a small count is also small, giving an
+        # unrealistically tight sigma and inflated z-scores.
         wd_vals = [mon, tue, wed, thu, fri]
         wd_mean = sum(wd_vals) / 5.0
         wd_var  = sum((v - wd_mean) ** 2 for v in wd_vals) / 4.0  # sample variance
-        wd_sig  = max(math.sqrt(wd_var), MIN_REL * wd_mean, 0.5)
+        wd_sig  = max(math.sqrt(wd_var), MIN_REL * wd_mean, math.sqrt(max(wd_mean, 0.5)))
 
         # Saturday (day_type 1) and Sunday (day_type 2): single column, Poisson + rel floor
         sat_sig = max(math.sqrt(max(sat, 0.5)), MIN_REL_WE * sat)
