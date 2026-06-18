@@ -56,7 +56,8 @@ than restart.
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. Writes all keys from `params` dict (K_res, K_biz, slot_fracs_res, slot_fracs_biz, external zone params etc.); clears stale `slot_fracs` legacy key. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, THETA) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
-| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Includes `mean_fraction_res` and `mean_fraction_biz` columns: synthetic priors for the two-component temporal profiles (business: AM/PM weekday peaks; residential: complement). Used as prior means in the tuner. **These two columns are hand-crafted and not derivable from the ODS data.** Re-running `hourly_fractions.py` now preserves them automatically (merges from the existing CSV); if they are absent when the script runs it prints a warning. Do not edit the aggregate columns by hand — run the script instead. |
+| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Includes `mean_fraction_res` and `mean_fraction_biz` columns: temporal profile priors for the two-component model. **Derived from NTS Table NTS0502a** via `analysis/derive_component_profiles.py` (see below). Re-running `hourly_fractions.py` preserves these columns automatically; do not edit the aggregate columns by hand. |
+| `analysis/derive_component_profiles.py` | Derives `mean_fraction_res` and `mean_fraction_biz` from DfT NTS Table NTS0502a (`data/nts0502.ods`). **Weekdays:** for each hour, `biz_share(h)` = (commuting + employer's business + education + escort education + shopping) / all purposes, taken from the 2023–2024 rolling average. Education and escort education are included because schools appear as OSM POIs with a bonus weighting in `build_demographics.py`. `mean_fraction_biz = 2 × mean_fraction × biz_share(h)`; `mean_fraction_res = 2 × mean_fraction × (1 − biz_share(h))`, enforcing the tuner's sum constraint. **Weekends:** NTS0502a is Mon–Fri only. A flat business share is derived as the unweighted mean of `biz_share(h)` for h10–h14 (≈43%), the core shopping window on weekdays with minimal school-run contamination. h15 is excluded because the 3 pm school pickup dominates it on weekdays (education + escort = 48 pp) but is absent at weekends. Re-run whenever the NTS file or purpose classification changes. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
@@ -72,10 +73,10 @@ than restart.
 
 ### Large reference data (gitignored, kept locally only)
 `data/*.ods`, `data/*.xlsx` — too large to commit; keep a local copy for reference.
-Currently present: `data/2023-northern-ireland-traffic-count-data-in-ods-format.ods`
-(used by `parse_official_hourly.py` to extract hourly counts for sites 444/507/508;
-annual AADT values in `model.py` `COUNT_SITES` are no longer used by the tuner but
-retained for `build_assignment.py`) and `data/census-2021-apwp001.xlsx`.
+Currently present:
+- `data/2023-northern-ireland-traffic-count-data-in-ods-format.ods` — used by `parse_official_hourly.py` to extract hourly counts for sites 444/507/508; annual AADT values in `model.py` `COUNT_SITES` are no longer used by the tuner but retained for `build_assignment.py`.
+- `data/nts0502.ods` — DfT National Travel Survey Table NTS0502a/b, "Trip start time by trip purpose (Mon–Fri): England, 2002 onwards". Used by `derive_component_profiles.py` to compute `mean_fraction_res`/`mean_fraction_biz`. Download from GOV.UK NTS data tables (NTS05 Trips).
+- `data/census-2021-apwp001.xlsx` — census workplace population data.
 
 ---
 
