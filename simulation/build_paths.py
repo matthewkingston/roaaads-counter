@@ -262,28 +262,10 @@ pair1_starts   = np.concatenate([[0], np.cumsum(pair1_counts)]).astype(np.int64)
 used_links_1   = set(link_idx_arr_1.tolist())
 print(f"  k=1 uses {len(used_links_1):,} of {len(link_list):,} links")
 
-# Forced stub edges: incident on nodes with only one unique neighbour.
-# Penalising these makes alternative paths structurally impossible for those OD
-# pairs, even though real route diversity exists beyond the stub junction.
-forced_link_indices: set = set()
-stub_nodes = []
-for nid in boundary_node_ids:
-    if nid not in node_to_idx:
-        continue
-    all_neighbours = set(G.successors(nid)) | set(G.predecessors(nid))
-    if len(all_neighbours) == 1:
-        stub_nodes.append(nid)
-        for u, v in list(G.out_edges(nid)) + list(G.in_edges(nid)):
-            if (u, v) in link_to_idx:
-                forced_link_indices.add(link_to_idx[(u, v)])
-if forced_link_indices:
-    print(f"  Stub-node forced links excluded from penalisation: "
-          f"{len(forced_link_indices)} (nodes: {sorted(stub_nodes)})")
-
 # ── k=2: penalise k=1 edges, re-run Dijkstra ────────────────────────────────────
 
-print(f"Building k=2 penalised adjacency ({len(used_links_1 - forced_link_indices):,} links ×{ALT_COST_PENALTY}) …")
-adj_2 = _build_penalized_adj(used_links_1 - forced_link_indices)
+print(f"Building k=2 penalised adjacency ({len(used_links_1):,} links ×{ALT_COST_PENALTY}) …")
+adj_2 = _build_penalized_adj(used_links_1)
 
 print("Running k=2 Dijkstra …")
 t0 = time.time()
@@ -303,8 +285,8 @@ print(f"  {len(pair_idx_list_2):,} entries  {n_same_2:,} pairs fell back to k=1 
 # ── k=3: penalise k=1+k=2 edges, re-run Dijkstra ────────────────────────────────
 
 used_links_12 = used_links_1 | used_links_2
-print(f"Building k=3 penalised adjacency ({len(used_links_12 - forced_link_indices):,} links ×{ALT_COST_PENALTY}) …")
-adj_3 = _build_penalized_adj(used_links_12 - forced_link_indices)
+print(f"Building k=3 penalised adjacency ({len(used_links_12):,} links ×{ALT_COST_PENALTY}) …")
+adj_3 = _build_penalized_adj(used_links_12)
 
 print("Running k=3 Dijkstra …")
 t0 = time.time()
