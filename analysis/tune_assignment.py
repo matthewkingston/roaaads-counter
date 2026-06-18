@@ -535,24 +535,26 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
         return flow_res, flow_biz
 
     # Stochastic logit: exact scatter over 3 paths, split by component.
-    # Per-OD weight products in float64 — float32 overflows when the optimizer
-    # explores extreme W_BIZ or wp values during Powell's method.
-    # Distance arrays stay float32 (large, always finite); upcasting happens
-    # naturally when multiplied against float64 weight products.
+    # Weight products in float64 to prevent overflow at extreme optimizer steps.
+    # Kernel/share ops stay float32 (distances are always finite, no overflow
+    # risk; float32 SGEMV is ~30× faster than float64 DGEMV).
+    # The combined per-OD vector is computed in float64 then cast to float32
+    # just before the matmul, restoring SGEMV speed. On extreme steps the
+    # cast saturates to ±inf rather than NaN, giving large finite chi².
     pp_od = w_pop[od_src] * w_pop[od_dst]
     pb_od = w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]
     bb_od = w_biz[od_src] * w_biz[od_dst]
 
-    # Logit shares (float32 distances sufficient here)
+    # Logit shares — float32 sufficient
     d_mat  = np.stack([_od_dist_f32, _od_dist_2_f32, _od_dist_3_f32], axis=1)
-    log_w  = (-THETA / P) * d_mat
+    log_w  = np.float32(-THETA / P) * d_mat
     log_w -= log_w.max(axis=1, keepdims=True)
     shares = np.exp(log_w)
     shares /= shares.sum(axis=1, keepdims=True)
 
-    log_P   = math.log(P)
-    alpha1  = ALPHA + 1
-    alpha_f = ALPHA
+    log_P   = np.float32(math.log(P))
+    alpha1  = np.float32(ALPHA + 1)
+    alpha_f = np.float32(ALPHA)
 
     flow_res = np.zeros(N_links, dtype=np.float64)
     flow_biz = np.zeros(N_links, dtype=np.float64)
@@ -563,11 +565,14 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
     ]):
         log_u  = log_d - log_P
         u_pow  = np.exp(alpha1 * log_u)
-        u_r    = d_f32 * (1.0 / P)
-        f_r    = alpha1 * u_r / (alpha_f + u_pow)      # (N_OD,) kernel
-        sr     = shares[:, r]
-        flow_res += A_r @ (pp_od * sr * f_r)
-        flow_biz += A_r @ ((W_BIZ * pb_od + W_BIZ**2 * bb_od) * sr * f_r)
+        u_r    = d_f32 * np.float32(1.0 / P)
+        f_r    = alpha1 * u_r / (alpha_f + u_pow)        # (N_OD,) float32 kernel
+        sf     = shares[:, r] * f_r                       # float32 share×kernel
+        # Weight products (float64) × sf (float32) → float64 by numpy promotion;
+        # cast to float32 for fast SGEMV. Saturates to ±inf on extreme steps
+        # (large finite chi²) rather than NaN.
+        flow_res += A_r @ (pp_od * sf).astype(np.float32)
+        flow_biz += A_r @ ((W_BIZ * pb_od + W_BIZ**2 * bb_od) * sf).astype(np.float32)
     return flow_res, flow_biz
 
 
