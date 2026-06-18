@@ -131,33 +131,34 @@ def _section_by_link(e):
             key = ("walking", lbl)
         link_groups.setdefault(key, []).append(o)
 
-    # Build rows: (Σz², max|z|, z_min, z_max, N_sess, lbl, kind)
+    # Build rows: (χ²/N, max|z|, z_min, z_max, N_sess, lbl, kind)
     rows = []
     for (kind, grp_key), group in link_groups.items():
-        zvals  = [o["z"] for o in group]
-        sum_z2 = sum(z * z for z in zvals)
-        z_min  = min(zvals)
-        z_max  = max(zvals)
-        max_az = max(abs(z) for z in zvals)
-        lbl    = group[0].get("label", str(grp_key))
-        rows.append((sum_z2, max_az, z_min, z_max, len(group), lbl, kind))
+        zvals   = [o["z"] for o in group]
+        n       = len(zvals)
+        mean_z2 = sum(z * z for z in zvals) / n
+        z_min   = min(zvals)
+        z_max   = max(zvals)
+        max_az  = max(abs(z) for z in zvals)
+        lbl     = group[0].get("label", str(grp_key))
+        rows.append((mean_z2, max_az, z_min, z_max, n, lbl, kind))
 
     rows.sort(key=lambda r: r[0], reverse=True)
 
     header = (
         f"  {'':1s}  {'Kind':<8}  {'Label':<{LW}}  "
-        f"{'N':>3}  {'Σz²':>7}  {'z_min':>7}  {'z_max':>7}  {'|z|_max':>7}"
+        f"{'N':>3}  {'χ²/N':>7}  {'z_min':>7}  {'z_max':>7}  {'|z|_max':>7}"
     )
     lines.append(header)
     lines.append("  " + "─" * (len(header) - 2))
 
-    for (sum_z2, max_az, z_min, z_max, n_sess, lbl, kind) in rows:
+    for (mean_z2, max_az, z_min, z_max, n_sess, lbl, kind) in rows:
         marker = "*" if max_az > 2 else " "
         if len(lbl) > LW:
             lbl = lbl[:LW - 1] + "…"
         lines.append(
             f"  {marker}  {kind:<8}  {lbl:<{LW}}  "
-            f"{n_sess:>3}  {sum_z2:>7.2f}  {z_min:>+7.2f}  {z_max:>+7.2f}  {max_az:>7.2f}"
+            f"{n_sess:>3}  {mean_z2:>7.2f}  {z_min:>+7.2f}  {z_max:>+7.2f}  {max_az:>7.2f}"
         )
 
     lines.append("")
