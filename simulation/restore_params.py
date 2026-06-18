@@ -85,7 +85,7 @@ if hp:
 print()
 
 # Scalar gravity params: show before/after
-SCALAR_KEYS = [k for k in ("K", "K_res", "K_biz", "W_BIZ", "P", "ALPHA", "THETA")
+SCALAR_KEYS = [k for k in ("K", "K_res", "K_biz", "W_BIZ", "P", "ALPHA", "BETA", "THETA")
                if k in params]
 if SCALAR_KEYS:
     print(f"  {'param':<8}  {'before':>14}  {'after':>14}")

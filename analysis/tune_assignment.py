@@ -124,7 +124,7 @@ if _has_stoch:
     _pair_idx_3 = cache["pair_idx_3"]
     _link_idx_3 = cache["link_idx_3"]
     # Per-OD-pair float32 distances and precomputed log(d) for the gravity kernel.
-    # u^(ALPHA+1) = exp((ALPHA+1)*(log_d - log_P)); log_d fixed, log_P cheap scalar.
+    # u^(ALPHA+BETA) = exp((ALPHA+BETA)*(log_d - log_P)); log_d fixed, log_P cheap scalar.
     _od_dist_f32   = od_dist.astype(np.float32)
     _od_dist_2_f32 = _od_dist_2.astype(np.float32)
     _od_dist_3_f32 = _od_dist_3.astype(np.float32)
@@ -201,9 +201,10 @@ city_list    = list(config["cities"].items())
 grav_ref = config.get("gravity_ref", {})
 grav_lam = config.get("gravity_lambda", 0.0)
 _grav_ref_vals = [
-    math.log(max(grav_ref.get("W_BIZ", 1.0),   1e-4)),
-    math.log(max(grav_ref.get("P",     300.0),  1e-4)),
-    math.log(max(grav_ref.get("ALPHA", 2.0),    1e-4)),
+    math.log(max(grav_ref.get("W_BIZ", 1.0),  1e-4)),
+    math.log(max(grav_ref.get("P",     300.0), 1e-4)),
+    math.log(max(grav_ref.get("ALPHA", 2.0),   1e-4)),
+    math.log(max(grav_ref.get("BETA",  1.0),   1e-4)),
 ]
 if _has_stoch:
     _grav_ref_vals.append(math.log(max(grav_ref.get("THETA", 1.0), 1e-4)))
@@ -225,7 +226,7 @@ for city_name, city_cfg in city_list:
         if damp < 1.0:
             tunable_dampings.append((city_name, int(node_str), damp))
 
-n_gravity = 4 if _has_stoch else 3
+n_gravity = 5 if _has_stoch else 4
 n_city    = len(city_list) * 2
 n_damp    = len(tunable_dampings)
 n_ext     = n_city + n_damp  # external params in stage 2
@@ -331,9 +332,9 @@ if not _has_stoch:
     print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
           f"  ({time.time()-_t_pc:.1f}s)")
 
-    def _kern_b(P, ALPHA):
+    def _kern_b(P, ALPHA, BETA):
         u = _bin_centers / P
-        return ((ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))).astype(np.float32)
+        return ((ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))).astype(np.float32)
 
 # ── Per-slot hourly fraction priors ───────────────────────────────────────────
 # Group days into weekday (0), Saturday (1), Sunday (2).
@@ -499,7 +500,7 @@ for sk, idxs in slot_list:
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
+def run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA=None):
     """Gravity assignment → (flow_res, flow_biz).
 
     flow_res = pop→pop component (purely residential).
@@ -509,7 +510,7 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
     THETA given → CSR SpMV scatter over k=3 paths with logit weights.
     """
     if THETA is None or not _has_stoch:
-        f_b = _kern_b(P, ALPHA)
+        f_b = _kern_b(P, ALPHA, BETA)
         W   = W_BIZ
         W2  = W_BIZ ** 2
         if stage == "full":
@@ -521,7 +522,7 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
             b_src = w_biz[_ext_src]
             b_dst = w_biz[_ext_dst]
             u_e   = _ext_dist / P
-            f_e   = (ALPHA + 1) * u_e / (ALPHA + u_e ** (ALPHA + 1))
+            f_e   = (ALPHA + BETA) * u_e**BETA / (ALPHA + BETA * u_e**(ALPHA + BETA))
             t_pp  = w_src * w_dst * f_e
             t_pb  = (w_src * b_dst + b_src * w_dst) * f_e
             t_bb  = b_src * b_dst * f_e
@@ -552,9 +553,10 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
     shares = np.exp(log_w)
     shares /= shares.sum(axis=1, keepdims=True)
 
-    log_P   = np.float32(math.log(P))
-    alpha1  = np.float32(ALPHA + 1)
-    alpha_f = np.float32(ALPHA)
+    log_P      = np.float32(math.log(P))
+    alpha_f    = np.float32(ALPHA)
+    beta_f     = np.float32(BETA)
+    alpha_beta = np.float32(ALPHA + BETA)
 
     flow_res = np.zeros(N_links, dtype=np.float64)
     flow_biz = np.zeros(N_links, dtype=np.float64)
@@ -564,10 +566,10 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
         (_A3, _od_dist_3_f32, _log_od_dist_3),
     ]):
         log_u  = log_d - log_P
-        u_pow  = np.exp(alpha1 * log_u)
-        u_r    = d_f32 * np.float32(1.0 / P)
-        f_r    = alpha1 * u_r / (alpha_f + u_pow)        # (N_OD,) float32 kernel
-        sf     = shares[:, r] * f_r                       # float32 share×kernel
+        u_pow  = np.exp(alpha_beta * log_u)                        # u^(ALPHA+BETA)
+        u_beta = np.exp(beta_f * log_u)                            # u^BETA
+        f_r    = alpha_beta * u_beta / (alpha_f + beta_f * u_pow)  # (N_OD,) float32 kernel
+        sf     = shares[:, r] * f_r                                # float32 share×kernel
         # Weight products (float64) × sf (float32) → float64 by numpy promotion;
         # cast to float32 for fast SGEMV. Saturates to ±inf on extreme steps
         # (large finite chi²) rather than NaN.
@@ -678,7 +680,8 @@ def objective(log_params, log_ref=None):
     W_BIZ = math.exp(log_params[0])
     P     = math.exp(log_params[1])
     ALPHA = math.exp(log_params[2])
-    THETA = math.exp(log_params[3]) if _has_stoch else None
+    BETA  = math.exp(log_params[3])
+    THETA = math.exp(log_params[4]) if _has_stoch else None
 
     if stage == "full":
         # Build per-node weight arrays from city-level params and dampings
@@ -716,7 +719,7 @@ def objective(log_params, log_ref=None):
         w_pop = base_w_pop
         w_biz = base_w_biz
 
-    flow_res, flow_biz                          = run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA)
+    flow_res, flow_biz                          = run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA)
     m_res, m_biz                               = model_obs_2c(flow_res, flow_biz)
     K_res, K_biz, slot_fracs_res, slot_fracs_biz = calibrate_Ks_and_fracs(m_res, m_biz)
     chi2 = 0.0
@@ -752,11 +755,11 @@ def objective(log_params, log_ref=None):
 # ── Build initial parameter vector ────────────────────────────────────────────
 
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
-grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0, "THETA": 1.0}
+grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0, "BETA": 1.0, "THETA": 1.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
-    for k in ("W_BIZ", "P", "ALPHA", "THETA"):
+    for k in ("W_BIZ", "P", "ALPHA", "BETA", "THETA"):
         if k in tp:
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
@@ -767,13 +770,14 @@ _log_p0_vals = [
     math.log(max(grav_start["W_BIZ"], _LOG_MIN)),
     math.log(max(grav_start["P"],     _LOG_MIN)),
     math.log(max(grav_start["ALPHA"], _LOG_MIN)),
+    math.log(max(grav_start["BETA"],  _LOG_MIN)),
 ]
 if _has_stoch:
     _log_p0_vals.append(math.log(max(grav_start["THETA"], _LOG_MIN)))
 log_p0 = np.array(_log_p0_vals, dtype=np.float64)
 
 # Capture starting gravity params for history (before any optimization)
-initial_gravity = {k: grav_start[k] for k in ("W_BIZ", "P", "ALPHA") if k in grav_start}
+initial_gravity = {k: grav_start[k] for k in ("W_BIZ", "P", "ALPHA", "BETA") if k in grav_start}
 if _has_stoch and "THETA" in grav_start:
     initial_gravity["THETA"] = grav_start["THETA"]
 
@@ -794,7 +798,7 @@ if stage == "full":
     print(f"Full stage: {len(log_p0)} params "
           f"({n_gravity} gravity + {n_city} city pop/wp + {n_damp} dampings)")
 else:
-    _theta_note = "  [W_BIZ, P, ALPHA, THETA]" if _has_stoch else "  [W_BIZ, P, ALPHA]"
+    _theta_note = "  [W_BIZ, P, ALPHA, BETA, THETA]" if _has_stoch else "  [W_BIZ, P, ALPHA, BETA]"
     print(f"Gravity stage: {len(log_p0)} params{_theta_note}")
 
 # ── Run optimization ──────────────────────────────────────────────────────────
@@ -821,7 +825,8 @@ log_best = best["log_params"]
 W_BIZ = math.exp(log_best[0])
 P     = math.exp(log_best[1])
 ALPHA = math.exp(log_best[2])
-THETA = math.exp(log_best[3]) if _has_stoch else None
+BETA  = math.exp(log_best[3])
+THETA = math.exp(log_best[4]) if _has_stoch else None
 
 ext_pop_map  = {}
 ext_biz_map  = {}
@@ -859,7 +864,7 @@ for arr_i, nid in ext_indices:
         w_pop_f[arr_i] = ext_pop_map[nid]
         w_biz_f[arr_i] = ext_biz_map[nid]
 
-flow_res, flow_biz                             = run_assignment(W_BIZ, P, ALPHA, w_pop_f, w_biz_f, THETA)
+flow_res, flow_biz                             = run_assignment(W_BIZ, P, ALPHA, BETA, w_pop_f, w_biz_f, THETA)
 m_res, m_biz                                   = model_obs_2c(flow_res, flow_biz)
 K_res, K_biz, slot_fracs_res, slot_fracs_biz  = calibrate_Ks_and_fracs(m_res, m_biz)
 K = K_res + K_biz   # total scale (for display and backward compat)
@@ -916,7 +921,7 @@ elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
 _theta_str = f"  THETA={THETA:.4f}" if THETA is not None else ""
 print(f"  K_res={K_res:.4e}  K_biz={K_biz:.4e}  (K={K:.4e})")
-print(f"  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}{_theta_str}")
+print(f"  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}  BETA={BETA:.4f}{_theta_str}")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -978,6 +983,7 @@ tuned = {
     "W_BIZ":   round(W_BIZ, 6),
     "P":       round(P, 4),
     "ALPHA":   round(ALPHA, 6),
+    "BETA":    round(BETA, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
     "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
@@ -1009,7 +1015,7 @@ try:
     d_sec  = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
     d_min  = d_sec / 60.0
     u      = d_sec / P
-    kernel = K * (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
+    kernel = K * (ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))
 
     d_peak_sec = P          # peak is exactly at d = P
     k_peak     = K          # f(P) = 1, so kernel peak = K
@@ -1019,10 +1025,10 @@ try:
     ax.axvline(d_peak_sec / 60.0, color="r", linestyle="--", alpha=0.7,
                label=f"peak  {d_peak_sec/60.0:.1f} min  (K={k_peak:.3e})")
     ax.set_xlabel("Travel time (minutes)")
-    ax.set_ylabel("K · (ALPHA+1) · u / (ALPHA + u^(ALPHA+1))  where u = d/P")
+    ax.set_ylabel("K · (ALPHA+BETA) · u^BETA / (ALPHA + BETA·u^(ALPHA+BETA))  where u = d/P")
     ax.set_title(
         f"Gravity kernel (rational)  "
-        f"P={P:.1f}s  ALPHA={ALPHA:.3f}  K={K:.3e}\n"
+        f"P={P:.1f}s  ALPHA={ALPHA:.3f}  BETA={BETA:.3f}  K={K:.3e}\n"
         f"stage={stage}  χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
     )
     ax.set_xscale("log")
@@ -1047,6 +1053,7 @@ params = {
     "W_BIZ":  round(W_BIZ, 6),
     "P":      round(P, 4),
     "ALPHA":  round(ALPHA, 6),
+    "BETA":   round(BETA, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
     "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},

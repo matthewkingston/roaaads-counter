@@ -23,7 +23,7 @@ if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         existing = json.load(f)
 
-GRAVITY_KEYS = ("W_BIZ", "P", "ALPHA", "THETA")
+GRAVITY_KEYS = ("W_BIZ", "P", "ALPHA", "BETA", "THETA")
 
 print("Resetting gravity params (tuner_config gravity_ref → tuned_params.json):\n")
 print(f"  {'param':<8}  {'before':>12}  {'after':>12}")

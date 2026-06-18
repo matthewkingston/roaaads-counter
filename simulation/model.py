@@ -42,15 +42,16 @@ _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 
 def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                    W_BIZ, P, ALPHA, w_pop, w_biz,
-                   THETA=None,
+                   BETA=1.0, THETA=None,
                    od_dist_2=None, pair_idx_2=None, link_idx_2=None,
                    od_dist_3=None, pair_idx_3=None, link_idx_3=None,
                    return_components=False):
     """
-    Rational kernel assignment.
+    Generalised rational kernel assignment.
 
-    Kernel: f(d) = (ALPHA+1)*u / (ALPHA + u^(ALPHA+1))  where u = d/P.
-    Peak at d=P with f(P)=1; tail ~ 1/d^ALPHA.
+    Kernel: f(d) = (ALPHA+BETA)*u^BETA / (ALPHA + BETA*u^(ALPHA+BETA))  where u = d/P.
+    Peak at d=P with f(P)=1; tail ~ 1/d^ALPHA; rise ~ u^BETA near origin.
+    BETA=1 (default) recovers the original kernel (ALPHA+1)*u / (ALPHA + u^(ALPHA+1)).
 
     When THETA is None or k=2/k=3 arrays absent: all-or-nothing on k=1 path.
     When THETA is given with k=2/k=3 arrays: logit spread across 3 paths.
@@ -64,7 +65,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
 
     if not _has_stoch:
         u    = od_dist / P
-        kern = (ALPHA + 1) * u / (ALPHA + u ** (ALPHA + 1))
+        kern = (ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))
 
         if not return_components:
             w_vec = w_pop + W_BIZ * w_biz
@@ -97,7 +98,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
             (pair_idx_3, link_idx_3, od_dist_3),
         ]):
             u_r  = d_r / P
-            f_r  = (ALPHA + 1) * u_r / (ALPHA + u_r ** (ALPHA + 1))
+            f_r  = (ALPHA + BETA) * u_r**BETA / (ALPHA + BETA * u_r**(ALPHA + BETA))
             flow += np.bincount(lidx, weights=(t_ij * shares[:, r] * f_r)[pidx],
                                 minlength=N_links)
         return flow
@@ -113,7 +114,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         (pair_idx_3, link_idx_3, od_dist_3),
     ]):
         u_r  = d_r / P
-        f_r  = (ALPHA + 1) * u_r / (ALPHA + u_r ** (ALPHA + 1))
+        f_r  = (ALPHA + BETA) * u_r**BETA / (ALPHA + BETA * u_r**(ALPHA + BETA))
         s_r  = shares[:, r]
         flow_res += np.bincount(lidx, weights=(pp_od * s_r * f_r)[pidx], minlength=N_links)
         flow_biz += np.bincount(lidx,

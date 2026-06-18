@@ -25,6 +25,7 @@ K      = 1.73   # global flow scale factor
 W_BIZ  = 1.0    # workplace demand weight relative to residential population
 P      = 300.0  # peak travel time (seconds); flow peaks at d = P
 ALPHA  = 2.0    # tail decay exponent; flow ~ 1/d^ALPHA for large d
+BETA   = 1.0    # rise exponent; u^BETA approach to peak from origin
 
 OUT_DIR    = "simulation"
 CONS_GRAPH = "simulation/newtownards_consolidated.graphml"
@@ -60,6 +61,7 @@ if os.path.exists(TUNED_PARAMS):
     W_BIZ = _tp.get("W_BIZ", W_BIZ)
     P     = _tp.get("P",     P)
     ALPHA = _tp.get("ALPHA", ALPHA)
+    BETA  = _tp.get("BETA",  BETA)
     THETA = _tp.get("THETA", None)
     for _nid, _val in _tp.get("external_node_pop", {}).items():
         node_population[int(_nid)] = _val
@@ -112,7 +114,7 @@ w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr]
 print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
 N_links = len(link_u)
-_kw = dict(THETA=THETA,
+_kw = dict(BETA=BETA, THETA=THETA,
            od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
            od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
 _use_2c = (K_res is not None)
@@ -175,7 +177,7 @@ print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
 out = {
-    "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "K": K,
+    "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "BETA": BETA, "K": K,
     "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
 }
 if _use_2c:
@@ -187,4 +189,4 @@ with open(flows_path, "w") as f:
     json.dump(out, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
       + (f"  (+ res/biz components)" if _use_2c else ""))
-print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}")
+print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}  BETA={BETA}")
