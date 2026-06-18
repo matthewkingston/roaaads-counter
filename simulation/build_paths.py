@@ -300,24 +300,24 @@ print(f"  All passes done in {time.time()-t0:.1f}s  ({n_fallbacks:,} pair-pass f
 print("Building output arrays …")
 od_dist_out = (dist_accum / N_PASSES).astype(np.float32)
 
-pair_idx_out    = []
-link_idx_out    = []
-link_weight_out = []
-for key, count in hit_accum.items():
-    pk = key // N_links
-    li = key %  N_links
-    pair_idx_out.append(pk)
-    link_idx_out.append(li)
-    link_weight_out.append(count / N_PASSES)
+# Use np.fromiter to avoid Python list overhead (~2 GB peak saved).
+# Free hit_accum immediately after extracting keys/values.
+n_entries    = len(hit_accum)
+keys_arr     = np.fromiter(hit_accum.keys(),   dtype=np.int64,   count=n_entries)
+vals_arr     = np.fromiter(hit_accum.values(), dtype=np.float32, count=n_entries)
+del hit_accum
 
-pair_idx_arr    = np.array(pair_idx_out,    dtype=np.int32)
-link_idx_arr    = np.array(link_idx_out,    dtype=np.int32)
-link_weight_arr = np.array(link_weight_out, dtype=np.float32)
+pair_idx_arr    = (keys_arr // N_links).astype(np.int32)
+link_idx_arr    = (keys_arr %  N_links).astype(np.int32)
+del keys_arr
+link_weight_arr = vals_arr / N_PASSES
+del vals_arr
 
 sort_order      = np.argsort(pair_idx_arr, kind='stable')
 pair_idx_arr    = pair_idx_arr[sort_order]
 link_idx_arr    = link_idx_arr[sort_order]
 link_weight_arr = link_weight_arr[sort_order]
+del sort_order
 
 n_entries     = len(pair_idx_arr)
 n_always_k1   = int((link_weight_arr == 1.0).sum())
