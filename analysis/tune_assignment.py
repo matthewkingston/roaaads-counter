@@ -510,8 +510,8 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
     """
     if THETA is None or not _has_stoch:
         f_b = _kern_b(P, ALPHA)
-        W   = np.float32(W_BIZ)
-        W2  = np.float32(W_BIZ ** 2)
+        W   = W_BIZ
+        W2  = W_BIZ ** 2
         if stage == "full":
             flow_res = (int_bin_pp @ f_b).astype(np.float64)
             flow_biz = (W * (int_bin_pb @ f_b) + W2 * (int_bin_bb @ f_b)).astype(np.float64)
@@ -535,24 +535,24 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
         return flow_res, flow_biz
 
     # Stochastic logit: exact scatter over 3 paths, split by component.
-    # Per-OD weight products needed to separate pp from pb+bb.
-    w_pop32 = w_pop.astype(np.float32)
-    w_biz32 = w_biz.astype(np.float32)
-    W32     = np.float32(W_BIZ)
-    pp_od   = w_pop32[od_src] * w_pop32[od_dst]
-    pb_od   = w_pop32[od_src] * w_biz32[od_dst] + w_biz32[od_src] * w_pop32[od_dst]
-    bb_od   = w_biz32[od_src] * w_biz32[od_dst]
+    # Per-OD weight products in float64 — float32 overflows when the optimizer
+    # explores extreme W_BIZ or wp values during Powell's method.
+    # Distance arrays stay float32 (large, always finite); upcasting happens
+    # naturally when multiplied against float64 weight products.
+    pp_od = w_pop[od_src] * w_pop[od_dst]
+    pb_od = w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]
+    bb_od = w_biz[od_src] * w_biz[od_dst]
 
-    # Logit shares
+    # Logit shares (float32 distances sufficient here)
     d_mat  = np.stack([_od_dist_f32, _od_dist_2_f32, _od_dist_3_f32], axis=1)
-    log_w  = np.float32(-THETA / P) * d_mat
+    log_w  = (-THETA / P) * d_mat
     log_w -= log_w.max(axis=1, keepdims=True)
     shares = np.exp(log_w)
     shares /= shares.sum(axis=1, keepdims=True)
 
-    log_P   = np.float32(math.log(P))
-    alpha1  = np.float32(ALPHA + 1)
-    alpha_f = np.float32(ALPHA)
+    log_P   = math.log(P)
+    alpha1  = ALPHA + 1
+    alpha_f = ALPHA
 
     flow_res = np.zeros(N_links, dtype=np.float64)
     flow_biz = np.zeros(N_links, dtype=np.float64)
@@ -563,11 +563,11 @@ def run_assignment(W_BIZ, P, ALPHA, w_pop, w_biz, THETA=None):
     ]):
         log_u  = log_d - log_P
         u_pow  = np.exp(alpha1 * log_u)
-        u_r    = d_f32 * np.float32(1.0 / P)
+        u_r    = d_f32 * (1.0 / P)
         f_r    = alpha1 * u_r / (alpha_f + u_pow)      # (N_OD,) kernel
         sr     = shares[:, r]
         flow_res += A_r @ (pp_od * sr * f_r)
-        flow_biz += A_r @ ((W32 * pb_od + W32**2 * bb_od) * sr * f_r)
+        flow_biz += A_r @ ((W_BIZ * pb_od + W_BIZ**2 * bb_od) * sr * f_r)
     return flow_res, flow_biz
 
 
