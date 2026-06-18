@@ -362,7 +362,7 @@ def _section_slots(e):
         pr = _pull(f_r, mfr)
         pb = _pull(f_b, mfb)
         f_sum  = f_r + f_b if not (math.isnan(f_r) or math.isnan(f_b)) else float("nan")
-        f_agg2 = 2 * mfa if not math.isnan(mfa) else float("nan")
+        f_agg2 = mfa if not math.isnan(mfa) else float("nan")
 
         def _fs(v): return f"{v:>8.5f}" if not math.isnan(v) else f"{'—':>8}"
         def _ps(v): return f"{v:>+7.2f}" if not math.isnan(v) else f"{'—':>7}"

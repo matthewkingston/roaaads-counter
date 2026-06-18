@@ -8,7 +8,7 @@ All four are jointly calibrated at each evaluation via 4-block alternating minim
   K-step   (1D solve for total K; phi-step splits into K_res, K_biz)
   f_res-step  (per-slot analytical update, anchored by NTS residential prior)
   f_biz-step  (per-slot analytical update, anchored by NTS business prior)
-  + aggregate coupling γ·(f_res + f_biz − 2·f_agg)² per slot to prevent collective drift.
+  + aggregate coupling γ·(f_res + f_biz − f_agg)² per slot to prevent collective drift.
 
 Observations:
   Official sites: hourly count obs from data/official_hourly.json (24 h × 3 day-types
@@ -598,7 +598,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
     phi-step: 1D solve with Gaussian prior phi ~ N(PHI_PRIOR, PHI_STD²).
     f_res-step: per-slot analytical, anchored by NTS residential prior.
     f_biz-step: symmetric.
-    Coupling: γ·(f_res + f_biz − 2·f_agg)² per slot (2 lines each f-step).
+    Coupling: γ·(f_res + f_biz − f_agg)² per slot (2 lines each f-step).
     Converges in 3–5 iterations; 10 iterations is ample.
     Returns (K_res, K_biz, slot_fracs_res, slot_fracs_biz).
     """
@@ -649,7 +649,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
             cr  = m_res[ia] * Ths
             cb  = m_biz[ia] * Ths
             h_i = rhs - K_biz * cb * f_b
-            num = K_res * float(np.dot(w * cr, h_i)) + mfr * ivr + gam * (2*mfa - f_b)
+            num = K_res * float(np.dot(w * cr, h_i)) + mfr * ivr + gam * (mfa - f_b)
             den = K_res**2 * float(np.dot(w * cr, cr)) + ivr + gam
             slot_fracs_res[sk] = max(num / den, 1e-12) if den > 0 else mfr
 
@@ -659,7 +659,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
             cr  = m_res[ia] * Ths
             cb  = m_biz[ia] * Ths
             h_i = rhs - K_res * cr * f_r
-            num = K_biz * float(np.dot(w * cb, h_i)) + mfb * ivb + gam * (2*mfa - f_r)
+            num = K_biz * float(np.dot(w * cb, h_i)) + mfb * ivb + gam * (mfa - f_r)
             den = K_biz**2 * float(np.dot(w * cb, cb)) + ivb + gam
             slot_fracs_biz[sk] = max(num / den, 1e-12) if den > 0 else mfb
 
@@ -727,7 +727,7 @@ def objective(log_params, log_ref=None):
         chi2 += float(np.dot(w * (pred - rhs), pred - rhs))
         chi2 += (f_r - mfr) ** 2 * ivr
         chi2 += (f_b - mfb) ** 2 * ivb
-        chi2 += gam * (f_r + f_b - 2 * mfa) ** 2
+        chi2 += gam * (f_r + f_b - mfa) ** 2
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
@@ -871,7 +871,7 @@ for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
     chi2 += float(np.dot(w * (pred - rhs), pred - rhs))
     chi2 += (f_r - mfr) ** 2 * ivr
     chi2 += (f_b - mfb) ** 2 * ivb
-    chi2 += gam * (f_r + f_b - 2 * mfa) ** 2
+    chi2 += gam * (f_r + f_b - mfa) ** 2
 chi2_per_n = chi2 / n_obs
 
 # Build per-obs residuals for the fit table.
