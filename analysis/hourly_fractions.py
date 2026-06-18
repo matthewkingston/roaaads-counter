@@ -13,6 +13,8 @@ Conversion formula:
   AADT = observed_count / (mean_fraction[D, H] * (duration_s / 3600))
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -85,5 +87,25 @@ for day_idx, day_name in enumerate(DAY_NAMES):
         })
 
 out = pd.DataFrame(rows, columns=["day_of_week", "day_name", "hour", "mean_fraction", "std_fraction"])
+
+# Preserve hand-crafted component prior columns from the existing CSV.
+# mean_fraction_res / mean_fraction_biz are synthetic priors, not derivable
+# from the ODS data; they must be maintained manually in the tracked CSV.
+COMPONENT_COLS = ["mean_fraction_res", "mean_fraction_biz"]
+if os.path.exists(OUT_CSV):
+    _existing = pd.read_csv(OUT_CSV)
+    _cols_present = [c for c in COMPONENT_COLS if c in _existing.columns]
+    if _cols_present:
+        out = out.merge(
+            _existing[["day_of_week", "hour"] + _cols_present],
+            on=["day_of_week", "hour"], how="left",
+        )
+        print(f"Preserved component prior columns: {_cols_present}")
+    else:
+        print(
+            f"WARNING: existing {OUT_CSV} has no component prior columns "
+            f"({COMPONENT_COLS}) — add them manually before running the tuner."
+        )
+
 out.to_csv(OUT_CSV, index=False)
 print(f"\nSaved {len(out)} rows → {OUT_CSV}")

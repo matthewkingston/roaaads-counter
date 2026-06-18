@@ -115,7 +115,7 @@ N_links = len(link_u)
 _kw = dict(THETA=THETA,
            od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
            od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
-_use_2c = (K_res is not None and os.path.exists(OFFICIAL_HOURLY))
+_use_2c = (K_res is not None)
 
 if _use_2c:
     raw_res, raw_biz = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
