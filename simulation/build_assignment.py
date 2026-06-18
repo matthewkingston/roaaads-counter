@@ -51,18 +51,22 @@ node_business_demand = {int(k): v for k, v in weights["node_business_demand"].it
 THETA          = None
 K_res          = None
 K_biz          = None
+P_biz          = None
+ALPHA_biz      = None
 slot_fracs_res = {}
 slot_fracs_biz = {}
 
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         _tp = json.load(f)
-    K     = _tp.get("K",     K)
-    W_BIZ = _tp.get("W_BIZ", W_BIZ)
-    P     = _tp.get("P",     P)
-    ALPHA = _tp.get("ALPHA", ALPHA)
-    BETA  = _tp.get("BETA",  BETA)
-    THETA = _tp.get("THETA", None)
+    K         = _tp.get("K",         K)
+    W_BIZ     = _tp.get("W_BIZ",     W_BIZ)
+    P         = _tp.get("P",         P)
+    ALPHA     = _tp.get("ALPHA",     ALPHA)
+    BETA      = _tp.get("BETA",      BETA)
+    THETA     = _tp.get("THETA",     None)
+    P_biz     = _tp.get("P_biz",     None)
+    ALPHA_biz = _tp.get("ALPHA_biz", None)
     for _nid, _val in _tp.get("external_node_pop", {}).items():
         node_population[int(_nid)] = _val
     for _nid, _val in _tp.get("external_node_biz", {}).items():
@@ -75,8 +79,10 @@ if os.path.exists(TUNED_PARAMS):
         slot_fracs_biz = {tuple(int(x) for x in k.split(",")): v
                           for k, v in _tp.get("slot_fracs_biz", {}).items()}
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}"
-          + (f"  THETA={THETA:.4f}" if THETA is not None else "")
-          + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if K_res is not None else "") + "]")
+          + (f"  THETA={THETA:.4f}"             if THETA is not None     else "")
+          + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if K_res is not None else "")
+          + (f"  P_biz={P_biz:.1f}s  ALPHA_biz={ALPHA_biz:.4f}" if P_biz is not None else "")
+          + "]")
 
 # ── Assignment ────────────────────────────────────────────────────────────────
 
@@ -115,6 +121,7 @@ print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum()
 
 N_links = len(link_u)
 _kw = dict(BETA=BETA, THETA=THETA,
+           P_biz=P_biz, ALPHA_biz=ALPHA_biz,
            od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
            od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
 _use_2c = (K_res is not None)
@@ -189,4 +196,5 @@ with open(flows_path, "w") as f:
     json.dump(out, f)
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
       + (f"  (+ res/biz components)" if _use_2c else ""))
-print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}  BETA={BETA}")
+print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}  BETA={BETA}"
+      + (f"  P_biz={P_biz}  ALPHA_biz={ALPHA_biz}" if P_biz is not None else ""))

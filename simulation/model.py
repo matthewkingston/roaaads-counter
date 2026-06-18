@@ -43,6 +43,7 @@ _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                    W_BIZ, P, ALPHA, w_pop, w_biz,
                    BETA=1.0, THETA=None,
+                   P_biz=None, ALPHA_biz=None, BETA_biz=None,
                    od_dist_2=None, pair_idx_2=None, link_idx_2=None,
                    od_dist_3=None, pair_idx_3=None, link_idx_3=None,
                    return_components=False):
@@ -57,11 +58,21 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
     When THETA is given with k=2/k=3 arrays: logit spread across 3 paths.
       share(r) ∝ exp(−THETA · d_r / P); THETA→∞ collapses to all-or-nothing.
 
+    P_biz/ALPHA_biz/BETA_biz: optional separate kernel for the business component
+      (pb and bb OD pairs). When None, falls back to the shared P/ALPHA/BETA.
+      Only used when return_components=True.
+
     return_components=False (default): returns combined pre-K flow array (N_links,).
     return_components=True: returns (flow_res, flow_biz) where
-      flow_res = pop→pop component, flow_biz = W_BIZ·pb + W_BIZ²·bb component.
+      flow_res = pop→pop component (uses P/ALPHA/BETA kernel),
+      flow_biz = W_BIZ·pb + W_BIZ²·bb component (uses P_biz/ALPHA_biz/BETA_biz kernel).
     """
     _has_stoch = (THETA is not None and od_dist_2 is not None)
+
+    # Resolve effective biz kernel params (fall back to shared params when not set)
+    _P_biz    = P_biz    if P_biz    is not None else P
+    _A_biz    = ALPHA_biz if ALPHA_biz is not None else ALPHA
+    _B_biz    = BETA_biz  if BETA_biz  is not None else BETA
 
     if not _has_stoch:
         u    = od_dist / P
@@ -72,9 +83,16 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
             t_ij  = w_vec[od_src] * w_vec[od_dst] * kern
             return np.bincount(link_idx, weights=t_ij[pair_idx], minlength=N_links)
 
+        # Separate biz kernel (may equal kern when no biz params supplied)
+        if _P_biz == P and _A_biz == ALPHA and _B_biz == BETA:
+            kern_biz = kern
+        else:
+            u_b      = od_dist / _P_biz
+            kern_biz = (_A_biz + _B_biz) * u_b**_B_biz / (_A_biz + _B_biz * u_b**(_A_biz + _B_biz))
+
         pp = w_pop[od_src] * w_pop[od_dst] * kern
-        pb = (w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]) * kern
-        bb = w_biz[od_src] * w_biz[od_dst] * kern
+        pb = (w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]) * kern_biz
+        bb = w_biz[od_src] * w_biz[od_dst] * kern_biz
         flow_res = np.bincount(link_idx, weights=pp[pair_idx], minlength=N_links)
         flow_biz = np.bincount(link_idx,
                                weights=((W_BIZ * pb + W_BIZ ** 2 * bb)[pair_idx]),
@@ -83,7 +101,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
 
     # ── Stochastic logit ──────────────────────────────────────────────────────
     d_mat  = np.stack([od_dist, od_dist_2, od_dist_3], axis=1)
-    log_w  = -THETA * d_mat / P
+    log_w  = -THETA * d_mat / P   # logit shares always use P (shared routing scale)
     log_w -= log_w.max(axis=1, keepdims=True)
     shares = np.exp(log_w)
     shares /= shares.sum(axis=1, keepdims=True)
@@ -103,9 +121,10 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                                 minlength=N_links)
         return flow
 
-    pp_od = w_pop[od_src] * w_pop[od_dst]
-    pb_od = w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]
-    bb_od = w_biz[od_src] * w_biz[od_dst]
+    pp_od    = w_pop[od_src] * w_pop[od_dst]
+    pb_od    = w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]
+    bb_od    = w_biz[od_src] * w_biz[od_dst]
+    biz_base = W_BIZ * pb_od + W_BIZ ** 2 * bb_od
     flow_res = np.zeros(N_links, dtype=np.float64)
     flow_biz = np.zeros(N_links, dtype=np.float64)
     for r, (pidx, lidx, d_r) in enumerate([
@@ -113,13 +132,13 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         (pair_idx_2, link_idx_2, od_dist_2),
         (pair_idx_3, link_idx_3, od_dist_3),
     ]):
-        u_r  = d_r / P
-        f_r  = (ALPHA + BETA) * u_r**BETA / (ALPHA + BETA * u_r**(ALPHA + BETA))
-        s_r  = shares[:, r]
-        flow_res += np.bincount(lidx, weights=(pp_od * s_r * f_r)[pidx], minlength=N_links)
-        flow_biz += np.bincount(lidx,
-                                weights=((W_BIZ * pb_od + W_BIZ ** 2 * bb_od) * s_r * f_r)[pidx],
-                                minlength=N_links)
+        u_res = d_r / P
+        f_res = (ALPHA + BETA) * u_res**BETA / (ALPHA + BETA * u_res**(ALPHA + BETA))
+        u_biz = d_r / _P_biz
+        f_biz = (_A_biz + _B_biz) * u_biz**_B_biz / (_A_biz + _B_biz * u_biz**(_A_biz + _B_biz))
+        s_r   = shares[:, r]
+        flow_res += np.bincount(lidx, weights=(pp_od    * s_r * f_res)[pidx], minlength=N_links)
+        flow_biz += np.bincount(lidx, weights=(biz_base * s_r * f_biz)[pidx], minlength=N_links)
     return flow_res, flow_biz
 
 # ── Flow extraction ───────────────────────────────────────────────────────────
