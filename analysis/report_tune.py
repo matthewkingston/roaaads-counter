@@ -170,13 +170,18 @@ def _section_by_link(e):
 def _section_gravity(e, prev_entry, config):
     params      = e["params"]
     grav_ref    = config.get("gravity_ref", {})
-    grav_lam    = config.get("gravity_lambda", 0.0)
+    grav_lam_raw = config.get("gravity_lambda", 0.0)
 
-    # σ in log-space = 1/sqrt(grav_lam); pull = log(final/ref) * sqrt(grav_lam)
-    def _log_pull(val, ref):
-        if grav_lam <= 0 or ref <= 0 or val <= 0:
+    # σ in log-space = 1/sqrt(lam); pull = log(final/ref) * sqrt(lam)
+    def _log_pull(val, ref, lam):
+        if lam <= 0 or ref <= 0 or val <= 0:
             return float("nan")
-        return math.log(val / ref) * math.sqrt(grav_lam)
+        return math.log(val / ref) * math.sqrt(lam)
+
+    def _param_lam(k):
+        if isinstance(grav_lam_raw, dict):
+            return grav_lam_raw.get(k, 0.0)
+        return float(grav_lam_raw)
 
     # Determine initial gravity: prefer entry's own field, else previous entry, else grav_ref
     init_src = "run start"
@@ -211,7 +216,7 @@ def _section_gravity(e, prev_entry, config):
         ref   = grav_ref.get(k)
         d_pct  = 100.0 * (final - init) / init if init else float("nan")
         dr_pct = 100.0 * (final - ref)  / ref  if ref  else float("nan")
-        pull   = _log_pull(final, ref)
+        pull   = _log_pull(final, ref, _param_lam(k))
         init_s = f"{init:>12.4f}" if init is not None else f"{'—':>12}"
         ref_s  = f"{ref:>12.4f}"  if ref  is not None else f"{'—':>12}"
         d_s    = _fmt_pct(d_pct)  if not math.isnan(d_pct)  else "    —"
@@ -246,12 +251,17 @@ def _section_gravity(e, prev_entry, config):
         f"  gravity_ref: " +
         "  ".join(f"{k}={v}" for k, v in grav_ref.items())
     )
-    if grav_lam > 0:
-        sigma_log = 1.0 / math.sqrt(grav_lam)
-        lines.append(
-            f"  gravity_lambda={grav_lam}  "
-            f"→ L2 σ_log={sigma_log:.3f} (pull = log(final/ref)/σ_log)"
-        )
+    if grav_lam_raw and grav_lam_raw != 0:
+        if isinstance(grav_lam_raw, dict):
+            lam_str = "  ".join(f"{k}={v}" for k, v in grav_lam_raw.items())
+            lines.append(f"  gravity_lambda: {lam_str}")
+            lines.append(f"  (pull = log(final/ref)/√lambda_param)")
+        else:
+            sigma_log = 1.0 / math.sqrt(float(grav_lam_raw))
+            lines.append(
+                f"  gravity_lambda={grav_lam_raw}  "
+                f"→ L2 σ_log={sigma_log:.3f} (pull = log(final/ref)/σ_log)"
+            )
     lines.append("")
     return lines
 

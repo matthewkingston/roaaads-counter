@@ -14,7 +14,15 @@
     ["Dundonald",   "Donaghadee"],
     ["Dundonald",   "Millisle"]
   ],
-  "gravity_lambda": 0.5,
+  "gravity_lambda": {
+    "W_BIZ":     1.0,
+    "P":         2.0,
+    "ALPHA":     0.5,
+    "BETA":      0.5,
+    "P_biz":     2.0,
+    "ALPHA_biz": 0.5,
+    "THETA":     0.5
+  },
   "gravity_ref": {
     "W_BIZ":     1.0,
     "P":         600.0,

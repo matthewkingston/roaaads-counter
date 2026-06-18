@@ -208,7 +208,10 @@ phi_std              = config.get("phi_std",   0.15)
 city_list    = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
-grav_lam = config.get("gravity_lambda", 0.0)
+grav_lam_raw = config.get("gravity_lambda", 0.0)
+_grav_param_names = ["W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz"]
+if _has_stoch:
+    _grav_param_names.append("THETA")
 _grav_ref_vals = [
     math.log(max(grav_ref.get("W_BIZ",     1.0),  1e-4)),
     math.log(max(grav_ref.get("P",         600.0), 1e-4)),
@@ -220,6 +223,10 @@ _grav_ref_vals = [
 if _has_stoch:
     _grav_ref_vals.append(math.log(max(grav_ref.get("THETA", 1.0), 1e-4)))
 log_grav_ref = np.array(_grav_ref_vals)
+if isinstance(grav_lam_raw, dict):
+    log_grav_lam = np.array([grav_lam_raw.get(k, 0.0) for k in _grav_param_names])
+else:
+    log_grav_lam = np.full(len(_grav_param_names), float(grav_lam_raw))
 
 # External nodes covered by tuner_config (node 180 excluded)
 external_nodes = set()
@@ -791,8 +798,8 @@ def objective(log_params, log_ref=None):
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
-    if grav_lam > 0:
-        chi2 += grav_lam * float(np.sum((log_params[:n_gravity] - log_grav_ref) ** 2))
+    if np.any(log_grav_lam > 0):
+        chi2 += float(np.dot(log_grav_lam, (log_params[:n_gravity] - log_grav_ref) ** 2))
 
     eval_count[0] += 1
     if chi2 < best["chi2"]:
@@ -1156,7 +1163,7 @@ history_entry = {
         "phi_prior":            phi_prior,
         "phi_std":              phi_std,
         "gamma_coupling_scale": gamma_coupling_scale,
-        "gravity_lambda":       grav_lam,
+        "gravity_lambda":       grav_lam_raw,
         "lambda":               lam,
         "fast":                 fast,
     },
