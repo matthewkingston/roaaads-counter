@@ -189,8 +189,9 @@ Annual AADT values (507: 21,202; 508: 10,792; 444: 7,282) are retained in `model
 `COUNT_SITES` for `build_assignment.py` backward compatibility but are no longer used
 by the tuner directly.
 
-**Walking counts:** 6 CSV files, 170 sessions, 329 per-session observations (after EXCLUDE_LINKS). Two sessions manually assigned: `e644eae2` and `760b0c8e` (A20 Kempe Stones eastbound, link 8→7; observer was on the westbound carriageway). The tuner uses per-session observations directly; per-link aggregates are retained in `link_aadt.json`.
-**Total: 545 observations (216 official hourly + 329 walking) in 72 time slots. N_eff = 545 − 2×72 = 401.**
+**Walking counts:** 7 CSV files, 177 sessions, 343 per-session observations (after EXCLUDE_LINKS). Two sessions manually assigned: `e644eae2` and `760b0c8e` (A20 Kempe Stones eastbound, link 8→7; observer was on the westbound carriageway). The tuner uses per-session observations directly; per-link aggregates are retained in `link_aadt.json`.
+New sessions added 2026-06-18 (7 sessions): Saratoga Avenue (333↔335), Glenford Road (332→331, 67→21), Hardford Link (21→18), Belfast Road (18→20).
+**Total: 559 observations (216 official hourly + 343 walking) in 72 time slots. N_eff = 559 − 2×72 = 415.**
 
 ---
 
@@ -217,9 +218,7 @@ by the tuner directly.
 | 2026-06-17 | full | 545 | 26 | 1.6640 | first two-component full tune; phi=16.5%; LowerArds wp +1303% flag |
 | 2026-06-18 | full | 545 | 26 | **1.6432** | NTS-derived component priors; LowerArds wp +645% (improved); Belfast wp +1083% new flag |
 
-**Note on comparability:** runs from 2026-06-17 onward use 545 observations (216 official
-hourly + 329 walking, 72 time slots, N_eff=401) and include coupling penalty terms in chi²/N.
-They are not directly comparable to earlier single-component runs.
+**Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-18 count ingest onward: 559 observations (216 official hourly + 343 walking, 72 time slots, N_eff=415).
 
 Current best full-tune: chi²/N = 1.6432 (545 obs, N_eff=401; two-component with coupling).
 W_BIZ=2.409, P=56.8s, ALPHA=3.48, THETA=0.542. phi=14.8% business fraction.
