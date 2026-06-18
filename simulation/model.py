@@ -249,8 +249,12 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))
 
     n_obs   = len(rows)
-    # N_eff: 2 df per slot (f_res and f_biz each); official hourly has 72 slots (24h × 3 day-types)
-    n_eff   = n_obs - 2 * (len(n_slots_seen) + (72 if n_official else 0))
+    # N_eff: 2 df per slot (f_res and f_biz each).
+    # Official obs cover all 72 possible (day_type, hour) slots; walking slots are a subset.
+    # Take the union so overlapping slots aren't counted twice.
+    if n_official:
+        n_slots_seen |= {(dt, h) for dt in range(3) for h in range(24)}
+    n_eff   = n_obs - 2 * len(n_slots_seen)
 
     rows.sort(key=lambda r: abs(r[5]), reverse=True)
     return rows, chi2, n_obs, n_eff
