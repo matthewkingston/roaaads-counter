@@ -213,15 +213,16 @@ by the tuner directly.
 | 2026-06-17 | gravity | 374 | 4 | 1.3064 | two-component model; 216 ODS hourly obs; K_res=1.47e-05, K_biz=4.43e-06 (phi≈23%), γ=0 |
 | 2026-06-17 | gravity | 374 | 4 | 1.4286 | + aggregate coupling γ=1/std_f²; K_res=8.96e-05, K_biz=1.29e-05 (phi≈13%) |
 | 2026-06-17 | gravity | 545 | 4 | 1.9582 | + new count data (329 walking obs); sqrt(count) sigma floor active |
-| 2026-06-17 | full | 545 | 26 | **1.6640** | first two-component full tune; phi=16.5%; LowerArds wp +1303% flag |
+| 2026-06-17 | full | 545 | 26 | 1.6640 | first two-component full tune; phi=16.5%; LowerArds wp +1303% flag |
+| 2026-06-18 | full | 545 | 26 | **1.6432** | NTS-derived component priors; LowerArds wp +645% (improved); Belfast wp +1083% new flag |
 
 **Note on comparability:** runs from 2026-06-17 onward use 545 observations (216 official
 hourly + 329 walking, 72 time slots, N_eff=401) and include coupling penalty terms in chi²/N.
 They are not directly comparable to earlier single-component runs.
 
-Current best full-tune: chi²/N = 1.6640 (545 obs, N_eff=401; two-component with coupling).
-W_BIZ=1.577, P=53.3s, ALPHA=3.49, THETA=0.236. phi=16.5% business fraction.
-mean|z|=0.92  |z|>2: 48  |z|>3: 15.
+Current best full-tune: chi²/N = 1.6432 (545 obs, N_eff=401; two-component with coupling).
+W_BIZ=2.409, P=56.8s, ALPHA=3.48, THETA=0.542. phi=14.8% business fraction.
+mean|z|=0.90  |z|>2: 46  |z|>3: 15.
 
 **Confirmed working:**
 - Temporal profiles separating meaningfully: business peaks weekday h06 earlier than residential (Δ/σ_biz=+1.54 vs −1.39); overnight business fraction higher (deliveries/early commuters).
@@ -229,13 +230,14 @@ mean|z|=0.92  |z|>2: 48  |z|>3: 15.
 - Map layers (residential/business) confirmed — `build_assignment.py` populated `flows_res`/`flows_biz`.
 
 **Outstanding concerns:**
-- **LowerArds wp +1303%** — same blowup pattern as 2026-06-15 (was +514%, resolved with path rebuild). External zone L2 regularization may need strengthening for this node, or ref values need updating after investigation.
-- **Dundonald pop −89.9%** (15,147 vs prior 150,000) — prior was set too high; should be revised before next full run.
-- **P = 53.3s** is very short (under 1 minute peak). May reflect tension from many short-distance counts in the new data; worth monitoring across further runs.
-- Structural outliers on new links: `23→295 Frances Street` (z=+4.85), `2→9 Kempe Stones Road` (z=+4.59), `296→297 Nursery Road` (z=−4.22), `139→137 Portaferry Road` (z=−4.38) — predominantly from the 2026-06-17 count ingest, not necessarily model failures.
-- `719→325` and `325→719` Messines Road remain persistent (z=−4.64/−4.04/−2.69).
-- `18→21` Hardford Link persistent (z=−2.83/−2.82/−2.25).
-- `20→18` / `18→20` Belfast Road persistent underprediction (z≈−2.7/−2.1).
+- **LowerArds wp +645%** (37,457 vs ref 5,024) — improved from +1303% but still large; same blowup pattern. External zone L2 regularization may need strengthening, or ref values need updating.
+- **Belfast wp +1083%** (2,173,839 vs ref 183,661) — new blowup; Belfast is a large attractor and may be absorbing LowerArds excess. Investigate before updating refs.
+- **Dundonald pop −89.5%** (15,686 vs ref 150,000) — prior was set too high; should be revised before next full run.
+- **P = 56.8s** is very short (under 1 minute peak). May reflect tension from many short-distance counts; worth monitoring across further runs.
+- Structural outliers: `23→295 Frances Street` (z=+4.38), `2→9 Kempe Stones Road` (z=+4.31), `296→297 Nursery Road` (z=−4.00), `139→137 Portaferry Road` (z=−3.92) — persistent from 2026-06-17 count ingest, not necessarily model failures.
+- `719→325` and `325→719` Messines Road remain persistent (z=−3.90/−3.45/−3.35).
+- `18→21` / `68→21` / `21→68` Hardford Link persistent (z=−2.98/−2.89/−2.72).
+- `73→70` Mill Street severe underprediction (z=−3.41; obs 12,868 vs model 924).
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
