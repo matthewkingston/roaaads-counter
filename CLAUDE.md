@@ -171,7 +171,7 @@ All 374 observations are in count space with per-obs weights:
 Two df lost per slot (one each for f_s_res and f_s_biz). With coupling enabled,
 chi²/N includes the coupling penalty terms; pure data-fit chi²/N is lower.
 
-`build_assignment.py` uses the two-component `compute_chi2()` when K_res/K_biz are present in tuned_params.json, giving a chi²/N directly comparable to the tuner's (minus the coupling penalty). The legacy Woodbury path is used only for old single-K param files.
+`build_assignment.py` uses the two-component `compute_chi2()` when K_res/K_biz are present in tuned_params.json. This gives a **data-only** chi²/N (pure sum of squared z-scores) — it excludes the f-prior penalties `(f_r−mfr)²/std_f²` and the aggregate coupling penalty that the tuner includes in its chi²/N. Expect the build_assignment chi²/N to be somewhat lower than the tuner's; the two are directionally comparable but not numerically equal. The legacy Woodbury path is used only for old single-K param files.
 
 ---
 
