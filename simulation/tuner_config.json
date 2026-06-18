@@ -16,11 +16,13 @@
   ],
   "gravity_lambda": 0.5,
   "gravity_ref": {
-    "W_BIZ": 1.0,
-    "P":     600.0,
-    "ALPHA": 2.0,
-    "BETA":  1.0,
-    "THETA": 1.0
+    "W_BIZ":     1.0,
+    "P":         600.0,
+    "ALPHA":     2.0,
+    "BETA":      1.0,
+    "P_biz":     600.0,
+    "ALPHA_biz": 2.0,
+    "THETA":     1.0
   },
   "cities": {
     "Donaghadee": {
