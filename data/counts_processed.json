@@ -7311,6 +7311,307 @@
       ],
       "frac_rel_std": 0.149169,
       "aadt_method": "hourly_fraction_v3"
+    },
+    "bd6631e1": {
+      "session_id": "bd6631e1",
+      "label": "17/06/2026, 21:33:44",
+      "mode": "dual",
+      "start_utc": "2026-06-17T20:33:45.731Z",
+      "end_utc": "2026-06-17T20:35:16.216Z",
+      "duration_s": 90.5,
+      "with_count": 0,
+      "against_count": 0,
+      "total_count": 0,
+      "centroid_lat": 54.599074,
+      "centroid_lng": -5.709426,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 0.707,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        333,
+        335
+      ],
+      "matched_link_against": [
+        335,
+        333
+      ],
+      "match_rmse_m": 3.2,
+      "with_aadt": 690,
+      "with_aadt_uncertainty": 983,
+      "against_aadt": 690,
+      "against_aadt_uncertainty": 983,
+      "total_aadt": 690,
+      "total_aadt_uncertainty": 983,
+      "hourly_fraction": 0.028836,
+      "hourly_fraction_std": 0.004978,
+      "time_slot": [
+        2,
+        21
+      ],
+      "frac_rel_std": 0.172634,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "7299a100": {
+      "session_id": "7299a100",
+      "label": "17/06/2026, 21:35:16",
+      "mode": "dual",
+      "start_utc": "2026-06-17T20:35:24.683Z",
+      "end_utc": "2026-06-17T20:37:03.803Z",
+      "duration_s": 99.1,
+      "with_count": 2,
+      "against_count": 0,
+      "total_count": 2,
+      "centroid_lat": 54.59916,
+      "centroid_lng": -5.709348,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        335,
+        333
+      ],
+      "matched_link_against": [
+        333,
+        335
+      ],
+      "match_rmse_m": 6.1,
+      "with_aadt": 3149,
+      "with_aadt_uncertainty": 2065,
+      "against_aadt": 630,
+      "against_aadt_uncertainty": 897,
+      "total_aadt": 3149,
+      "total_aadt_uncertainty": 2065,
+      "hourly_fraction": 0.028836,
+      "hourly_fraction_std": 0.004978,
+      "time_slot": [
+        2,
+        21
+      ],
+      "frac_rel_std": 0.172634,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d62e9600": {
+      "session_id": "d62e9600",
+      "label": "17/06/2026, 21:37:35",
+      "mode": "dual",
+      "start_utc": "2026-06-17T20:37:36.605Z",
+      "end_utc": "2026-06-17T20:38:52.579Z",
+      "duration_s": 76.0,
+      "with_count": 0,
+      "against_count": 2,
+      "total_count": 2,
+      "centroid_lat": 54.598411,
+      "centroid_lng": -5.708986,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.581,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        332,
+        331
+      ],
+      "matched_link_against": [
+        331,
+        332
+      ],
+      "match_rmse_m": 6.6,
+      "with_aadt": 821,
+      "with_aadt_uncertainty": 1170,
+      "against_aadt": 4107,
+      "against_aadt_uncertainty": 2692,
+      "total_aadt": 4107,
+      "total_aadt_uncertainty": 2692,
+      "hourly_fraction": 0.028836,
+      "hourly_fraction_std": 0.004978,
+      "time_slot": [
+        2,
+        21
+      ],
+      "frac_rel_std": 0.172634,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "20bcd7d4": {
+      "session_id": "20bcd7d4",
+      "label": "17/06/2026, 21:39:47",
+      "mode": "dual",
+      "start_utc": "2026-06-17T20:39:48.379Z",
+      "end_utc": "2026-06-17T20:41:33.109Z",
+      "duration_s": 104.7,
+      "with_count": 0,
+      "against_count": 1,
+      "total_count": 1,
+      "centroid_lat": 54.597575,
+      "centroid_lng": -5.707219,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.225,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        67,
+        21
+      ],
+      "matched_link_against": [
+        21,
+        67
+      ],
+      "match_rmse_m": 13.9,
+      "with_aadt": 596,
+      "with_aadt_uncertainty": 849,
+      "against_aadt": 1789,
+      "against_aadt_uncertainty": 1493,
+      "total_aadt": 1789,
+      "total_aadt_uncertainty": 1493,
+      "hourly_fraction": 0.028836,
+      "hourly_fraction_std": 0.004978,
+      "time_slot": [
+        2,
+        21
+      ],
+      "frac_rel_std": 0.172634,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "3fcd8257": {
+      "session_id": "3fcd8257",
+      "label": "17/06/2026, 22:43:30",
+      "mode": "dual",
+      "start_utc": "2026-06-17T21:43:33.351Z",
+      "end_utc": "2026-06-17T21:44:50.774Z",
+      "duration_s": 77.4,
+      "with_count": 0,
+      "against_count": 0,
+      "total_count": 0,
+      "centroid_lat": 54.597513,
+      "centroid_lng": -5.707136,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 0.707,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        67,
+        21
+      ],
+      "matched_link_against": [
+        21,
+        67
+      ],
+      "match_rmse_m": 5.4,
+      "with_aadt": 1258,
+      "with_aadt_uncertainty": 1797,
+      "against_aadt": 1258,
+      "against_aadt_uncertainty": 1797,
+      "total_aadt": 1258,
+      "total_aadt_uncertainty": 1797,
+      "hourly_fraction": 0.018482,
+      "hourly_fraction_std": 0.00369,
+      "time_slot": [
+        2,
+        22
+      ],
+      "frac_rel_std": 0.199626,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "25a21689": {
+      "session_id": "25a21689",
+      "label": "17/06/2026, 22:46:07",
+      "mode": "dual",
+      "start_utc": "2026-06-17T21:46:09.385Z",
+      "end_utc": "2026-06-17T21:49:12.095Z",
+      "duration_s": 182.7,
+      "with_count": 1,
+      "against_count": 4,
+      "total_count": 5,
+      "centroid_lat": 54.596658,
+      "centroid_lng": -5.707965,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 2.345,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        21,
+        18
+      ],
+      "matched_link_against": [
+        18,
+        21
+      ],
+      "match_rmse_m": 3.6,
+      "with_aadt": 1599,
+      "with_aadt_uncertainty": 1344,
+      "against_aadt": 4798,
+      "against_aadt_uncertainty": 2456,
+      "total_aadt": 5864,
+      "total_aadt_uncertainty": 2761,
+      "hourly_fraction": 0.018482,
+      "hourly_fraction_std": 0.00369,
+      "time_slot": [
+        2,
+        22
+      ],
+      "frac_rel_std": 0.199626,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d25faf26": {
+      "session_id": "d25faf26",
+      "label": "17/06/2026, 22:49:22",
+      "mode": "dual",
+      "start_utc": "2026-06-17T21:49:24.195Z",
+      "end_utc": "2026-06-17T21:51:07.252Z",
+      "duration_s": 103.1,
+      "with_count": 4,
+      "against_count": 3,
+      "total_count": 7,
+      "centroid_lat": 54.596316,
+      "centroid_lng": -5.709878,
+      "source_files": [
+        "traffic_2026-06-18.csv"
+      ],
+      "with_uncertainty": 2.121,
+      "against_uncertainty": 1.871,
+      "total_uncertainty": 2.739,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        18,
+        20
+      ],
+      "matched_link_against": [
+        20,
+        18
+      ],
+      "match_rmse_m": 6.5,
+      "with_aadt": 8502,
+      "with_aadt_uncertainty": 4352,
+      "against_aadt": 6612,
+      "against_aadt_uncertainty": 3773,
+      "total_aadt": 14169,
+      "total_aadt_uncertainty": 5897,
+      "hourly_fraction": 0.018482,
+      "hourly_fraction_std": 0.00369,
+      "time_slot": [
+        2,
+        22
+      ],
+      "frac_rel_std": 0.199626,
+      "aadt_method": "hourly_fraction_v3"
     }
   }
 }
