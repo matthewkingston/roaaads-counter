@@ -84,13 +84,14 @@ only the overall business / residential split is estimated from NTS0504b.
 
 Constraint
 ----------
-The tuner requires mean_fraction_res + mean_fraction_biz = 2 × mean_fraction
+The tuner requires mean_fraction_res + mean_fraction_biz = mean_fraction
 at every (day_of_week, hour) slot.  This is enforced exactly:
 
-  mean_fraction_biz = 2 × mean_fraction × biz_share
-  mean_fraction_res = 2 × mean_fraction × (1 − biz_share)
+  mean_fraction_biz = mean_fraction × biz_share
+  mean_fraction_res = mean_fraction × (1 − biz_share)
 
-Neither component needs to sum to 1 across hours; the global scale K absorbs
+Each component is therefore directly interpretable as the fraction of AADT
+attributable to that traffic type at that slot.  The global scale K absorbs
 the normalisation.
 
 Usage
@@ -237,8 +238,8 @@ for row in rows:
     else:
         bs = biz_share_weekend[DOW_TO_DAY[dow]]
 
-    row["mean_fraction_biz"] = f"{2 * mfa * bs:.10f}"
-    row["mean_fraction_res"] = f"{2 * mfa * (1 - bs):.10f}"
+    row["mean_fraction_biz"] = f"{mfa * bs:.10f}"
+    row["mean_fraction_res"] = f"{mfa * (1 - bs):.10f}"
 
 base_cols = [c for c in fieldnames
              if c not in ("mean_fraction_res", "mean_fraction_biz")]
@@ -260,13 +261,13 @@ for row in rows:
     mfa = float(row["mean_fraction"])
     mfr = float(row["mean_fraction_res"])
     mfb = float(row["mean_fraction_biz"])
-    diff = abs(mfr + mfb - 2 * mfa)
+    diff = abs(mfr + mfb - mfa)
     if diff > 1e-9:
         print(f"  FAIL: dow={row['day_of_week']} h={row['hour']} "
-              f"res+biz={mfr+mfb:.10f} vs 2×mfa={2*mfa:.10f} (Δ={diff:.2e})")
+              f"res+biz={mfr+mfb:.10f} vs mfa={mfa:.10f} (Δ={diff:.2e})")
         errors += 1
 if errors == 0:
-    print("  ✓  res + biz = 2 × agg for all 168 rows")
+    print("  ✓  res + biz = agg for all 168 rows")
 
 neg = [(r["day_of_week"], r["hour"]) for r in rows
        if float(r["mean_fraction_res"]) < 0 or float(r["mean_fraction_biz"]) < 0]
@@ -282,7 +283,7 @@ for r in wkday_rows:
     h   = int(r["hour"].split(":")[0])
     mfa = float(r["mean_fraction"])
     mfb = float(r["mean_fraction_biz"])
-    bs  = mfb / (2 * mfa) if mfa > 0 else 0
+    bs  = mfb / mfa if mfa > 0 else 0
     bar = "█" * int(bs * 40)
     print(f"  h{h:02d}  {100*bs:4.1f}%  {bar}")
 
