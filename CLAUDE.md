@@ -266,8 +266,11 @@ LowerArds settled at +92%.
 - After a structural model change (e.g. adding through routes or new count data), a gravity-only
   stage 1 run will show inflated chi²/N. A full `--full` re-tune is needed to restore fit quality.
 - **Dundonald virtual node (added 2026-06-17):** Node 10000 is a degree-1 stub connected
-  only to node 97, representing the Dundonald catchment on the A20 corridor. Alternative paths
-  k=2/k=3 fall back to k=1 for all node 10000 OD pairs.
+  only to node 97, representing the Dundonald catchment on the A20 corridor. All paths
+  to/from node 10000 share the forced stub leg, but k=2/k=3 alternatives are still
+  computed normally: the Dijkstra penalises the stub edge ×10 but does not remove it, so
+  alternative routes are found via different approaches to/from node 97. Route diversity
+  is in the network portion beyond the stub junction.
 - **Manual link overrides:** `MANUAL_LINK_OVERRIDES` in `ingest_counts.py` hard-assigns specific sessions to a directed link, bypassing GPS snap. Use when the observer stood on a parallel carriageway (e.g. a dual one-way road) and the snap would land on the wrong physical road. The override is idempotent and takes effect even if `counts_processed.json` is wiped and rebuilt. After assignment (manual or auto), the script validates each non-null count direction against the directed graph and raises `ValueError` if the edge doesn't exist.
 - **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` previously stored canonical
   `(min(u,v), max(u,v))` — fixed to store actual directed `(u, v)`. Only session `f56b2ce4`
