@@ -1,21 +1,22 @@
 """
 Derive residential and business temporal profile priors for the two-component
-gravity model from NTS trip-purpose-by-start-time data.
+gravity model from NTS trip-purpose data.
 
-Source
-------
-DfT National Travel Survey Table NTS0502a, "Trip start time by trip purpose
-(Monday to Friday only): England, 2002 onwards".
-Downloaded from:
+Sources
+-------
+Weekdays — DfT NTS Table NTS0502a, "Trip start time by trip purpose
+  (Monday to Friday only): England, 2002 onwards".
+  Gives P(purpose | start hour, Mon–Fri) as percentages summing to 100.
+  File: data/nts0502.ods
+
+Weekends — DfT NTS Table NTS0504b, "Average number of trips by day of the
+  week and purpose (trips per person per year): England, 2002 onwards".
+  Gives absolute trip rates per person per year by day and purpose.
+  Used here for Saturday and Sunday rows only.
+  File: data/nts0504.ods
+
+Both files downloaded from:
   https://www.gov.uk/government/statistical-data-sets/nts05-trips
-File: data/nts0502.ods
-
-What the table gives
---------------------
-Each row is one (year-range, start-hour) combination.  The percentage columns
-give P(purpose | start hour, Mon–Fri), i.e. for all trips that BEGIN in that
-hour on a weekday, what fraction belong to each trip purpose.  Rows sum to 100
-under the "All purposes" column.
 
 Purpose classification
 ----------------------
@@ -23,146 +24,196 @@ The gravity model's business demand nodes represent workplaces, retail POIs,
 and car parks (public and private).  Trips attracted to these nodes are:
 
   Business ("biz"):
-    - Commuting              — direct work trips (largest component)
+    - Commuting              — direct work trips
     - Employer's business    — trips made during/for work (deliveries, etc.)
     - Education              — to/from school or university; schools are
-                               tagged in OSM and receive a bonus POI weight
-    - Escort education       — taking someone to school (school-run); timed
-                               identically to education trips and attracted to
-                               the same nodes
-    - Shopping               — retail trips; shops are prominent in OSM POIs
-                               and shopping car parks dominate the car-park area
+                               tagged in OSM and receive a bonus POI weight;
+                               DOWNWEIGHTED × EDU_FACTOR (see below)
+    - Escort education       — taking someone to school; same destination type
+    - Shopping               — trips to retail; shops dominate OSM POIs and
+                               car parks
 
   Residential ("res"):
-    - Other work, other escort and personal business  (banks, GP, etc.)
+    - Other escort and personal business  (GP, bank, etc.)
     - Visiting friends, entertainment and sport
     - Holiday, day trip and other
 
-  Rationale for "escort education" and "education" as business:
-    Schools appear as POIs in the network and are given a bonus weighting in
-    build_demographics.py.  School-run trips (escort education) have the same
-    temporal signature and destination type as education trips themselves.
+Education downweighting (EDU_FACTOR = 1/5)
+------------------------------------------
+NTS records ALL trips regardless of mode.  The "Education" category is
+predominantly children walking, cycling, or being bussed — not car trips.
+The "Escort education" category already captures the adult car driver making
+the school-run trip; the standalone "Education" trip is the child's own
+journey, which has far lower per-person car trip generation than commuting.
+
+We therefore downweight the Education contribution by EDU_FACTOR = 1/5:
+the denominator is also reduced by the same amount so that the shares of
+all remaining purposes are proportionally increased (consistent reweighting).
+
+  biz_numerator   = commuting + business + education*EDU_FACTOR
+                    + escort_education + shopping
+  adjusted_total  = all_purposes - education*(1 - EDU_FACTOR)
+  biz_share       = biz_numerator / adjusted_total
+
+For NTS0504b weekends, "Just walk" trips are additionally removed from
+the denominator before this reweighting, because the aggregate traffic
+count profiles we are matching contain no pedestrian trips.
 
 Year choice
 -----------
-"2023 to 2024" — the most recent rolling average in the file.  The individual
-years 2020 and 2021 are excluded because COVID reduced commuting anomalously;
-2022 is the first post-pandemic year and "2023 to 2024" is more stable.
+"2023 to 2024" — the most recent rolling average in both files.  Individual
+years 2020–2021 are avoided as COVID anomalies; 2022 is the first
+post-pandemic year; the 2-year rolling average gives a more stable estimate.
 
-Weekend handling
-----------------
-NTS0502a covers Monday to Friday only.  No hour-by-hour purpose split is
-available for Saturday or Sunday in this file.
+Weekday approach (NTS0502a)
+---------------------------
+For each hour h, biz_share(h) is computed from the 2023–2024 per-hour
+purpose percentages with the education downweighting applied.  This gives
+a distinct share for every hour of the day.
 
-We apply a FLAT business share to all weekend hours, derived as the
-unweighted mean of the weekday NTS business shares over hours h10–h14:
-
-  p_biz_weekend = mean( biz_share_weekday(h) for h in 10..14 )
-
-Rationale: on weekends commuting is low and school runs are absent.  The
-dominant "business" activity is shopping.  Hours h10–h14 on weekdays are
-dominated by shopping and have minimal school-run contamination (education +
-escort_education ≈ 2–4% each, vs 26% + 22% at h15 and 16% + 12% at h14).
-  - h15 is excluded: it carries the 3 pm school pickup (NTS shows education
-    26.2% + escort_edu 22.0% = 48 pp at h15), absent at weekend.
-  - h14 is retained despite some school contamination (~16 pp) because the
-    non-school business share there (commuting + employer + shopping ≈ 34%)
-    still represents plausible weekend afternoon activity.
-The volume-weighted weekday mean (~52%) was rejected as it is dominated by
-the h07–h08 school run, absent at weekends.
-Without dedicated weekend NTS trip-purpose data this remains a documented
-approximation; the tuner can move the weekend f_biz away from the prior.
-
-The temporal SHAPE for weekends comes from the existing aggregate mean_fraction
-profile (which already varies by hour), so the profiles still rise and fall
-through the day — only the overall scaling is estimated from weekdays.
+Weekend approach (NTS0504b)
+---------------------------
+NTS0502a covers Monday–Friday only.  NTS0504b provides absolute trip rates
+per person per year for each day of the week, including Saturday and Sunday.
+We extract the Saturday and Sunday rows from the 2023–2024 rolling average,
+remove "Just walk", apply the education downweighting, and compute a single
+flat business share for each weekend day.  The temporal SHAPE within each
+weekend day is inherited from the aggregate mean_fraction profile (which
+already captures the Saturday vs. Sunday difference in volume pattern);
+only the overall business / residential split is estimated from NTS0504b.
 
 Constraint
 ----------
 The tuner requires mean_fraction_res + mean_fraction_biz = 2 × mean_fraction
-at every (day_of_week, hour) slot (the aggregate coupling uses 2×mean_fraction
-as the target sum).  This is enforced exactly:
+at every (day_of_week, hour) slot.  This is enforced exactly:
 
   mean_fraction_biz = 2 × mean_fraction × biz_share
   mean_fraction_res = 2 × mean_fraction × (1 − biz_share)
 
-Neither component necessarily sums to 1 across hours, but that is expected and
-correct: the global scale K absorbs the normalisation difference.
+Neither component needs to sum to 1 across hours; the global scale K absorbs
+the normalisation.
 
 Usage
 -----
   python3 analysis/derive_component_profiles.py
 
 Overwrites the mean_fraction_res and mean_fraction_biz columns in
-analysis/hourly_fractions.csv.  All other columns are preserved unchanged.
-Re-run whenever the NTS source file changes or the purpose classification is
-revised.
+analysis/hourly_fractions.csv.  All other columns are preserved.
+Re-run whenever the NTS files change or the purpose classification is revised.
 """
 
 import csv, sys
 import pandas as pd
-import numpy as np
 
-NTS_FILE   = "data/nts0502.ods"
-FRACS_FILE = "analysis/hourly_fractions.csv"
-NTS_YEAR   = "2023 to 2024"
+NTS0502_FILE = "data/nts0502.ods"
+NTS0504_FILE = "data/nts0504.ods"
+FRACS_FILE   = "analysis/hourly_fractions.csv"
+NTS_YEAR     = "2023 to 2024"
 
-# ── Load NTS0502a ─────────────────────────────────────────────────────────────
+EDU_FACTOR   = 1 / 5   # education trips have ~1/5 the car trip generation of commuting
 
-print(f"Loading {NTS_FILE} …")
-raw = pd.read_excel(NTS_FILE, sheet_name="NTS0502a_start_time_by_purpose",
-                    header=None, engine="odf")
+# ── Load NTS0502a (weekday hourly purpose split) ──────────────────────────────
 
-# Row 5 is the column header; data starts at row 6.
-# Columns (by position):
-#  0  Year
-#  1  Start time     (e.g. "0700 to 0759")
-#  2  Commuting (%)
-#  3  Business (%)                          ← employer's business
-#  4  Education (%)
-#  5  Escort education (%)
-#  6  Shopping (%)
-#  7  Other work, other escort and personal business (%)
-#  8  Visiting friends, entertainment and sport (%)
-#  9  Holiday, day trip and other (%)
-# 10  All purposes (%)                      ← should equal 100
-# 11  Unweighted sample size
+print(f"Loading {NTS0502_FILE} …")
+raw502 = pd.read_excel(NTS0502_FILE, sheet_name="NTS0502a_start_time_by_purpose",
+                       header=None, engine="odf")
 
-BIZ_COLS = [2, 3, 4, 5, 6]   # commuting, employer_biz, education, escort_edu, shopping
-ALL_COL  = 10
+# Row 5 = header; data from row 6.
+# Column positions (0-indexed):
+#  0  Year       1  Start time
+#  2  Commuting  3  Business (employer's)  4  Education  5  Escort education
+#  6  Shopping   7  Other…  8  Visiting…  9  Holiday…
+# 10  All purposes (%)     11  Sample size
+C_COMM, C_BIZ_E, C_EDU, C_ESCORT, C_SHOP = 2, 3, 4, 5, 6
+C_ALL = 10
 
-data = raw.iloc[6:].copy()
-data.columns = range(data.shape[1])
+data502 = raw502.iloc[6:].copy()
+data502.columns = range(data502.shape[1])
 
-# Filter to chosen year, drop the summary "All day" row (where col 1 == "All day")
-year_rows = data[data[0] == NTS_YEAR].copy()
-year_rows = year_rows[year_rows[1] != "All day"].reset_index(drop=True)
-
-if len(year_rows) != 24:
-    print(f"ERROR: expected 24 hourly rows for '{NTS_YEAR}', got {len(year_rows)}")
+yr502 = data502[data502[0] == NTS_YEAR].copy()
+yr502 = yr502[yr502[1] != "All day"].reset_index(drop=True)
+if len(yr502) != 24:
+    print(f"ERROR: expected 24 rows for '{NTS_YEAR}' in NTS0502a, got {len(yr502)}")
     sys.exit(1)
 
-# Parse hour index (0–23) from start-time string "0700 to 0759"
-year_rows["hour"] = year_rows[1].str[:2].astype(int)
-year_rows = year_rows.sort_values("hour").reset_index(drop=True)
+yr502["hour"] = yr502[1].str[:2].astype(int)
+yr502 = yr502.sort_values("hour").reset_index(drop=True)
 
-# Coerce numeric (handles any "[low]" strings → 0)
-for c in BIZ_COLS + [ALL_COL]:
-    year_rows[c] = pd.to_numeric(year_rows[c], errors="coerce").fillna(0.0)
+for c in [C_COMM, C_BIZ_E, C_EDU, C_ESCORT, C_SHOP, C_ALL]:
+    yr502[c] = pd.to_numeric(yr502[c], errors="coerce").fillna(0.0)
 
-year_rows["biz_share"] = year_rows[BIZ_COLS].sum(axis=1) / year_rows[ALL_COL]
+# Education downweighting: remove (1-EDU_FACTOR) × education from denominator
+yr502["adj_total"] = yr502[C_ALL] - yr502[C_EDU] * (1 - EDU_FACTOR)
+yr502["biz_num"]   = (yr502[C_COMM] + yr502[C_BIZ_E]
+                      + yr502[C_EDU] * EDU_FACTOR
+                      + yr502[C_ESCORT] + yr502[C_SHOP])
+yr502["biz_share"] = yr502["biz_num"] / yr502["adj_total"]
 
-# Dictionary hour → weekday business share
-biz_share_by_hour = dict(zip(year_rows["hour"], year_rows["biz_share"]))
+biz_share_weekday = dict(zip(yr502["hour"], yr502["biz_share"]))
 
-print(f"\nNTS {NTS_YEAR} weekday business share by hour")
-print(f"  (business = commuting + employer_biz + education + escort_edu + shopping)")
+print(f"\nNTS {NTS_YEAR} weekday business share by hour  (education × {EDU_FACTOR})")
 print(f"  {'Hour':>4}  {'biz%':>6}  {'res%':>6}")
 for h in range(24):
-    bs = biz_share_by_hour[h]
+    bs = biz_share_weekday[h]
     print(f"  h{h:02d}    {100*bs:5.1f}%  {100*(1-bs):5.1f}%")
 
-# ── Load hourly fractions ─────────────────────────────────────────────────────
+# ── Load NTS0504b (day-of-week purpose rates, trips/person/year) ──────────────
+
+print(f"\nLoading {NTS0504_FILE} …")
+raw504 = pd.read_excel(NTS0504_FILE, sheet_name="NTS0504b_day_purpose",
+                       header=None, engine="odf")
+
+# Row 5 = header; data from row 6.
+# Column positions (0-indexed):
+#  0  Year          1  Day of the week
+#  2  Commuting     3  Business (employer's)   4  Education   5  Escort education
+#  6  Shopping      7  Other escort            8  Personal business
+#  9  Visit friends at private home           10  Visit friends elsewhere
+# 11  Sport/entertainment                     12  Holiday or day trip
+# 13  Just walk                               14  Other
+# 15  All purposes                            16  Sample size
+C504_COMM, C504_BIZ_E, C504_EDU, C504_ESCORT, C504_SHOP = 2, 3, 4, 5, 6
+C504_WALK = 13
+C504_ALL  = 15
+
+data504 = raw504.iloc[6:].copy()
+data504.columns = range(data504.shape[1])
+
+yr504 = data504[data504[0] == NTS_YEAR].copy()
+for c in [C504_COMM, C504_BIZ_E, C504_EDU, C504_ESCORT,
+          C504_SHOP, C504_WALK, C504_ALL]:
+    yr504[c] = pd.to_numeric(yr504[c], errors="coerce").fillna(0.0)
+
+biz_share_weekend = {}
+print(f"\nNTS {NTS_YEAR} weekend business share from NTS0504b  (education × {EDU_FACTOR}, walk removed)")
+print(f"  {'Day':<10}  {'biz_trips':>9}  {'adj_total':>9}  {'biz%':>6}  {'res%':>6}")
+
+for day in ["Saturday", "Sunday"]:
+    row = yr504[yr504[1] == day]
+    if row.empty:
+        print(f"ERROR: '{day}' not found in NTS0504b for year '{NTS_YEAR}'")
+        sys.exit(1)
+    row = row.iloc[0]
+
+    comm    = float(row[C504_COMM])
+    biz_e   = float(row[C504_BIZ_E])
+    edu     = float(row[C504_EDU])
+    escort  = float(row[C504_ESCORT])
+    shop    = float(row[C504_SHOP])
+    walk    = float(row[C504_WALK])
+    all_p   = float(row[C504_ALL])
+
+    # Remove walking trips (not in vehicle counts), then downweight education
+    no_walk    = all_p - walk
+    adj_total  = no_walk - edu * (1 - EDU_FACTOR)
+    biz_num    = comm + biz_e + edu * EDU_FACTOR + escort + shop
+
+    bs = biz_num / adj_total
+    biz_share_weekend[day] = bs
+
+    print(f"  {day:<10}  {biz_num:9.3f}  {adj_total:9.3f}  {100*bs:5.1f}%  {100*(1-bs):5.1f}%")
+
+# ── Load hourly fractions CSV ─────────────────────────────────────────────────
 
 print(f"\nLoading {FRACS_FILE} …")
 rows = []
@@ -172,32 +223,23 @@ with open(FRACS_FILE, newline="") as f:
     for row in reader:
         rows.append(row)
 
-# ── Weekend business share: mean over core shopping-window hours h10–h16 ──────
-# Weekday h10–h16 has minimal commute/school-run contamination and is the best
-# NTS-grounded proxy for weekend business activity (primarily shopping).
-WEEKEND_HOURS = range(10, 15)   # 10:00–14:59; h15 excluded (school pickup)
-p_biz_weekend = sum(biz_share_by_hour[h] for h in WEEKEND_HOURS) / len(WEEKEND_HOURS)
+# ── Compute and write component columns ──────────────────────────────────────
 
-print(f"\nWeekend flat business share (mean of h10–h16 weekday NTS shares): {p_biz_weekend:.4f}")
-print(f"  Hours used: " + ", ".join(f"h{h:02d}={100*biz_share_by_hour[h]:.1f}%" for h in WEEKEND_HOURS))
-print(f"  Residual (residential): {1 - p_biz_weekend:.4f}")
-
-# ── Update component columns ──────────────────────────────────────────────────
+DOW_TO_DAY = {5: "Saturday", 6: "Sunday"}
 
 for row in rows:
     dow = int(row["day_of_week"])
     h   = int(row["hour"].split(":")[0])
     mfa = float(row["mean_fraction"])
 
-    bs = biz_share_by_hour[h] if dow <= 4 else p_biz_weekend
+    if dow <= 4:
+        bs = biz_share_weekday[h]
+    else:
+        bs = biz_share_weekend[DOW_TO_DAY[dow]]
 
-    # Enforce mean_fraction_biz + mean_fraction_res = 2 × mean_fraction exactly.
     row["mean_fraction_biz"] = f"{2 * mfa * bs:.10f}"
     row["mean_fraction_res"] = f"{2 * mfa * (1 - bs):.10f}"
 
-# ── Write back, preserving column order ──────────────────────────────────────
-
-# Keep original columns, replacing or appending the component columns at the end.
 base_cols = [c for c in fieldnames
              if c not in ("mean_fraction_res", "mean_fraction_biz")]
 out_cols = base_cols + ["mean_fraction_res", "mean_fraction_biz"]
@@ -213,7 +255,6 @@ print(f"\nWrote updated component columns → {FRACS_FILE}")
 
 print("\nSanity checks:")
 
-# 1. Sum constraint per row
 errors = 0
 for row in rows:
     mfa = float(row["mean_fraction"])
@@ -227,7 +268,6 @@ for row in rows:
 if errors == 0:
     print("  ✓  res + biz = 2 × agg for all 168 rows")
 
-# 2. All values non-negative
 neg = [(r["day_of_week"], r["hour"]) for r in rows
        if float(r["mean_fraction_res"]) < 0 or float(r["mean_fraction_biz"]) < 0]
 if neg:
@@ -235,8 +275,7 @@ if neg:
 else:
     print("  ✓  all fractions non-negative")
 
-# 3. Show weekday biz profile (a useful spot-check)
-print("\n  Weekday biz fraction profile (mfb / 2*mfa = biz_share):")
+print("\n  Weekday biz share by hour (Mon shown; other weekdays identical):")
 wkday_rows = sorted([r for r in rows if int(r["day_of_week"]) == 0],
                     key=lambda r: int(r["hour"].split(":")[0]))
 for r in wkday_rows:
@@ -245,4 +284,9 @@ for r in wkday_rows:
     mfb = float(r["mean_fraction_biz"])
     bs  = mfb / (2 * mfa) if mfa > 0 else 0
     bar = "█" * int(bs * 40)
-    print(f"  Mon h{h:02d}  {100*bs:4.1f}%  {bar}")
+    print(f"  h{h:02d}  {100*bs:4.1f}%  {bar}")
+
+print("\n  Weekend flat shares applied:")
+for dow, day in DOW_TO_DAY.items():
+    bs = biz_share_weekend[day]
+    print(f"  {day}: biz={100*bs:.1f}%  res={100*(1-bs):.1f}%")
