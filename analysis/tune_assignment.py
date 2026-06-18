@@ -131,6 +131,9 @@ if _has_stoch:
     _log_od_dist   = np.log(od_dist).astype(np.float32)
     _log_od_dist_2 = np.log(_od_dist_2).astype(np.float32)
     _log_od_dist_3 = np.log(_od_dist_3).astype(np.float32)
+    # Stacked constants for batch logit-share and kernel computation (allocated once).
+    _d_mat_f32   = np.column_stack([_od_dist_f32, _od_dist_2_f32, _od_dist_3_f32])
+    _log_d_stack = np.column_stack([_log_od_dist, _log_od_dist_2, _log_od_dist_3])
     # Precompute CSR sparse link-pair matrices (one per path).
     # SpMV `A_r @ w_r` (N_links × N_OD) × (N_OD,) replaces the
     # gather+bincount scatter, cutting per-eval scatter cost ~9×.
@@ -246,6 +249,14 @@ for _city_name, _city_cfg in city_list:
 for _arr_i, _nid in ext_indices:
     base_w_pop[_arr_i] = _ext_pop_cfg[_nid]
     base_w_biz[_arr_i] = _ext_biz_cfg[_nid]
+
+# Precompute stochastic-path OD weight products (constant in gravity stage;
+# base weights are at ref values for external nodes after the override above).
+if _has_stoch:
+    _pp_od_s1 = base_w_pop[od_src] * base_w_pop[od_dst]
+    _pb_od_s1 = (base_w_pop[od_src] * base_w_biz[od_dst]
+                 + base_w_biz[od_src] * base_w_pop[od_dst])
+    _bb_od_s1 = base_w_biz[od_src] * base_w_biz[od_dst]
 
 # ── Precompute distance-bin link matrices (all-or-nothing mode only) ──────────
 # The 20M-entry scatter (pair_idx gather + bincount) dominates each evaluation.
@@ -498,6 +509,11 @@ for sk, idxs in slot_list:
         mfa, gamma_coupling_scale * inv_var,  # aggregate coupling: scale/std_f² per slot
     ))
 
+# Per-obs weight array with unslotted obs zeroed out (used in vectorised chi² in objective).
+_slot_w_arr = np.zeros(n_obs, dtype=np.float64)
+for _, _ia, _w, *_ in _slot_data:
+    _slot_w_arr[_ia] = _w
+
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
 def run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA=None):
@@ -542,13 +558,21 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA=None):
     # The combined per-OD vector is computed in float64 then cast to float32
     # just before the matmul, restoring SGEMV speed. On extreme steps the
     # cast saturates to ±inf rather than NaN, giving large finite chi².
-    pp_od = w_pop[od_src] * w_pop[od_dst]
-    pb_od = w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]
-    bb_od = w_biz[od_src] * w_biz[od_dst]
 
-    # Logit shares — float32 sufficient
-    d_mat  = np.stack([_od_dist_f32, _od_dist_2_f32, _od_dist_3_f32], axis=1)
-    log_w  = np.float32(-THETA / P) * d_mat
+    # A3: gravity stage weight products are constant (precomputed at startup).
+    if stage == "gravity":
+        pp_od, pb_od, bb_od = _pp_od_s1, _pb_od_s1, _bb_od_s1
+    else:
+        pp_od = w_pop[od_src] * w_pop[od_dst]
+        pb_od = (w_pop[od_src] * w_biz[od_dst]
+                 + w_biz[od_src] * w_pop[od_dst])
+        bb_od = w_biz[od_src] * w_biz[od_dst]
+
+    # A2: hoist biz_base above path loop (identical across all 3 paths).
+    biz_base = W_BIZ * pb_od + W_BIZ**2 * bb_od
+
+    # A1: logit shares — use precomputed stacked distance matrix.
+    log_w  = np.float32(-THETA / P) * _d_mat_f32
     log_w -= log_w.max(axis=1, keepdims=True)
     shares = np.exp(log_w)
     shares /= shares.sum(axis=1, keepdims=True)
@@ -558,23 +582,22 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA=None):
     beta_f     = np.float32(BETA)
     alpha_beta = np.float32(ALPHA + BETA)
 
+    # A4: batch kernel over all 3 paths: 2 exp() calls instead of 6.
+    log_u_all  = _log_d_stack - log_P
+    u_pow_all  = np.exp(alpha_beta * log_u_all)
+    u_beta_all = np.exp(beta_f     * log_u_all)
+    f_all      = alpha_beta * u_beta_all / (alpha_f + beta_f * u_pow_all)  # (N_OD, 3)
+    sf_all     = shares * f_all
+
     flow_res = np.zeros(N_links, dtype=np.float64)
     flow_biz = np.zeros(N_links, dtype=np.float64)
-    for r, (A_r, d_f32, log_d) in enumerate([
-        (_A1, _od_dist_f32,   _log_od_dist),
-        (_A2, _od_dist_2_f32, _log_od_dist_2),
-        (_A3, _od_dist_3_f32, _log_od_dist_3),
-    ]):
-        log_u  = log_d - log_P
-        u_pow  = np.exp(alpha_beta * log_u)                        # u^(ALPHA+BETA)
-        u_beta = np.exp(beta_f * log_u)                            # u^BETA
-        f_r    = alpha_beta * u_beta / (alpha_f + beta_f * u_pow)  # (N_OD,) float32 kernel
-        sf     = shares[:, r] * f_r                                # float32 share×kernel
+    for r, A_r in enumerate([_A1, _A2, _A3]):
+        sf = sf_all[:, r]
         # Weight products (float64) × sf (float32) → float64 by numpy promotion;
         # cast to float32 for fast SGEMV. Saturates to ±inf on extreme steps
         # (large finite chi²) rather than NaN.
-        flow_res += A_r @ (pp_od * sf).astype(np.float32)
-        flow_biz += A_r @ ((W_BIZ * pb_od + W_BIZ**2 * bb_od) * sf).astype(np.float32)
+        flow_res += A_r @ (pp_od    * sf).astype(np.float32)
+        flow_biz += A_r @ (biz_base * sf).astype(np.float32)
     return flow_res, flow_biz
 
 
@@ -614,6 +637,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
     phi = PHI_PRIOR
 
     for _ in range(10):
+        K_old = K
         K_res = K * (1 - phi)
         K_biz = K * phi
 
@@ -664,6 +688,10 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
             num = K_biz * float(np.dot(w * cb, h_i)) + mfb * ivb + gam * (mfa - f_r)
             den = K_biz**2 * float(np.dot(w * cb, cb)) + ivb + gam
             slot_fracs_biz[sk] = max(num / den, 1e-12) if den > 0 else mfb
+
+        # A6: stop early once K has converged (typically 3–5 iters suffice).
+        if abs(K - K_old) / max(abs(K_old), 1e-30) < 1e-8:
+            break
 
     return K_res, K_biz, slot_fracs_res, slot_fracs_biz
 
@@ -722,15 +750,19 @@ def objective(log_params, log_ref=None):
     flow_res, flow_biz                          = run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA)
     m_res, m_biz                               = model_obs_2c(flow_res, flow_biz)
     K_res, K_biz, slot_fracs_res, slot_fracs_biz = calibrate_Ks_and_fracs(m_res, m_biz)
-    chi2 = 0.0
+    # A7: scatter per-slot fractions to per-obs arrays; compute data chi² in one dot.
+    # Unslotted obs have _slot_w_arr[i]=0 so they contribute nothing regardless of pred.
+    _obs_f_r = np.empty(n_obs, dtype=np.float64)
+    _obs_f_b = np.empty(n_obs, dtype=np.float64)
+    chi2_pen = 0.0
     for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
-        f_r  = slot_fracs_res[sk]
-        f_b  = slot_fracs_biz[sk]
-        pred = K_res * m_res[ia] * Ths * f_r + K_biz * m_biz[ia] * Ths * f_b
-        chi2 += float(np.dot(w * (pred - rhs), pred - rhs))
-        chi2 += (f_r - mfr) ** 2 * ivr
-        chi2 += (f_b - mfb) ** 2 * ivb
-        chi2 += gam * (f_r + f_b - mfa) ** 2
+        f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]
+        _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b
+        chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb
+                     + gam * (f_r + f_b - mfa)**2)
+    _pred = K_res * m_res * obs_Th * _obs_f_r + K_biz * m_biz * obs_Th * _obs_f_b
+    _resid = _pred - obs_rhs_arr
+    chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
 
     if stage == "full" and log_ref is not None:
         chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
@@ -868,15 +900,17 @@ flow_res, flow_biz                             = run_assignment(W_BIZ, P, ALPHA,
 m_res, m_biz                                   = model_obs_2c(flow_res, flow_biz)
 K_res, K_biz, slot_fracs_res, slot_fracs_biz  = calibrate_Ks_and_fracs(m_res, m_biz)
 K = K_res + K_biz   # total scale (for display and backward compat)
-chi2 = 0.0
+_obs_f_r = np.empty(n_obs, dtype=np.float64)
+_obs_f_b = np.empty(n_obs, dtype=np.float64)
+chi2_pen = 0.0
 for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
-    f_r  = slot_fracs_res[sk]
-    f_b  = slot_fracs_biz[sk]
-    pred = K_res * m_res[ia] * Ths * f_r + K_biz * m_biz[ia] * Ths * f_b
-    chi2 += float(np.dot(w * (pred - rhs), pred - rhs))
-    chi2 += (f_r - mfr) ** 2 * ivr
-    chi2 += (f_b - mfb) ** 2 * ivb
-    chi2 += gam * (f_r + f_b - mfa) ** 2
+    f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]
+    _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b
+    chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb
+                 + gam * (f_r + f_b - mfa)**2)
+_pred = K_res * m_res * obs_Th * _obs_f_r + K_biz * m_biz * obs_Th * _obs_f_b
+_resid = _pred - obs_rhs_arr
+chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
 chi2_per_n = chi2 / n_obs
 
 # Build per-obs residuals for the fit table.
