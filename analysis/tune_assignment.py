@@ -33,6 +33,8 @@ Usage:
   python3 analysis/tune_assignment.py
   python3 analysis/tune_assignment.py --full
   python3 analysis/tune_assignment.py --note "added-june-counts"
+  python3 analysis/tune_assignment.py --fast          # looser tolerances, ~2× faster
+  python3 analysis/tune_assignment.py --full --fast
 """
 
 import csv, json, math, os, secrets, subprocess, sys, time, xml.etree.ElementTree as ET
@@ -58,11 +60,14 @@ OFFICIAL_HOURLY   = "data/official_hourly.json"
 
 stage = "gravity"
 note  = None
+fast  = False
 argv  = sys.argv[1:]
 i = 0
 while i < len(argv):
     if argv[i] == "--full":
         stage = "full"
+    elif argv[i] == "--fast":
+        fast = True
     elif argv[i] == "--note" and i + 1 < len(argv):
         i += 1
         note = argv[i]
@@ -78,6 +83,7 @@ except Exception:
     git_hash = "unknown"
 
 print(f"Run ID: {run_id}  stage: {stage}  git: {git_hash}" +
+      ("  FAST" if fast else "") +
       (f"  note: {note}" if note else ""))
 
 # ── Load previous best from history ──────────────────────────────────────────
@@ -613,7 +619,7 @@ def model_obs_2c(flow_res, flow_biz):
     return m_r, m_b
 
 
-def calibrate_Ks_and_fracs(m_res, m_biz):
+def calibrate_Ks_and_fracs(m_res, m_biz, max_iter=10):
     """4-block alternating minimisation: (K, phi, f_s_res, f_s_biz).
 
     Reparameterised as K_total = K_res + K_biz and phi = K_biz / K_total.
@@ -625,6 +631,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
     f_biz-step: symmetric.
     Coupling: γ·(f_res + f_biz − f_agg)² per slot (2 lines each f-step).
     Converges in 3–5 iterations; 10 iterations is ample.
+    max_iter=5 is safe for intermediate optimizer evals (--fast mode).
     Returns (K_res, K_biz, slot_fracs_res, slot_fracs_biz).
     """
     PHI_PRIOR = phi_prior
@@ -636,7 +643,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz):
     K   = 1.0
     phi = PHI_PRIOR
 
-    for _ in range(10):
+    for _ in range(max_iter):
         K_old = K
         K_res = K * (1 - phi)
         K_biz = K * phi
@@ -749,7 +756,8 @@ def objective(log_params, log_ref=None):
 
     flow_res, flow_biz                          = run_assignment(W_BIZ, P, ALPHA, BETA, w_pop, w_biz, THETA)
     m_res, m_biz                               = model_obs_2c(flow_res, flow_biz)
-    K_res, K_biz, slot_fracs_res, slot_fracs_biz = calibrate_Ks_and_fracs(m_res, m_biz)
+    K_res, K_biz, slot_fracs_res, slot_fracs_biz = calibrate_Ks_and_fracs(
+        m_res, m_biz, max_iter=5 if fast else 10)
     # A7: scatter per-slot fractions to per-obs arrays; compute data chi² in one dot.
     # Unslotted obs have _slot_w_arr[i]=0 so they contribute nothing regardless of pred.
     _obs_f_r = np.empty(n_obs, dtype=np.float64)
@@ -835,7 +843,10 @@ else:
 
 # ── Run optimization ──────────────────────────────────────────────────────────
 
-print(f"\nRunning Powell's method (λ={lam}) …")
+_tol = ({"gravity": 5e-5, "full": 5e-4} if fast
+        else {"gravity": 1e-5, "full": 1e-4})
+print(f"\nRunning Powell's method (λ={lam}"
+      + (f"  fast: ftol/xtol={_tol[stage]:.0e}" if fast else "") + ") …")
 print(f"  {'eval':>4s}  χ²/N(curr)  χ²/N(best)  elapsed")
 
 # Evaluate initial point
@@ -845,8 +856,7 @@ result = scipy.optimize.minimize(
     lambda p: objective(p, log_ref),
     log_p0,
     method="powell",
-    options={"maxiter": 5000, "ftol": 1e-5 if stage == "gravity" else 1e-4,
-             "xtol":  1e-5 if stage == "gravity" else 1e-4},
+    options={"maxiter": 5000, "ftol": _tol[stage], "xtol": _tol[stage]},
 )
 
 # Use best params seen (Powell may backtrack at convergence)
@@ -1118,6 +1128,7 @@ history_entry = {
         "gamma_coupling_scale": gamma_coupling_scale,
         "gravity_lambda":       grav_lam,
         "lambda":               lam,
+        "fast":                 fast,
     },
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
