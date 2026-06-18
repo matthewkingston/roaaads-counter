@@ -544,6 +544,19 @@ _slot_w_arr = np.zeros(n_obs, dtype=np.float64)
 for _, _ia, _w, *_ in _slot_data:
     _slot_w_arr[_ia] = _w
 
+# Precomputed arrays for vectorised calibrate_Ks_and_fracs.
+# _obs_slot_id[i] = slot index in slot_list (0..n_slots-1) if slotted, n_slots if not.
+_obs_slot_id = np.full(n_obs, n_slots, dtype=np.int32)
+for _si, (_, _sidxs) in enumerate(slot_list):
+    _obs_slot_id[np.array(_sidxs, dtype=np.int64)] = _si
+
+_slot_mfr = np.array([e[5]  for e in _slot_data], dtype=np.float64)
+_slot_ivr = np.array([e[6]  for e in _slot_data], dtype=np.float64)
+_slot_mfb = np.array([e[7]  for e in _slot_data], dtype=np.float64)
+_slot_ivb = np.array([e[8]  for e in _slot_data], dtype=np.float64)
+_slot_mfa = np.array([e[9]  for e in _slot_data], dtype=np.float64)
+_slot_gam = np.array([e[10] for e in _slot_data], dtype=np.float64)
+
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
 def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop, w_biz, THETA=None):
@@ -658,16 +671,17 @@ def model_obs_2c(flow_res, flow_biz):
 
 
 def calibrate_Ks_and_fracs(m_res, m_biz, max_iter=10):
-    """4-block alternating minimisation: (K, phi, f_s_res, f_s_biz).
+    """4-block alternating minimisation: (K, phi, f_s_res, f_s_biz) — vectorised.
 
+    Mathematically identical to a 72-slot loop version; replaces those Python loops
+    with array operations over all 559 observations + per-slot np.bincount.
     Reparameterised as K_total = K_res + K_biz and phi = K_biz / K_total.
-    This breaks the K_biz / W_BIZ degeneracy that otherwise collapses K_biz → 0.
 
-    K-step:   1D solve (linear in K, same as single-component case).
+    K-step:   1D solve (linear in K).
     phi-step: 1D solve with Gaussian prior phi ~ N(PHI_PRIOR, PHI_STD²).
-    f_res-step: per-slot analytical, anchored by NTS residential prior.
+    f_res-step: per-slot analytical via bincount, anchored by NTS residential prior.
     f_biz-step: symmetric.
-    Coupling: γ·(f_res + f_biz − f_agg)² per slot (2 lines each f-step).
+    Coupling: γ·(f_res + f_biz − f_agg)² per slot (folded into num/den in f-steps).
     Converges in 3–5 iterations; 10 iterations is ample.
     max_iter=5 is safe for intermediate optimizer evals (--fast mode).
     Returns (K_res, K_biz, slot_fracs_res, slot_fracs_biz).
@@ -676,68 +690,82 @@ def calibrate_Ks_and_fracs(m_res, m_biz, max_iter=10):
     PHI_STD   = phi_std
     INV_PHI_V = 1.0 / (PHI_STD ** 2)
 
-    slot_fracs_res = {sk: mfr for sk, _, _, _, _, mfr, _, _, _, _, _ in _slot_data}
-    slot_fracs_biz = {sk: mfb for sk, _, _, _, _, _, _, mfb, _, _, _ in _slot_data}
+    # Per-slot working arrays; index n_slots is a sentinel for unslotted obs (weight=0).
+    f_r_s = np.empty(n_slots + 1)
+    f_b_s = np.empty(n_slots + 1)
+    f_r_s[:n_slots] = _slot_mfr
+    f_b_s[:n_slots] = _slot_mfb
+    f_r_s[n_slots]  = 0.0
+    f_b_s[n_slots]  = 0.0
+
     K   = 1.0
     phi = PHI_PRIOR
+    K_res = K * (1 - phi)
+    K_biz = K * phi
+
+    # Per-eval component coefficients (constant within this call).
+    cr = m_res * obs_Th   # (n_obs,)
+    cb = m_biz * obs_Th   # (n_obs,)
+
+    _sid = _obs_slot_id   # (n_obs,) int32; sentinel n_slots for unslotted obs
+    _sw  = _slot_w_arr    # (n_obs,) float64; 0 for unslotted obs
+
+    # Working per-obs slot-fraction arrays (scattered from slot arrays each step).
+    _fr = np.empty(n_obs)
+    _fb = np.empty(n_obs)
+    _NB = n_slots + 1     # bincount minlength; discard sentinel bucket with [:n_slots]
 
     for _ in range(max_iter):
         K_old = K
+
+        # Scatter current slot fracs to per-obs arrays.
+        _fr[:] = f_r_s[_sid]
+        _fb[:] = f_b_s[_sid]
+
+        # ── K-step: 1D solve ─────────────────────────────────────────────────
+        coeff = (1 - phi) * cr * _fr + phi * cb * _fb
+        wc    = _sw * coeff
+        A     = float(wc @ coeff)
+        B     = float(wc @ obs_rhs_arr)
+        K     = max(B / A, 1e-30) if A > 0 else K
+
+        # ── phi-step: 1D solve ───────────────────────────────────────────────
+        base = cr * _fr
+        delt = cb * _fb - base
+        wd   = _sw * delt
+        A_p  = float(wd @ delt) * K ** 2 + INV_PHI_V
+        B_p  = float(wd @ (obs_rhs_arr - K * base)) * K + PHI_PRIOR * INV_PHI_V
+        phi   = max(0.01, min(0.99, B_p / A_p)) if A_p > 0 else phi
         K_res = K * (1 - phi)
         K_biz = K * phi
 
-        # ── K-step: 1D solve (linear in K) ───────────────────────────────────
-        A = B = 0.0
-        for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
-            f_r = slot_fracs_res[sk]
-            f_b = slot_fracs_biz[sk]
-            # combined coefficient per obs: (1-phi)*c_r*f_r + phi*c_b*f_b
-            coeff = ((1 - phi) * m_res[ia] * Ths * f_r
-                     + phi     * m_biz[ia] * Ths * f_b)
-            A += float(np.dot(w * coeff, coeff))
-            B += float(np.dot(w * coeff, rhs))
-        K = max(B / A, 1e-30) if A > 0 else K
+        # ── f_res-step: per-slot analytical via bincount ─────────────────────
+        h      = obs_rhs_arr - K_biz * cb * _fb
+        wcr    = _sw * cr
+        s_num  = np.bincount(_sid, weights=wcr * h,  minlength=_NB)[:n_slots]
+        s_den  = np.bincount(_sid, weights=wcr * cr, minlength=_NB)[:n_slots]
+        num    = K_res * s_num + _slot_mfr * _slot_ivr + _slot_gam * (_slot_mfa - f_b_s[:n_slots])
+        den    = K_res ** 2 * s_den + _slot_ivr + _slot_gam
+        f_r_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfr)
 
-        # ── phi-step: 1D solve (linear in phi) ───────────────────────────────
-        A_p = B_p = 0.0
-        for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
-            f_r  = slot_fracs_res[sk]
-            f_b  = slot_fracs_biz[sk]
-            base = m_res[ia] * Ths * f_r             # c_r·f_r
-            delt = m_biz[ia] * Ths * f_b - base      # c_b·f_b − c_r·f_r
-            # pred = K*(base + phi*delt); minimise Σ w*(K*(base+phi*delt)−rhs)²
-            A_p += float(np.dot(w * delt, delt)) * K ** 2
-            B_p += float(np.dot(w * delt, rhs - K * base)) * K
-        A_p += INV_PHI_V
-        B_p += PHI_PRIOR * INV_PHI_V
-        phi = max(0.01, min(0.99, B_p / A_p)) if A_p > 0 else phi
-        K_res = K * (1 - phi)
-        K_biz = K * phi
+        # Re-scatter updated f_r for f_biz step.
+        _fr[:] = f_r_s[_sid]
 
-        # ── f_res-step (per slot, holding K_res, K_biz, f_biz fixed) ─────────
-        for sk, ia, w, rhs, Ths, mfr, ivr, mfb_prior, ivb, mfa, gam in _slot_data:
-            f_b = slot_fracs_biz[sk]
-            cr  = m_res[ia] * Ths
-            cb  = m_biz[ia] * Ths
-            h_i = rhs - K_biz * cb * f_b
-            num = K_res * float(np.dot(w * cr, h_i)) + mfr * ivr + gam * (mfa - f_b)
-            den = K_res**2 * float(np.dot(w * cr, cr)) + ivr + gam
-            slot_fracs_res[sk] = max(num / den, 1e-12) if den > 0 else mfr
+        # ── f_biz-step: symmetric ─────────────────────────────────────────────
+        h      = obs_rhs_arr - K_res * cr * _fr
+        wcb    = _sw * cb
+        s_num  = np.bincount(_sid, weights=wcb * h,  minlength=_NB)[:n_slots]
+        s_den  = np.bincount(_sid, weights=wcb * cb, minlength=_NB)[:n_slots]
+        num    = K_biz * s_num + _slot_mfb * _slot_ivb + _slot_gam * (_slot_mfa - f_r_s[:n_slots])
+        den    = K_biz ** 2 * s_den + _slot_ivb + _slot_gam
+        f_b_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfb)
 
-        # ── f_biz-step (symmetric) ────────────────────────────────────────────
-        for sk, ia, w, rhs, Ths, mfr_prior, ivr, mfb, ivb, mfa, gam in _slot_data:
-            f_r = slot_fracs_res[sk]
-            cr  = m_res[ia] * Ths
-            cb  = m_biz[ia] * Ths
-            h_i = rhs - K_res * cr * f_r
-            num = K_biz * float(np.dot(w * cb, h_i)) + mfb * ivb + gam * (mfa - f_r)
-            den = K_biz**2 * float(np.dot(w * cb, cb)) + ivb + gam
-            slot_fracs_biz[sk] = max(num / den, 1e-12) if den > 0 else mfb
-
-        # A6: stop early once K has converged (typically 3–5 iters suffice).
+        # Stop early once K has converged (typically 3–5 iters suffice).
         if abs(K - K_old) / max(abs(K_old), 1e-30) < 1e-8:
             break
 
+    slot_fracs_res = {sk: float(f_r_s[si]) for si, (sk, _) in enumerate(slot_list)}
+    slot_fracs_biz = {sk: float(f_b_s[si]) for si, (sk, _) in enumerate(slot_list)}
     return K_res, K_biz, slot_fracs_res, slot_fracs_biz
 
 
