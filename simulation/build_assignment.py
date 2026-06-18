@@ -99,21 +99,34 @@ link_idx     = cache["link_idx"]
 link_u       = cache["link_u"]
 link_v       = cache["link_v"]
 
-_has_stoch = "pair_idx_2" in cache and THETA is not None
-if _has_stoch:
-    od_dist_2  = cache["od_dist_2"].astype(np.float64)
-    pair_idx_2 = cache["pair_idx_2"]
-    link_idx_2 = cache["link_idx_2"]
-    od_dist_3  = cache["od_dist_3"].astype(np.float64)
-    pair_idx_3 = cache["pair_idx_3"]
-    link_idx_3 = cache["link_idx_3"]
-    print(f"  Stochastic k=3 paths loaded  THETA={THETA:.4f}")
-else:
+# Probit stochastic loading (new cache format)
+if "link_weight" in cache:
+    link_weight = cache["link_weight"].astype(np.float64)
+    n_passes    = int(cache["probit_n_passes"])
+    cv          = float(cache["probit_cv"])
+    print(f"  Probit loading: {n_passes} passes  CV={cv:.2f}  "
+          f"({len(link_idx):,} weighted entries for {len(od_src):,} OD pairs)")
     od_dist_2 = pair_idx_2 = link_idx_2 = None
     od_dist_3 = pair_idx_3 = link_idx_3 = None
-    if THETA is not None:
-        print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
-        THETA = None
+    THETA = None   # not used with probit cache
+else:
+    # Legacy k=2/k=3 logit cache
+    link_weight = None
+    _has_stoch  = "pair_idx_2" in cache and THETA is not None
+    if _has_stoch:
+        od_dist_2  = cache["od_dist_2"].astype(np.float64)
+        pair_idx_2 = cache["pair_idx_2"]
+        link_idx_2 = cache["link_idx_2"]
+        od_dist_3  = cache["od_dist_3"].astype(np.float64)
+        pair_idx_3 = cache["pair_idx_3"]
+        link_idx_3 = cache["link_idx_3"]
+        print(f"  Legacy k=3 paths loaded  THETA={THETA:.4f}")
+    else:
+        od_dist_2 = pair_idx_2 = link_idx_2 = None
+        od_dist_3 = pair_idx_3 = link_idx_3 = None
+        if THETA is not None:
+            print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
+            THETA = None
 
 w_pop = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
 w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
@@ -123,7 +136,8 @@ N_links = len(link_u)
 _kw = dict(BETA=BETA, THETA=THETA,
            P_biz=P_biz, ALPHA_biz=ALPHA_biz,
            od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
-           od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3)
+           od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3,
+           link_weight=link_weight)
 _use_2c = (K_res is not None)
 
 if _use_2c:

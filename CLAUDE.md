@@ -15,13 +15,13 @@ committing. This file is the authoritative record of model state.
 ```
 python3 simulation/build_network.py          # build road network from OSM
 python3 simulation/build_demographics.py     # node weights + map scaffold
-python3 simulation/build_paths.py            # precompute k=3 shortest paths (~6 min)
+python3 simulation/build_paths.py            # probit stochastic paths (N_PASSES=25, CV=0.25; ~30-60 min)
 
 python3 analysis/parse_official_hourly.py    # parse ODS hourly counts → data/official_hourly.json (one-off)
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
 python3 analysis/aggregate_counts.py         # combine per-session AADT → link_aadt.json
 
-python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (4 params incl. THETA, ~5 min)
+python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (6 params, no THETA; ~5 min)
 python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (26 params, ~15 min)
 python3 analysis/tune_assignment.py --fast                 # looser tolerances + fewer alt-min iters (~2× faster, minimal precision loss)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
@@ -44,8 +44,8 @@ than restart.
 | File | Role |
 |------|------|
 | `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. **Population distribution:** building centroids snapped to road edges; DZs with <3 buildings fall back to road-length weighting. **Business demand:** workplace population × POI count, augmented with OSM car park polygon area (public: area/25, private: area/50 equivalent persons). **Flow map layers:** reads `newtownards_flows.json` and adds: (1) combined AADT layer (shown by default, blue→yellow→red, tooltip includes res/biz breakdown if component flows present); (2) residential layer (teal, off by default); (3) business-adjacent layer (amber→red, off by default). Component layers only appear if `flows_res`/`flows_biz` keys exist in the flows file. Map also includes parking (blue/red) and POI layers. **Adding a new external zone:** add an entry to `_EXT_GEO` (the dict at the top of the file) and to `tuner_config.json` cities — `BOUNDARY_NODE_IDS` is now derived automatically from `_EXT_GEO.keys()` so no separate update is needed there. |
-| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes or `HIGHWAY_COST_FACTOR` values change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0) to bias routing toward major roads. Also reads `tuner_config.json` to filter which external→external OD pairs to include as through routes. Produces **k=3 alternative paths** per OD pair (k=2/k=3 via progressive edge penalisation ×10) for stochastic logit routing. Build time ~30 min (3 Dijkstra passes). |
-| `simulation/model.py` | **Shared constants and functions:** `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel, `return_components=True` returns `(flow_res, flow_biz)` tuple), `site_flow()`, `compute_chi2()`, `print_chi2_table()`. `compute_chi2()` has two modes: **two-component** (when `link_flow_biz_dict` provided) uses 216 official hourly obs + count-space formula matching the tuner; **legacy** (single flow dict) uses 3 AADT obs + Woodbury correction. |
+| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes, `HIGHWAY_COST_FACTOR` values change, or `N_PASSES`/`PROBIT_CV` change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0). Also reads `tuner_config.json` to filter external→external OD pairs. **Probit stochastic loading:** runs `N_PASSES=25` Dijkstra passes with log-normal edge-cost noise (CV=0.25), accumulates fractional link-assignment weights (`link_weight` per entry = fraction of passes using that link for that OD pair). `od_dist` is the mean path distance across passes. Build time ~30–60 min. |
+| `simulation/model.py` | **Shared constants and functions:** `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel, `return_components=True` returns `(flow_res, flow_biz)` tuple), `site_flow()`, `compute_chi2()`, `print_chi2_table()`. `gravity_assign()` accepts optional `link_weight` array (float, parallel to `pair_idx`/`link_idx`): when provided, each entry's flow contribution is scaled by its fractional weight (probit loading); when `None`, falls back to binary all-or-nothing. `compute_chi2()` has two modes: **two-component** (when `link_flow_biz_dict` provided) uses 216 official hourly obs + count-space formula matching the tuner; **legacy** (single flow dict) uses 3 AADT obs + Woodbury correction. |
 | `simulation/build_assignment.py` | Gravity model assignment. Requires `simulation/newtownards_paths.npz` (exits with an informative error if absent). Calls `gravity_assign(return_components=True)` and `compute_chi2` two-component mode when K_res/K_biz are in `tuned_params.json`. Saves `flows_res` and `flows_biz` alongside `flows` in `newtownards_flows.json` when two-component. Falls back to legacy single-K mode for old param files. **Two-component mode does not require `official_hourly.json` to be present** — `compute_chi2` handles a missing file gracefully; the res/biz assignment and map layers work from K_res/K_biz alone. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, gravity param regularization, and temporal coupling. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/BETA/W_BIZ/THETA; `gamma_coupling_scale` controls the per-slot aggregate coupling (γ = scale/std_f²); `phi_prior` + `phi_std` set the Gaussian prior on the business flow fraction (see Model Design). |
@@ -99,18 +99,16 @@ Node weight: `w = population + W_BIZ × business_demand`
 Distances are least-time shortest paths (seconds), with an off-network leg added
 for boundary nodes using their real-world centroid position.
 
-### Stochastic route choice (logit)
-When the paths cache contains k=3 alternatives and THETA is a tuned parameter,
-demand is split across 3 paths per OD pair:
+### Stochastic route choice (probit loading)
+The paths cache stores fractional link-assignment weights computed from `N_PASSES=25`
+Dijkstra runs, each with log-normal edge-cost noise (CV=0.25). For each OD pair,
+`link_weight[entry]` is the fraction of passes that routed through that link. Pairs
+with no topological route diversity (degree-1 stubs, single-access nodes) converge to
+weight=1.0 on their forced route. `od_dist` is the mean path distance across passes.
 
-`share(path r) ∝ exp(−THETA × d_r / P)`
-
-THETA → ∞: collapses to all-or-nothing (k=1 path only).
-THETA = 0: equal split across all 3 paths.
-
-Alternative paths k=2/k=3 are found by penalising k=1 (and k=1+k=2) edges ×10
-in the Dijkstra adjacency matrix. Pairs with no alternative fall back to k=1
-(which is equivalent to all-or-nothing for those pairs under any THETA).
+This replaces the previous k=2/k=3 global-penalisation scheme, which was ineffective
+in a dense network (global penalisation of all k=1-used links preserves relative ordering
+and produces identical alternative paths for most OD pairs). THETA is no longer tuned.
 
 ### External zones
 15 boundary nodes grouped into 8 cities in `tuner_config.json`. Each city shares
@@ -241,14 +239,12 @@ mean|z|=0.90  |z|>2: 46  |z|>3: 15.
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
-`through_route_pairs` changes or whenever stochastic routing (THETA) is to be used.
+`through_route_pairs` changes, the road network changes, or `N_PASSES`/`PROBIT_CV` change.
 
-**Current cache (2026-06-17) contains k=3 paths** (`pair_idx_2`/`pair_idx_3` keys present), so `_has_stoch = True` and THETA is included as a tuned parameter (7th gravity param in the double-kernel layout: W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA). Rebuild with `build_paths.py` if the road network or `through_route_pairs` changes.
-
-The cache previously lacked all through-routes despite the whitelist being correct — the
-cache predated the through-route feature. This caused the LowerArds pop to blow up to
-+514% as the tuner compensated for missing through-traffic. After rebuilding (2026-06-15)
-LowerArds settled at +92%.
+**Current cache format** (probit, as of this worktree): contains `link_weight` (float32,
+per entry), `od_dist` (mean across passes), `probit_n_passes`, `probit_cv`. No `pair_idx_2/3`
+keys — `_has_stoch = False`, THETA not tuned. Rebuild with `build_paths.py` if the road
+network or `through_route_pairs` changes.
 
 ### Known model behaviour
 - **Two-component K_biz/W_BIZ degeneracy:** Without the phi prior, the optimizer exploits
@@ -266,11 +262,9 @@ LowerArds settled at +92%.
 - After a structural model change (e.g. adding through routes or new count data), a gravity-only
   stage 1 run will show inflated chi²/N. A full `--full` re-tune is needed to restore fit quality.
 - **Dundonald virtual node (added 2026-06-17):** Node 10000 is a degree-1 stub connected
-  only to node 97, representing the Dundonald catchment on the A20 corridor. All paths
-  to/from node 10000 share the forced stub leg, but k=2/k=3 alternatives are still
-  computed normally: the Dijkstra penalises the stub edge ×10 but does not remove it, so
-  alternative routes are found via different approaches to/from node 97. Route diversity
-  is in the network portion beyond the stub junction.
+  only to node 97. With probit loading, its `link_weight` values will be 1.0 on the forced
+  stub edge for every pass (no route diversity possible for a degree-1 node). Route diversity
+  for Dundonald OD pairs is zero, which is topologically correct.
 - **Manual link overrides:** `MANUAL_LINK_OVERRIDES` in `ingest_counts.py` hard-assigns specific sessions to a directed link, bypassing GPS snap. Use when the observer stood on a parallel carriageway (e.g. a dual one-way road) and the snap would land on the wrong physical road. The override is idempotent and takes effect even if `counts_processed.json` is wiped and rebuilt. After assignment (manual or auto), the script validates each non-null count direction against the directed graph and raises `ValueError` if the edge doesn't exist.
 - **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` previously stored canonical
   `(min(u,v), max(u,v))` — fixed to store actual directed `(u, v)`. Only session `f56b2ce4`

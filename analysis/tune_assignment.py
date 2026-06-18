@@ -121,6 +121,9 @@ N_nodes      = len(node_ids)
 
 link_index = {(int(link_u[k]), int(link_v[k])): k for k in range(N_links)}
 
+# Probit fractional link weights (new cache format); None for legacy binary caches.
+_link_weight = cache["link_weight"].astype(np.float32) if "link_weight" in cache else None
+
 _has_stoch = "pair_idx_2" in cache
 if _has_stoch:
     _od_dist_2  = cache["od_dist_2"].astype(np.float64)
@@ -155,8 +158,14 @@ else:
     _od_dist_2 = _pair_idx_2 = _link_idx_2 = None
     _od_dist_3 = _pair_idx_3 = _link_idx_3 = None
 
-print(f"  {N_nodes} nodes  {N_links} links  {len(od_src):,} OD pairs"
-      + ("  stochastic k=3 paths loaded" if _has_stoch else "  (no stochastic paths — run build_paths.py)"))
+if _link_weight is not None:
+    _n_passes = int(cache["probit_n_passes"])
+    _cv       = float(cache["probit_cv"])
+    print(f"  {N_nodes} nodes  {N_links} links  {len(od_src):,} OD pairs"
+          f"  probit loading: {_n_passes} passes  CV={_cv:.2f}")
+else:
+    print(f"  {N_nodes} nodes  {N_links} links  {len(od_src):,} OD pairs"
+          + ("  stochastic k=3 paths loaded" if _has_stoch else "  (no stochastic paths — run build_paths.py)"))
 
 # ── Load node weights ─────────────────────────────────────────────────────────
 
@@ -325,9 +334,13 @@ if not _has_stoch:
         """Build a dense (N_links, N_BINS) accumulation matrix via COO→dense."""
         if sel is None:
             r, c, d = link_idx_arr, _col_all, dat_od[pair_idx]
+            if _link_weight is not None:
+                d = d * _link_weight
         else:
             pi = pair_idx[sel]
             r, c, d = link_idx_arr[sel], _col_all[sel], dat_od[pi]
+            if _link_weight is not None:
+                d = d * _link_weight[sel]
         return _coo((d, (r, c)), shape=(N_links, N_BINS)).toarray()
 
 
@@ -349,8 +362,10 @@ if not _has_stoch:
     _ext_dst   = od_dst[_ext_p]                               # node-array dst index
     _ext_local = np.empty(len(od_src), dtype=np.int32)        # global→local pair map
     _ext_local[_ext_p] = np.arange(len(_ext_p), dtype=np.int32)
-    _ext_link  = link_idx_arr[_ext_sel]                       # link idx per ext entry
-    _ext_lp    = _ext_local[pair_idx[_ext_sel]]               # local pair idx per ext entry
+    _ext_link        = link_idx_arr[_ext_sel]                  # link idx per ext entry
+    _ext_lp          = _ext_local[pair_idx[_ext_sel]]          # local pair idx per ext entry
+    _ext_link_weight = (_link_weight[_ext_sel]
+                        if _link_weight is not None else None)  # probit weight per ext entry
 
     del _is_ext_node, _ext_pair_mask, _entry_is_ext, _int_sel, _ext_sel, _ext_local
     del _pp_od, _pb_od, _bb_od, _col_all
@@ -561,9 +576,10 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop, w_biz, THETA=
             t_pp  = w_src * w_dst * f_e_res
             t_pb  = (w_src * b_dst + b_src * w_dst) * f_e_biz
             t_bb  = b_src * b_dst * f_e_biz
-            flow_res += np.bincount(_ext_link, weights=t_pp[_ext_lp], minlength=N_links)
+            _ew = _ext_link_weight if _ext_link_weight is not None else 1.0
+            flow_res += np.bincount(_ext_link, weights=t_pp[_ext_lp] * _ew, minlength=N_links)
             flow_biz += np.bincount(_ext_link,
-                                    weights=(W_BIZ * t_pb + W_BIZ**2 * t_bb)[_ext_lp],
+                                    weights=(W_BIZ * t_pb + W_BIZ**2 * t_bb)[_ext_lp] * _ew,
                                     minlength=N_links)
         else:
             flow_res = (all_bin_pp @ f_b_res).astype(np.float64)
