@@ -46,6 +46,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                    P_biz=None, ALPHA_biz=None, BETA_biz=None,
                    od_dist_2=None, pair_idx_2=None, link_idx_2=None,
                    od_dist_3=None, pair_idx_3=None, link_idx_3=None,
+                   link_weight=None,
                    return_components=False):
     """
     Generalised rational kernel assignment.
@@ -54,12 +55,15 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
     Peak at d=P with f(P)=1; tail ~ 1/d^ALPHA; rise ~ u^BETA near origin.
     BETA=1 (default) recovers the original kernel (ALPHA+1)*u / (ALPHA + u^(ALPHA+1)).
 
-    When THETA is None or k=2/k=3 arrays absent: all-or-nothing on k=1 path.
-    When THETA is given with k=2/k=3 arrays: logit spread across 3 paths.
-      share(r) ∝ exp(−THETA · d_r / P); THETA→∞ collapses to all-or-nothing.
+    link_weight: optional float32 array parallel to (pair_idx, link_idx), giving the
+      fraction of probit stochastic passes that routed through each (pair, link) entry.
+      When provided, each entry's flow contribution is scaled by link_weight[entry]
+      instead of 1.0 (binary all-or-nothing).  When None, all-or-nothing on k=1 path.
 
-    P_biz/ALPHA_biz/BETA_biz: optional separate kernel for the business component
-      (pb and bb OD pairs). When None, falls back to the shared P/ALPHA/BETA.
+    THETA / k=2/k=3 arrays: legacy logit stochastic routing retained for backward
+      compatibility with old caches.  New caches use link_weight instead.
+
+    P_biz/ALPHA_biz/BETA_biz: optional separate kernel for the business component.
       Only used when return_components=True.
 
     return_components=False (default): returns combined pre-K flow array (N_links,).
@@ -78,10 +82,13 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         u    = od_dist / P
         kern = (ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))
 
+        # entry_w: per-entry multiplier (probit fractional weight, or 1.0 for binary)
+        entry_w = link_weight if link_weight is not None else 1.0
+
         if not return_components:
             w_vec = w_pop + W_BIZ * w_biz
             t_ij  = w_vec[od_src] * w_vec[od_dst] * kern
-            return np.bincount(link_idx, weights=t_ij[pair_idx], minlength=N_links)
+            return np.bincount(link_idx, weights=t_ij[pair_idx] * entry_w, minlength=N_links)
 
         # Separate biz kernel (may equal kern when no biz params supplied)
         if _P_biz == P and _A_biz == ALPHA and _B_biz == BETA:
@@ -93,9 +100,9 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         pp = w_pop[od_src] * w_pop[od_dst] * kern
         pb = (w_pop[od_src] * w_biz[od_dst] + w_biz[od_src] * w_pop[od_dst]) * kern_biz
         bb = w_biz[od_src] * w_biz[od_dst] * kern_biz
-        flow_res = np.bincount(link_idx, weights=pp[pair_idx], minlength=N_links)
+        flow_res = np.bincount(link_idx, weights=pp[pair_idx] * entry_w, minlength=N_links)
         flow_biz = np.bincount(link_idx,
-                               weights=((W_BIZ * pb + W_BIZ ** 2 * bb)[pair_idx]),
+                               weights=((W_BIZ * pb + W_BIZ ** 2 * bb)[pair_idx]) * entry_w,
                                minlength=N_links)
         return flow_res, flow_biz
 
