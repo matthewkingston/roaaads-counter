@@ -14,10 +14,10 @@
     ["Dundonald",   "Donaghadee"],
     ["Dundonald",   "Millisle"]
   ],
-  "gravity_lambda": 0.05,
+  "gravity_lambda": 0.5,
   "gravity_ref": {
     "W_BIZ": 1.0,
-    "P":     300.0,
+    "P":     600.0,
     "ALPHA": 2.0,
     "THETA": 1.0
   },
@@ -48,7 +48,7 @@
     },
     "Dundonald": {
       "nodes": [10000],
-      "ref_pop": 150000,
+      "ref_pop": 15000,
       "ref_wp": 8000,
       "dampings": {"10000": 1.0}
     },

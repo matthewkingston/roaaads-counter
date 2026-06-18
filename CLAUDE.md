@@ -229,11 +229,9 @@ mean|z|=0.90  |z|>2: 46  |z|>3: 15.
 - Site 444 overnight z-scores improved: previously z≈−5 at h04; now worst official-hourly is h06 at z=−3.04.
 - Map layers (residential/business) confirmed — `build_assignment.py` populated `flows_res`/`flows_biz`.
 
-**Outstanding concerns:**
-- **LowerArds wp +645%** (37,457 vs ref 5,024) — improved from +1303% but still large; same blowup pattern. External zone L2 regularization may need strengthening, or ref values need updating.
-- **Belfast wp +1083%** (2,173,839 vs ref 183,661) — new blowup; Belfast is a large attractor and may be absorbing LowerArds excess. Investigate before updating refs.
-- **Dundonald pop −89.5%** (15,686 vs ref 150,000) — prior was set too high; should be revised before next full run.
-- **P = 56.8s** is very short (under 1 minute peak). May reflect tension from many short-distance counts; worth monitoring across further runs.
+**Outstanding concerns (next full run expected to resolve Belfast/LowerArds blowups):**
+- **P = 56.8s / Belfast wp +1083% / LowerArds wp +645%** — these are coupled. Root cause: gravity_lambda=0.05 was too weak to anchor P; 329 short-range walking obs pulled P from 190s → 57s, making the gravity kernel 65× weaker at Belfast's network distance. External zones compensated by inflating weights. **Fixed:** gravity_lambda raised to 0.5, gravity_ref P updated to 600s (TSNI average ≈10 min). Dundonald ref_pop corrected from placeholder 150k → 15k. Belfast/LowerArds refs not updated — expect blowups to resolve after re-tune.
+- **`tuned_params.json` P/Belfast/LowerArds values are stale** — re-run `reset_gravity_params.py` before the next tune to clear the P=57s starting point, or start from gravity stage with fresh params.
 - Structural outliers: `23→295 Frances Street` (z=+4.38), `2→9 Kempe Stones Road` (z=+4.31), `296→297 Nursery Road` (z=−4.00), `139→137 Portaferry Road` (z=−3.92) — persistent from 2026-06-17 count ingest, not necessarily model failures.
 - `719→325` and `325→719` Messines Road remain persistent (z=−3.90/−3.45/−3.35).
 - `18→21` / `68→21` / `21→68` Hardford Link persistent (z=−2.98/−2.89/−2.72).
@@ -302,8 +300,9 @@ LowerArds settled at +92%.
 updating them is something to *consider and discuss*, not an automatic step — the refs anchor
 L2 regularization and changing them shifts the penalty basin for all future runs.
 
-Last updated: 2026-06-16 full tuning run (χ²/N=1.2546, 258 obs, stochastic k=3).
-Dundonald added 2026-06-17 (initial priors only, not yet tuned).
+Last updated: 2026-06-18.
+- City refs: 2026-06-16 full run (χ²/N=1.2546, 258 obs) except Dundonald (updated 2026-06-18 from placeholder 150k to 15k, matching consistent tuner finding).
+- gravity_lambda raised 0.05→0.5, gravity_ref P updated 300→600s (TSNI average journey ≈10 min) to prevent P drifting to unrealistic sub-minute values.
 
 | City | Nodes | ref_pop | ref_wp | Tunable dampings |
 |------|-------|---------|--------|-----------------|
@@ -311,7 +310,7 @@ Dundonald added 2026-06-17 (initial priors only, not yet tuned).
 | Comber | 65, 617, 618, 620 | 53,571 | 2,996 | 617 (×0.38), 618 (×0.35), 620 (×0.43) |
 | LowerArds | 92 | 84,500 | 5,024 | — |
 | Belfast | 97, 119 | 1,034,719 | 183,661 | 119 (×0.31) |
-| Dundonald | 10000 | 150,000 | 8,000 | — |
+| Dundonald | 10000 | 15,000 | 8,000 | — |
 | Bangor | 98, 731 | 95,426 | 21,246 | 98 (×0.39) |
 | Holywood | 99 | 3,652 | 1,203 | — |
 | Millisle | 748, 749 | 2,570 | 498 | 749 (×0.47) |
