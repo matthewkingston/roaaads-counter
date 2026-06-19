@@ -35,50 +35,50 @@
   "cities": {
     "Donaghadee": {
       "nodes": [47],
-      "ref_pop": 190201,
-      "ref_wp": 7018,
+      "ref_pop": 386202,
+      "ref_wp": 11093,
       "dampings": {"47": 1.0}
     },
     "Comber": {
       "nodes": [65, 617, 618, 620],
-      "ref_pop": 53571,
-      "ref_wp": 2996,
+      "ref_pop": 71927,
+      "ref_wp": 2208,
       "dampings": {"65": 1.0, "617": 0.3849, "618": 0.3518, "620": 0.4316}
     },
     "LowerArds": {
       "nodes": [92],
-      "ref_pop": 84500,
-      "ref_wp": 5024,
+      "ref_pop": 136840,
+      "ref_wp": 5850,
       "dampings": {"92": 1.0}
     },
     "Belfast": {
       "nodes": [97, 119],
-      "ref_pop": 1034719,
-      "ref_wp": 183661,
+      "ref_pop": 517496,
+      "ref_wp": 1822862,
       "dampings": {"97": 1.0, "119": 0.3126}
     },
     "Dundonald": {
       "nodes": [10000],
-      "ref_pop": 15000,
-      "ref_wp": 8000,
+      "ref_pop": 7370,
+      "ref_wp": 6820,
       "dampings": {"10000": 1.0}
     },
     "Bangor": {
       "nodes": [98, 731],
-      "ref_pop": 95426,
-      "ref_wp": 21246,
+      "ref_pop": 150387,
+      "ref_wp": 6862,
       "dampings": {"731": 1.0, "98": 0.3945}
     },
     "Holywood": {
       "nodes": [99],
-      "ref_pop": 3652,
-      "ref_wp": 1203,
+      "ref_pop": 3785,
+      "ref_wp": 1204,
       "dampings": {"99": 1.0}
     },
     "Millisle": {
       "nodes": [748, 749],
-      "ref_pop": 2570,
-      "ref_wp": 498,
+      "ref_pop": 2525,
+      "ref_wp": 496,
       "dampings": {"748": 1.0, "749": 0.4729}
     }
   }
