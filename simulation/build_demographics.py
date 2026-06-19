@@ -65,15 +65,19 @@ POI_WEIGHTS = {
     # any office tag → 2.0 (applied inline; not listed here as the value covers all subtypes)
 }
 
-# School POI weights for the dedicated school trip demand layer.
-# Secondary schools and colleges draw larger car catchments than primary schools.
-SCHOOL_POI_WEIGHTS = {
-    "school":            1.5,   # generic (often primary; OSM doesn't always distinguish)
-    "secondary_school":  3.0,
-    "college":           3.0,
-    "university":        3.0,
+# Fallback enrollment estimates (pupils/students) for school demand when OSM
+# capacity tag is absent.  Used as the control total per school POI — units of
+# node_school_demand are then pupils, making W_SCHOOL interpretable as a
+# trip-production ratio relative to residential population.
+# Sources: DE NI school census 2023/24 (primary ~234, post-primary ~854 per school);
+# FE college and university figures are rough estimates.
+SCHOOL_ENROLL_FALLBACK = {
+    "school":           300,   # generic tag — may be primary or secondary; use midpoint
+    "secondary_school": 900,
+    "college":          2000,
+    "university":       3000,
 }
-_SCHOOL_TAGS = set(SCHOOL_POI_WEIGHTS)
+_SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
 
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
@@ -517,7 +521,7 @@ else:
     else:
         print("Downloading OSM POIs (amenity / shop / office) …")
         pois_raw = ox.features_from_point(CENTRE, tags={"amenity": True, "shop": True, "office": True}, dist=RADIUS_M)
-        _save_cols = [c for c in ["amenity", "shop", "office", "name"] if c in pois_raw.columns]
+        _save_cols = [c for c in ["amenity", "shop", "office", "name", "capacity"] if c in pois_raw.columns]
         pois_raw[_save_cols + ["geometry"]].to_crs("EPSG:4326").to_file(POI_CACHE, driver="GeoJSON")
         print(f"  Cached → {POI_CACHE}")
 
@@ -634,28 +638,37 @@ else:
           f"{_n_priv} private +{_eq_priv:.0f} eq-persons)")
 
     # ── School demand layer ───────────────────────────────────────────────────────
-    # Snap school POIs to road edges; accumulate SCHOOL_POI_WEIGHTS per node.
-    # This layer is separate from node_business_demand — school POIs are no longer
-    # in POI_WEIGHTS, so workplace population is NOT allocated to school nodes.
-    # W_SCHOOL in the gravity model absorbs the global scale; the weights here
-    # are dimensionless POI-weight units summed per road node.
+    # Snap school POIs to road edges; accumulate enrollment (pupils) per node.
+    # Enrollment = OSM capacity tag where present, else type-based fallback from
+    # SCHOOL_ENROLL_FALLBACK.  Units of node_school_demand are pupils, so W_SCHOOL
+    # is interpretable as a trip-production ratio relative to residential population.
 
     node_school_demand = {}
     _n_school = 0
+    _n_capacity_used = 0
     for _, _poi_row in pois_utm.iterrows():
         _amenity = _poi_row.get("amenity") if "amenity" in pois_utm.columns else None
         if not (pd.notna(_amenity) and _amenity in _SCHOOL_TAGS):
             continue
-        _sw = SCHOOL_POI_WEIGHTS[_amenity]
+        # Use OSM capacity if present and numeric, else fall back to type estimate
+        _cap_raw = _poi_row.get("capacity") if "capacity" in pois_utm.columns else None
+        if pd.notna(_cap_raw):
+            try:
+                _enrollment = float(_cap_raw)
+                _n_capacity_used += 1
+            except (ValueError, TypeError):
+                _enrollment = SCHOOL_ENROLL_FALLBACK[_amenity]
+        else:
+            _enrollment = SCHOOL_ENROLL_FALLBACK[_amenity]
         _eidx = _edge_strtree.nearest(_poi_row.geometry)
         if _eidx in _ghost_junction:
             _junc = _ghost_junction[_eidx]
-            node_school_demand[_junc] = node_school_demand.get(_junc, 0.0) + _sw
+            node_school_demand[_junc] = node_school_demand.get(_junc, 0.0) + _enrollment
         else:
             _eu, _ev = _edge_keys[_eidx]
             _t = _edge_geom_list[_eidx].project(_poi_row.geometry, normalized=True)
-            node_school_demand[_eu] = node_school_demand.get(_eu, 0.0) + _sw * (1.0 - _t)
-            node_school_demand[_ev] = node_school_demand.get(_ev, 0.0) + _sw * _t
+            node_school_demand[_eu] = node_school_demand.get(_eu, 0.0) + _enrollment * (1.0 - _t)
+            node_school_demand[_ev] = node_school_demand.get(_ev, 0.0) + _enrollment * _t
         _n_school += 1
 
     # External zone nodes have no school demand (schools are internal features)
@@ -664,7 +677,8 @@ else:
 
     _tot_sch = sum(node_school_demand.values())
     print(f"  {_n_school} school POIs → {len(node_school_demand)} nodes"
-          f"  total weight={_tot_sch:.1f}")
+          f"  total enrollment={_tot_sch:.0f} pupils"
+          f"  ({_n_capacity_used} from OSM capacity, {_n_school - _n_capacity_used} from fallback)")
 
     # node_id → effective UTM centroid used for gravity-model distances:
     #   internal nodes  → their own network coordinates
