@@ -55,20 +55,24 @@ def main():
     with_edge_ok    = G.has_edge(from_node, to_node)
     against_edge_ok = G.has_edge(to_node, from_node)
 
-    if not with_edge_ok:
-        print(f"Error: directed edge {from_node}→{to_node} does not exist in the network")
+    if not with_edge_ok and not against_edge_ok:
+        print(f"Error: neither {from_node}→{to_node} nor {to_node}→{from_node} "
+              f"exists in the network — check node IDs")
         sys.exit(1)
 
     link_with    = [from_node, to_node]
     link_against = [to_node, from_node]
 
-    print(f"  With direction    {from_node}→{to_node}: edge exists ✓")
+    if with_edge_ok:
+        print(f"  With direction    {from_node}→{to_node}: edge exists ✓")
+    else:
+        print(f"  With direction    {from_node}→{to_node}: no edge (walking against one-way traffic)")
     if against_edge_ok:
         print(f"  Against direction {to_node}→{from_node}: edge exists ✓")
     else:
-        print(f"  Against direction {to_node}→{from_node}: no directed edge (one-way road)")
+        print(f"  Against direction {to_node}→{from_node}: no edge (one-way road)")
 
-    # Check consistency with any recorded counts
+    # Load processed sessions
     if os.path.exists(PROCESSED_FILE):
         with open(PROCESSED_FILE) as f:
             processed = json.load(f)
@@ -85,13 +89,18 @@ def main():
         against_count = rec.get("against_count")
         print(f"  Session mode: {mode}, with_count={with_count}, against_count={against_count}")
 
+        # Non-null count must map to a real directed edge (mirrors ingest_counts.py rule)
+        if not with_edge_ok and with_count is not None:
+            print(
+                f"\nError: with_count={with_count} on non-existent edge {from_node}→{to_node}.\n"
+                f"If the observer walked against one-way traffic, with_count should be null. "
+                f"Swap from/to if the observer was counting the direction cars actually travel."
+            )
+            sys.exit(1)
         if not against_edge_ok and against_count is not None:
             print(
-                f"\nError: session {session_id} has against_count={against_count} "
-                f"but the against edge {to_node}→{from_node} does not exist.\n"
-                f"For a one-way road only the 'with' direction can carry counts.\n"
-                f"Check that from_node/to_node match the actual direction of travel "
-                f"(swap them if the observer was counting the other direction)."
+                f"\nError: against_count={against_count} on non-existent edge {to_node}→{from_node}.\n"
+                f"Swap from/to if the observer was counting the direction cars actually travel."
             )
             sys.exit(1)
 
