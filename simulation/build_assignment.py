@@ -144,6 +144,14 @@ else:
 w_pop    = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
 w_biz    = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
 w_school = np.array([node_school_demand.get(int(nid), 0)   for nid in node_ids_arr], dtype=np.float64)
+
+# School production restricted to internal nodes (see tune_assignment.py)
+_boundary_ids = set(weights.get("boundary_node_ids", []))
+w_pop_school  = w_pop.copy()
+for _k, _nid in enumerate(node_ids_arr):
+    if int(_nid) in _boundary_ids:
+        w_pop_school[_k] = 0.0
+
 print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
 N_links  = len(link_u)
@@ -159,7 +167,8 @@ _kw = dict(BETA=BETA, THETA=THETA,
 
 if _use_3c:
     _kw_3c = dict(**_kw, W_SCHOOL=W_SCHOOL, P_school=P_school,
-                  ALPHA_school=ALPHA_school, w_school=w_school)
+                  ALPHA_school=ALPHA_school, w_school=w_school,
+                  w_pop_school=w_pop_school)
     raw_res, raw_biz, raw_sch = gravity_assign(
         od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         W_BIZ, P, ALPHA, w_pop, w_biz, return_components=True, **_kw_3c)

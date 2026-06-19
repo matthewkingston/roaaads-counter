@@ -136,7 +136,7 @@ The gravity OD flows are split into three spatial components at each tuner evalu
 
 - **Residential** (`flow_res`): `all_bin_pp @ f_b` — purely pop×pop trips
 - **Business-adjacent** (`flow_biz`): `W_BIZ·(all_bin_pb @ f_b) + W_BIZ²·(all_bin_bb @ f_b)` — home↔work/retail trips
-- **School** (`flow_school`): `W_SCHOOL·(all_bin_ps @ f_b)` — pop→school cross-term, using (P_school, ALPHA_school, BETA) kernel
+- **School** (`flow_school`): `W_SCHOOL·(all_bin_ps @ f_b)` — pop→school cross-term, using (P_school, ALPHA_school, BETA) kernel. School production is **internal nodes only**: `w_pop_school[external]=0` prevents large external-zone boundary populations from dominating the cross-term.
 
 Each component has its own temporal profile and scale (K_res, K_biz, K_sch).
 Predicted count for observation i in slot s:

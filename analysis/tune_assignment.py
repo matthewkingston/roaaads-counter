@@ -184,6 +184,12 @@ base_w_pop    = np.array([node_pop_full.get(nid, 0.0)    for nid in node_ids], d
 base_w_biz    = np.array([node_biz_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_school = np.array([node_school_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 
+# School production is internal-only: external zones must not dominate the
+# pop×school cross-term via their large boundary-population weights.
+# base_w_pop_school = base_w_pop with external node entries zeroed.
+# (base_w_school[ext] is already 0; this zeroes base_w_pop[ext] for school only.)
+base_w_pop_school = base_w_pop.copy()
+
 _has_school = base_w_school.sum() > 0
 if not _has_school:
     print("  Warning: no node_school_demand in weights — school component disabled")
@@ -289,8 +295,9 @@ for _city_name, _city_cfg in city_list:
         _ext_pop_cfg[_nid] = _city_cfg["ref_pop"] * _damp
         _ext_biz_cfg[_nid] = _city_cfg["ref_wp"]  * _damp
 for _arr_i, _nid in ext_indices:
-    base_w_pop[_arr_i] = _ext_pop_cfg[_nid]
-    base_w_biz[_arr_i] = _ext_biz_cfg[_nid]
+    base_w_pop[_arr_i]        = _ext_pop_cfg[_nid]
+    base_w_biz[_arr_i]        = _ext_biz_cfg[_nid]
+    base_w_pop_school[_arr_i] = 0.0   # external nodes produce no local school trips
 
 # Precompute stochastic-path OD weight products (constant in gravity stage;
 # base weights are at ref values for external nodes after the override above).
@@ -336,9 +343,11 @@ if not _has_stoch:
     _pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
               + base_w_biz[od_src] * base_w_pop[od_dst])
     _bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
-    # School: pop×school cross-term only (external school demand is 0)
-    _ps_od = (base_w_pop[od_src] * base_w_school[od_dst]
-              + base_w_school[od_src] * base_w_pop[od_dst])
+    # School: internal-only pop×school cross-term.
+    # base_w_pop_school has external nodes zeroed so large boundary populations
+    # cannot dominate school trip generation.
+    _ps_od = (base_w_pop_school[od_src] * base_w_school[od_dst]
+              + base_w_school[od_src] * base_w_pop_school[od_dst])
 
     # Mask: True for OD pairs that involve at least one external node
     _is_ext_node = np.zeros(N_nodes, dtype=bool)
