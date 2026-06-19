@@ -2,13 +2,15 @@
 Powell's-method tuning of gravity model parameters against combined chi-squared
 objective across all traffic count observations.
 
-Two-component model: residential (pop→pop) and business-adjacent (pb+bb) flows each
-carry their own temporal profile (f_s_res, f_s_biz) and global scale (K_res, K_biz).
-All four are jointly calibrated at each evaluation via 4-block alternating minimisation:
-  K-step   (1D solve for total K; phi-step splits into K_res, K_biz)
-  f_res-step  (per-slot analytical update, anchored by NTS residential prior)
-  f_biz-step  (per-slot analytical update, anchored by NTS business prior)
-  + aggregate coupling γ·(f_res + f_biz − f_agg)² per slot to prevent collective drift.
+Three-component model: residential (pop→pop), business-adjacent (pb+bb), and school
+(pop→school) flows each carry their own temporal profile and global scale.
+Jointly calibrated at each evaluation via 5-block alternating minimisation:
+  K-step     (1D solve for total K)
+  phi_biz-step  (1D solve for business fraction, with Gaussian prior)
+  phi_sch-step  (1D solve for school fraction, with Gaussian prior)
+  f_res-step    (per-slot analytical, anchored by NTS residential prior)
+  f_biz-step / f_school-step  (symmetric)
+  + aggregate coupling γ·(f_res + f_biz + f_school − f_agg)² per slot.
 
 Observations:
   Official sites: hourly count obs from data/official_hourly.json (24 h × 3 day-types
@@ -18,8 +20,8 @@ Both types are in count space, unified in _slot_data with per-obs weights and rh
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
-Stage 1 (--gravity, default): tune W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz (6 params; 7 with THETA if k=3 cache).
-Stage 2 (--full): also tune city-level pop/wp and sub-1 dampings (28 params)
+Stage 1 (--gravity, default): tune W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school (9 params).
+Stage 2 (--full): also tune city-level pop/wp and sub-1 dampings (31 params)
   with L2 regularisation relative to simulation/tuner_config.json references.
 
 Node 180 (pop=50, wp=0) is excluded from stage 2 — too small to tune.
@@ -173,12 +175,18 @@ print("Loading node weights …")
 with open(WEIGHTS_FILE) as f:
     wdata = json.load(f)
 
-node_pop_full = {int(k): v for k, v in wdata["node_population"].items()}
-node_biz_full = {int(k): v for k, v in wdata["node_business_demand"].items()}
+node_pop_full    = {int(k): v for k, v in wdata["node_population"].items()}
+node_biz_full    = {int(k): v for k, v in wdata["node_business_demand"].items()}
+node_school_full = {int(k): v for k, v in wdata.get("node_school_demand", {}).items()}
 
 # Precomputed base weight arrays (used in stage 1 and as fallback in stage 2)
-base_w_pop = np.array([node_pop_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
-base_w_biz = np.array([node_biz_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+base_w_pop    = np.array([node_pop_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
+base_w_biz    = np.array([node_biz_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
+base_w_school = np.array([node_school_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+
+_has_school = base_w_school.sum() > 0
+if not _has_school:
+    print("  Warning: no node_school_demand in weights — school component disabled")
 
 # ── Load street names from consolidated GraphML (sequential node IDs) ─────────
 
@@ -212,8 +220,10 @@ with open(TUNER_CONFIG) as f:
 lam                  = config["lambda"]
 gamma_coupling_scale = config.get("gamma_coupling_scale",
                                    config.get("gamma_coupling", 1.0))
-phi_prior            = config.get("phi_prior", 0.35)
-phi_std              = config.get("phi_std",   0.15)
+phi_prior            = config.get("phi_prior",        0.35)
+phi_std              = config.get("phi_std",           0.15)
+phi_school_prior     = config.get("phi_school_prior",  0.10)
+phi_school_std       = config.get("phi_school_std",    0.08)
 city_list    = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
@@ -221,6 +231,8 @@ grav_lam_raw = config.get("gravity_lambda", 0.0)
 _grav_param_names = ["W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz"]
 if _has_stoch:
     _grav_param_names.append("THETA")
+if _has_school:
+    _grav_param_names += ["W_SCHOOL", "P_school", "ALPHA_school"]
 _grav_ref_vals = [
     math.log(max(grav_ref.get("W_BIZ",     1.0),  1e-4)),
     math.log(max(grav_ref.get("P",         600.0), 1e-4)),
@@ -231,6 +243,12 @@ _grav_ref_vals = [
 ]
 if _has_stoch:
     _grav_ref_vals.append(math.log(max(grav_ref.get("THETA", 1.0), 1e-4)))
+if _has_school:
+    _grav_ref_vals += [
+        math.log(max(grav_ref.get("W_SCHOOL",     1.0),  1e-4)),
+        math.log(max(grav_ref.get("P_school",     600.0), 1e-4)),
+        math.log(max(grav_ref.get("ALPHA_school", 2.0),   1e-4)),
+    ]
 log_grav_ref = np.array(_grav_ref_vals)
 if isinstance(grav_lam_raw, dict):
     log_grav_lam = np.array([grav_lam_raw.get(k, 0.0) for k in _grav_param_names])
@@ -253,7 +271,7 @@ for city_name, city_cfg in city_list:
         if damp < 1.0:
             tunable_dampings.append((city_name, int(node_str), damp))
 
-n_gravity = 7 if _has_stoch else 6
+n_gravity = (7 if _has_stoch else 6) + (3 if _has_school else 0)
 n_city    = len(city_list) * 2
 n_damp    = len(tunable_dampings)
 n_ext     = n_city + n_damp  # external params in stage 2
@@ -318,6 +336,9 @@ if not _has_stoch:
     _pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
               + base_w_biz[od_src] * base_w_pop[od_dst])
     _bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
+    # School: pop×school cross-term only (external school demand is 0)
+    _ps_od = (base_w_pop[od_src] * base_w_school[od_dst]
+              + base_w_school[od_src] * base_w_pop[od_dst])
 
     # Mask: True for OD pairs that involve at least one external node
     _is_ext_node = np.zeros(N_nodes, dtype=bool)
@@ -349,11 +370,13 @@ if not _has_stoch:
     all_bin_pp = _link_bin(_pp_od).astype(np.float32)
     all_bin_pb = _link_bin(_pb_od).astype(np.float32)
     all_bin_bb = _link_bin(_bb_od).astype(np.float32)
+    all_bin_ps = _link_bin(_ps_od).astype(np.float32)   # school
 
     # Stage-2 matrices: internal-internal pairs only
     int_bin_pp = _link_bin(_pp_od, _int_sel).astype(np.float32)
     int_bin_pb = _link_bin(_pb_od, _int_sel).astype(np.float32)
     int_bin_bb = _link_bin(_bb_od, _int_sel).astype(np.float32)
+    int_bin_ps = _link_bin(_ps_od, _int_sel).astype(np.float32)   # school
 
     # External pair arrays for exact per-eval scatter in stage 2
     _ext_p     = np.unique(pair_idx[_ext_sel])                # unique global pair indices
@@ -368,7 +391,7 @@ if not _has_stoch:
                         if _link_weight is not None else None)  # probit weight per ext entry
 
     del _is_ext_node, _ext_pair_mask, _entry_is_ext, _int_sel, _ext_sel, _ext_local
-    del _pp_od, _pb_od, _bb_od, _col_all
+    del _pp_od, _pb_od, _bb_od, _ps_od, _col_all
 
     print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
           f"  ({time.time()-_t_pc:.1f}s)")
@@ -387,18 +410,18 @@ if not _has_stoch:
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 _DT_DOWS     = {0: list(range(5)), 1: [5], 2: [6]}
 
-_raw_fracs = {}  # {(dow, hour): (mean_f, std_f, mean_f_res, mean_f_biz)}
+_raw_fracs = {}  # {(dow, hour): (mean_f, std_f, mean_f_res, mean_f_biz, mean_f_school)}
 with open(HOURLY_FRACS_FILE, newline="") as _fh:
     for _row in csv.DictReader(_fh):
         _dow  = int(_row["day_of_week"])
         _hour = int(_row["hour"].split(":")[0])
-        _mfr  = float(_row["mean_fraction_res"]) if "mean_fraction_res" in _row else None
-        _mfb  = float(_row["mean_fraction_biz"]) if "mean_fraction_biz" in _row else None
+        _mfr  = float(_row["mean_fraction_res"])    if "mean_fraction_res"    in _row else None
+        _mfb  = float(_row["mean_fraction_biz"])    if "mean_fraction_biz"    in _row else None
+        _mfs  = float(_row["mean_fraction_school"]) if "mean_fraction_school" in _row else None
         _raw_fracs[(_dow, _hour)] = (float(_row["mean_fraction"]), float(_row["std_fraction"]),
-                                     _mfr, _mfb)
+                                     _mfr, _mfb, _mfs)
 
-# slot_prior[key] = (mean_f_agg, std_f_agg, mean_f_res, mean_f_biz)
-# std_f is the same for both components (aggregate day-to-day variability as proxy)
+# slot_prior[key] = (mean_f_agg, std_f_agg, mean_f_res, mean_f_biz, mean_f_school)
 slot_prior = {}
 for _dt, _dows in _DT_DOWS.items():
     for _h in range(24):
@@ -411,12 +434,13 @@ for _dt, _dows in _DT_DOWS.items():
         _between = sum((_m - _mf) ** 2 for _m in _means) / len(_means)
         _within  = sum(_s ** 2 for _s in _stds) / len(_stds)
         _std     = math.sqrt(_between + _within)
-        # component means: average over day-type's days
         _mfr = (sum(e[2] for e in _entries) / len(_entries)
-                if _entries[0][2] is not None else _mf)
+                if _entries[0][2] is not None else _mf * 0.5)
         _mfb = (sum(e[3] for e in _entries) / len(_entries)
-                if _entries[0][3] is not None else _mf)
-        slot_prior[(_dt, _h)] = (_mf, _std, _mfr, _mfb)
+                if _entries[0][3] is not None else _mf * 0.35)
+        _mfs = (sum(e[4] for e in _entries) / len(_entries)
+                if _entries[0][4] is not None else 0.0)
+        slot_prior[(_dt, _h)] = (_mf, _std, _mfr, _mfb, _mfs)
 
 # ── Build observation list ────────────────────────────────────────────────────
 # All observations are slotted (day_type, hour) in count space:
@@ -512,8 +536,9 @@ slot_list = list(slot_groups.items())
 n_slots   = len(slot_list)
 n_walking = n_obs - n_official_hourly
 n_slotted = sum(len(idxs) for _, idxs in slot_list)
-# Two df per slot (f_s_res and f_s_biz each consume one df)
-n_eff = n_obs - 2 * n_slots
+# df per slot: 2 (two-component) or 3 (three-component with school)
+_n_df_per_slot = 3 if _has_school else 2
+n_eff = n_obs - _n_df_per_slot * n_slots
 print(f"  {n_obs} observations ({n_official_hourly} official hourly, {n_walking} walking"
       f" in {n_slots} time slot(s))  N_eff={n_eff}")
 for sk, idxs in sorted(slot_list):
@@ -523,11 +548,11 @@ for sk, idxs in sorted(slot_list):
 # Per-slot data for calibrate_Ks_and_fracs and chi²
 # Each entry: (slot_key, ia, weights, rhs, Ths,
 #              mean_f_res, inv_var_res, mean_f_biz, inv_var_biz,
-#              mean_f_agg, gamma)
+#              mean_f_school, inv_var_school, mean_f_agg, gamma)
 _slot_data = []
 for sk, idxs in slot_list:
     ia       = np.array(idxs, dtype=np.int64)
-    mfa, std_f, mfr, mfb = slot_prior[sk]
+    mfa, std_f, mfr, mfb, mfs = slot_prior[sk]
     inv_var  = 1.0 / (std_f ** 2)
     _slot_data.append((
         sk, ia,
@@ -536,6 +561,7 @@ for sk, idxs in slot_list:
         obs_Th[ia],        # T/3600 per obs
         mfr, inv_var,      # residential prior
         mfb, inv_var,      # business prior (same std as aggregate)
+        mfs, inv_var,      # school prior (same std as aggregate)
         mfa, gamma_coupling_scale * inv_var,  # aggregate coupling: scale/std_f² per slot
     ))
 
@@ -554,29 +580,36 @@ _slot_mfr = np.array([e[5]  for e in _slot_data], dtype=np.float64)
 _slot_ivr = np.array([e[6]  for e in _slot_data], dtype=np.float64)
 _slot_mfb = np.array([e[7]  for e in _slot_data], dtype=np.float64)
 _slot_ivb = np.array([e[8]  for e in _slot_data], dtype=np.float64)
-_slot_mfa = np.array([e[9]  for e in _slot_data], dtype=np.float64)
-_slot_gam = np.array([e[10] for e in _slot_data], dtype=np.float64)
+_slot_mfs = np.array([e[9]  for e in _slot_data], dtype=np.float64)
+_slot_ivs = np.array([e[10] for e in _slot_data], dtype=np.float64)
+_slot_mfa = np.array([e[11] for e in _slot_data], dtype=np.float64)
+_slot_gam = np.array([e[12] for e in _slot_data], dtype=np.float64)
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop, w_biz, THETA=None):
-    """Gravity assignment → (flow_res, flow_biz).
+def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+                   W_SCHOOL, P_school, ALPHA_school,
+                   w_pop, w_biz, THETA=None):
+    """Gravity assignment → (flow_res, flow_biz, flow_school).
 
-    flow_res = pop→pop component (purely residential), uses P/ALPHA/BETA kernel.
-    flow_biz = W_BIZ·pb + W_BIZ²·bb component (home↔work/retail), uses P_biz/ALPHA_biz/BETA kernel.
+    flow_res    = pop→pop component, uses P/ALPHA/BETA kernel.
+    flow_biz    = W_BIZ·pb + W_BIZ²·bb, uses P_biz/ALPHA_biz/BETA kernel.
+    flow_school = W_SCHOOL·ps (pop→school cross-term), uses P_school/ALPHA_school/BETA.
 
     THETA=None  → fast binned all-or-nothing (bin-matrix matmul path).
-    THETA given → CSR SpMV scatter over k=3 paths with logit weights.
-    Logit shares always use P (the residential reference distance).
+    THETA given → CSR SpMV scatter over k=3 paths (legacy; no school support).
     """
     if THETA is None or not _has_stoch:
-        f_b_res = _kern_b(P,     ALPHA,     BETA)
-        f_b_biz = _kern_b(P_biz, ALPHA_biz, BETA)
+        f_b_res = _kern_b(P,       ALPHA,       BETA)
+        f_b_biz = _kern_b(P_biz,   ALPHA_biz,   BETA)
+        f_b_sch = _kern_b(P_school, ALPHA_school, BETA) if _has_school else None
         W   = W_BIZ
         W2  = W_BIZ ** 2
         if stage == "full":
             flow_res = (int_bin_pp @ f_b_res).astype(np.float64)
             flow_biz = (W * (int_bin_pb @ f_b_biz) + W2 * (int_bin_bb @ f_b_biz)).astype(np.float64)
+            if _has_school:
+                flow_school = (W_SCHOOL * (int_bin_ps @ f_b_sch)).astype(np.float64)
             # Exact scatter for external-involved OD pairs (separate kernels for res/biz)
             w_src = w_pop[_ext_src]
             w_dst = w_pop[_ext_dst]
@@ -594,10 +627,15 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop, w_biz, THETA=
             flow_biz += np.bincount(_ext_link,
                                     weights=(W_BIZ * t_pb + W_BIZ**2 * t_bb)[_ext_lp] * _ew,
                                     minlength=N_links)
+            # External school demand = 0 → no ext scatter needed for flow_school
         else:
             flow_res = (all_bin_pp @ f_b_res).astype(np.float64)
             flow_biz = (W * (all_bin_pb @ f_b_biz) + W2 * (all_bin_bb @ f_b_biz)).astype(np.float64)
-        return flow_res, flow_biz
+            if _has_school:
+                flow_school = (W_SCHOOL * (all_bin_ps @ f_b_sch)).astype(np.float64)
+        if not _has_school:
+            flow_school = np.zeros(N_links, dtype=np.float64)
+        return flow_res, flow_biz, flow_school
 
     # Stochastic logit: exact scatter over 3 paths, split by component.
     # Weight products in float64 to prevent overflow at extreme optimizer steps.
@@ -647,132 +685,158 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop, w_biz, THETA=
     sf_res = shares * f_all_res
     sf_biz = shares * f_all_biz
 
-    flow_res = np.zeros(N_links, dtype=np.float64)
-    flow_biz = np.zeros(N_links, dtype=np.float64)
+    flow_res    = np.zeros(N_links, dtype=np.float64)
+    flow_biz    = np.zeros(N_links, dtype=np.float64)
+    flow_school = np.zeros(N_links, dtype=np.float64)
     for r, A_r in enumerate([_A1, _A2, _A3]):
         # Weight products (float64) × sf (float32) → float64 by numpy promotion;
         # cast to float32 for fast SGEMV. Saturates to ±inf on extreme steps
         # (large finite chi²) rather than NaN.
         flow_res += A_r @ (pp_od    * sf_res[:, r]).astype(np.float32)
         flow_biz += A_r @ (biz_base * sf_biz[:, r]).astype(np.float32)
-    return flow_res, flow_biz
+    # Legacy stochastic path: school component not supported (returns zeros)
+    return flow_res, flow_biz, flow_school
 
 
-def model_obs_2c(flow_res, flow_biz):
-    """Extract per-observation modelled flows for both components."""
+def model_obs_3c(flow_res, flow_biz, flow_school):
+    """Extract per-observation modelled flows for all three components."""
     m_r = np.empty(n_obs)
     m_b = np.empty(n_obs)
+    m_s = np.empty(n_obs)
     for i, idxs in enumerate(obs_link_idxs[:n_official_hourly]):
-        m_r[i] = flow_res[idxs].sum() if idxs else 0.0
-        m_b[i] = flow_biz[idxs].sum() if idxs else 0.0
-    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe], 0.0)
-    m_b[n_official_hourly:] = np.where(_walk_valid, flow_biz[_walk_link_safe], 0.0)
-    return m_r, m_b
+        m_r[i] = flow_res[idxs].sum()    if idxs else 0.0
+        m_b[i] = flow_biz[idxs].sum()    if idxs else 0.0
+        m_s[i] = flow_school[idxs].sum() if idxs else 0.0
+    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe],    0.0)
+    m_b[n_official_hourly:] = np.where(_walk_valid, flow_biz[_walk_link_safe],    0.0)
+    m_s[n_official_hourly:] = np.where(_walk_valid, flow_school[_walk_link_safe], 0.0)
+    return m_r, m_b, m_s
 
 
-def calibrate_Ks_and_fracs(m_res, m_biz, max_iter=10):
-    """4-block alternating minimisation: (K, phi, f_s_res, f_s_biz) — vectorised.
+def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
+    """5-block alternating minimisation: (K, phi_biz, phi_sch, f_res, f_biz, f_school).
 
-    Mathematically identical to a 72-slot loop version; replaces those Python loops
-    with array operations over all 559 observations + per-slot np.bincount.
-    Reparameterised as K_total = K_res + K_biz and phi = K_biz / K_total.
+    Reparameterised as K_total, phi_biz = K_biz/K, phi_sch = K_school/K.
+    Sequential 1D phi-steps (fix the other, solve for each in turn).
+    Per-slot f-steps are per-slot analytical via bincount.
+    Coupling: γ·(f_res + f_biz + f_school − f_agg)² per slot.
 
-    K-step:   1D solve (linear in K).
-    phi-step: 1D solve with Gaussian prior phi ~ N(PHI_PRIOR, PHI_STD²).
-    f_res-step: per-slot analytical via bincount, anchored by NTS residential prior.
-    f_biz-step: symmetric.
-    Coupling: γ·(f_res + f_biz − f_agg)² per slot (folded into num/den in f-steps).
-    Converges in 3–5 iterations; 10 iterations is ample.
-    max_iter=5 is safe for intermediate optimizer evals (--fast mode).
-    Returns (K_res, K_biz, slot_fracs_res, slot_fracs_biz).
+    Returns (K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school).
     """
-    PHI_PRIOR = phi_prior
-    PHI_STD   = phi_std
-    INV_PHI_V = 1.0 / (PHI_STD ** 2)
+    PHI_BIZ_PRIOR = phi_prior
+    PHI_BIZ_STD   = phi_std
+    PHI_SCH_PRIOR = phi_school_prior
+    PHI_SCH_STD   = phi_school_std
+    INV_PHI_BIZ_V = 1.0 / (PHI_BIZ_STD ** 2)
+    INV_PHI_SCH_V = 1.0 / (PHI_SCH_STD ** 2)
 
-    # Per-slot working arrays; index n_slots is a sentinel for unslotted obs (weight=0).
+    # Per-slot working arrays; index n_slots = sentinel for unslotted obs (weight=0).
     f_r_s = np.empty(n_slots + 1)
     f_b_s = np.empty(n_slots + 1)
+    f_s_s = np.empty(n_slots + 1)
     f_r_s[:n_slots] = _slot_mfr
     f_b_s[:n_slots] = _slot_mfb
-    f_r_s[n_slots]  = 0.0
-    f_b_s[n_slots]  = 0.0
+    f_s_s[:n_slots] = _slot_mfs
+    f_r_s[n_slots] = f_b_s[n_slots] = f_s_s[n_slots] = 0.0
 
-    K   = 1.0
-    phi = PHI_PRIOR
-    K_res = K * (1 - phi)
-    K_biz = K * phi
+    K       = 1.0
+    phi_biz = PHI_BIZ_PRIOR
+    phi_sch = PHI_SCH_PRIOR if _has_school else 0.0
 
-    # Per-eval component coefficients (constant within this call).
-    cr = m_res * obs_Th   # (n_obs,)
-    cb = m_biz * obs_Th   # (n_obs,)
+    cr = m_res    * obs_Th
+    cb = m_biz    * obs_Th
+    cs = m_school * obs_Th
 
-    _sid = _obs_slot_id   # (n_obs,) int32; sentinel n_slots for unslotted obs
-    _sw  = _slot_w_arr    # (n_obs,) float64; 0 for unslotted obs
+    _sid = _obs_slot_id
+    _sw  = _slot_w_arr
 
-    # Working per-obs slot-fraction arrays (scattered from slot arrays each step).
     _fr = np.empty(n_obs)
     _fb = np.empty(n_obs)
-    _NB = n_slots + 1     # bincount minlength; discard sentinel bucket with [:n_slots]
+    _fs = np.empty(n_obs)
+    _NB = n_slots + 1
 
     for _ in range(max_iter):
         K_old = K
 
-        # Scatter current slot fracs to per-obs arrays.
         _fr[:] = f_r_s[_sid]
         _fb[:] = f_b_s[_sid]
+        _fs[:] = f_s_s[_sid]
 
-        # ── K-step: 1D solve ─────────────────────────────────────────────────
-        coeff = (1 - phi) * cr * _fr + phi * cb * _fb
+        # ── K-step ───────────────────────────────────────────────────────────
+        coeff = (1 - phi_biz - phi_sch) * cr * _fr + phi_biz * cb * _fb + phi_sch * cs * _fs
         wc    = _sw * coeff
         A     = float(wc @ coeff)
         B     = float(wc @ obs_rhs_arr)
         K     = max(B / A, 1e-30) if A > 0 else K
 
-        # ── phi-step: 1D solve ───────────────────────────────────────────────
-        base = cr * _fr
-        delt = cb * _fb - base
-        wd   = _sw * delt
-        A_p  = float(wd @ delt) * K ** 2 + INV_PHI_V
-        B_p  = float(wd @ (obs_rhs_arr - K * base)) * K + PHI_PRIOR * INV_PHI_V
-        phi   = max(0.01, min(0.99, B_p / A_p)) if A_p > 0 else phi
-        K_res = K * (1 - phi)
-        K_biz = K * phi
+        # ── phi_biz-step: fix phi_sch ────────────────────────────────────────
+        _base_b = (1 - phi_sch) * cr * _fr + phi_sch * cs * _fs
+        _delt_b = cb * _fb - cr * _fr
+        wd_b    = _sw * _delt_b
+        A_b     = float(wd_b @ _delt_b) * K ** 2 + INV_PHI_BIZ_V
+        B_b     = float(wd_b @ (obs_rhs_arr - K * _base_b)) * K + PHI_BIZ_PRIOR * INV_PHI_BIZ_V
+        phi_biz = max(0.01, min(0.98 - phi_sch, B_b / A_b)) if A_b > 0 else phi_biz
 
-        # ── f_res-step: per-slot analytical via bincount ─────────────────────
-        h      = obs_rhs_arr - K_biz * cb * _fb
-        wcr    = _sw * cr
-        s_num  = np.bincount(_sid, weights=wcr * h,  minlength=_NB)[:n_slots]
-        s_den  = np.bincount(_sid, weights=wcr * cr, minlength=_NB)[:n_slots]
-        num    = K_res * s_num + _slot_mfr * _slot_ivr + _slot_gam * (_slot_mfa - f_b_s[:n_slots])
-        den    = K_res ** 2 * s_den + _slot_ivr + _slot_gam
+        # ── phi_sch-step: fix phi_biz ────────────────────────────────────────
+        if _has_school:
+            _base_s = (1 - phi_biz) * cr * _fr + phi_biz * cb * _fb
+            _delt_s = cs * _fs - cr * _fr
+            wd_s    = _sw * _delt_s
+            A_s     = float(wd_s @ _delt_s) * K ** 2 + INV_PHI_SCH_V
+            B_s     = float(wd_s @ (obs_rhs_arr - K * _base_s)) * K + PHI_SCH_PRIOR * INV_PHI_SCH_V
+            phi_sch = max(0.01, min(0.98 - phi_biz, B_s / A_s)) if A_s > 0 else phi_sch
+
+        K_res = K * (1 - phi_biz - phi_sch)
+        K_biz = K * phi_biz
+        K_sch = K * phi_sch
+
+        # ── f_res-step ───────────────────────────────────────────────────────
+        h_r   = obs_rhs_arr - K_biz * cb * _fb - K_sch * cs * _fs
+        wcr   = _sw * cr
+        s_num = np.bincount(_sid, weights=wcr * h_r, minlength=_NB)[:n_slots]
+        s_den = np.bincount(_sid, weights=wcr * cr,  minlength=_NB)[:n_slots]
+        num   = (K_res * s_num + _slot_mfr * _slot_ivr
+                 + _slot_gam * (_slot_mfa - f_b_s[:n_slots] - f_s_s[:n_slots]))
+        den   = K_res ** 2 * s_den + _slot_ivr + _slot_gam
         f_r_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfr)
-
-        # Re-scatter updated f_r for f_biz step.
         _fr[:] = f_r_s[_sid]
 
-        # ── f_biz-step: symmetric ─────────────────────────────────────────────
-        h      = obs_rhs_arr - K_res * cr * _fr
-        wcb    = _sw * cb
-        s_num  = np.bincount(_sid, weights=wcb * h,  minlength=_NB)[:n_slots]
-        s_den  = np.bincount(_sid, weights=wcb * cb, minlength=_NB)[:n_slots]
-        num    = K_biz * s_num + _slot_mfb * _slot_ivb + _slot_gam * (_slot_mfa - f_r_s[:n_slots])
-        den    = K_biz ** 2 * s_den + _slot_ivb + _slot_gam
+        # ── f_biz-step ───────────────────────────────────────────────────────
+        h_b   = obs_rhs_arr - K_res * cr * _fr - K_sch * cs * _fs
+        wcb   = _sw * cb
+        s_num = np.bincount(_sid, weights=wcb * h_b, minlength=_NB)[:n_slots]
+        s_den = np.bincount(_sid, weights=wcb * cb,  minlength=_NB)[:n_slots]
+        num   = (K_biz * s_num + _slot_mfb * _slot_ivb
+                 + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_s_s[:n_slots]))
+        den   = K_biz ** 2 * s_den + _slot_ivb + _slot_gam
         f_b_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfb)
+        _fb[:] = f_b_s[_sid]
 
-        # Stop early once K has converged (typically 3–5 iters suffice).
+        # ── f_school-step ────────────────────────────────────────────────────
+        if _has_school:
+            h_s   = obs_rhs_arr - K_res * cr * _fr - K_biz * cb * _fb
+            wcs   = _sw * cs
+            s_num = np.bincount(_sid, weights=wcs * h_s, minlength=_NB)[:n_slots]
+            s_den = np.bincount(_sid, weights=wcs * cs,  minlength=_NB)[:n_slots]
+            num   = (K_sch * s_num + _slot_mfs * _slot_ivs
+                     + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_b_s[:n_slots]))
+            den   = K_sch ** 2 * s_den + _slot_ivs + _slot_gam
+            f_s_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfs)
+
         if abs(K - K_old) / max(abs(K_old), 1e-30) < 1e-8:
             break
 
-    slot_fracs_res = {sk: float(f_r_s[si]) for si, (sk, _) in enumerate(slot_list)}
-    slot_fracs_biz = {sk: float(f_b_s[si]) for si, (sk, _) in enumerate(slot_list)}
-    return K_res, K_biz, slot_fracs_res, slot_fracs_biz
+    slot_fracs_res    = {sk: float(f_r_s[si]) for si, (sk, _) in enumerate(slot_list)}
+    slot_fracs_biz    = {sk: float(f_b_s[si]) for si, (sk, _) in enumerate(slot_list)}
+    slot_fracs_school = {sk: float(f_s_s[si]) for si, (sk, _) in enumerate(slot_list)}
+    return K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school
 
 
 # ── Objective function ────────────────────────────────────────────────────────
 
 eval_count = [0]
-best       = {"chi2": float("inf"), "log_params": None, "K_res": 1.0, "K_biz": 1.0}
+best       = {"chi2": float("inf"), "log_params": None,
+              "K_res": 1.0, "K_biz": 1.0, "K_sch": 0.0}
 t0         = time.time()
 
 
@@ -785,6 +849,13 @@ def objective(log_params, log_ref=None):
     P_biz     = math.exp(log_params[4])
     ALPHA_biz = math.exp(log_params[5])
     THETA     = math.exp(log_params[6]) if _has_stoch else None
+    _sch_off  = 7 if _has_stoch else 6
+    if _has_school:
+        W_SCHOOL     = math.exp(log_params[_sch_off])
+        P_school     = math.exp(log_params[_sch_off + 1])
+        ALPHA_school = math.exp(log_params[_sch_off + 2])
+    else:
+        W_SCHOOL = P_school = ALPHA_school = 1.0
 
     if stage == "full":
         # Build per-node weight arrays from city-level params and dampings
@@ -822,21 +893,25 @@ def objective(log_params, log_ref=None):
         w_pop = base_w_pop
         w_biz = base_w_biz
 
-    flow_res, flow_biz                          = run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop, w_biz, THETA)
-    m_res, m_biz                               = model_obs_2c(flow_res, flow_biz)
-    K_res, K_biz, slot_fracs_res, slot_fracs_biz = calibrate_Ks_and_fracs(
-        m_res, m_biz, max_iter=5 if fast else 10)
-    # A7: scatter per-slot fractions to per-obs arrays; compute data chi² in one dot.
-    # Unslotted obs have _slot_w_arr[i]=0 so they contribute nothing regardless of pred.
+    flow_res, flow_biz, flow_school = run_assignment(
+        W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+        W_SCHOOL, P_school, ALPHA_school,
+        w_pop, w_biz, THETA)
+    m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
+    K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
+        calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=5 if fast else 10)
     _obs_f_r = np.empty(n_obs, dtype=np.float64)
     _obs_f_b = np.empty(n_obs, dtype=np.float64)
+    _obs_f_s = np.empty(n_obs, dtype=np.float64)
     chi2_pen = 0.0
-    for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
-        f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]
-        _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b
-        chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb
-                     + gam * (f_r + f_b - mfa)**2)
-    _pred = K_res * m_res * obs_Th * _obs_f_r + K_biz * m_biz * obs_Th * _obs_f_b
+    for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfs, ivs, mfa, gam in _slot_data:
+        f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]; f_s = slot_fracs_school[sk]
+        _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b; _obs_f_s[ia] = f_s
+        chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb + (f_s - mfs)**2 * ivs
+                     + gam * (f_r + f_b + f_s - mfa)**2)
+    _pred = (K_res * m_res * obs_Th * _obs_f_r
+             + K_biz * m_biz * obs_Th * _obs_f_b
+             + K_sch * m_school * obs_Th * _obs_f_s)
     _resid = _pred - obs_rhs_arr
     chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
 
@@ -851,6 +926,7 @@ def objective(log_params, log_ref=None):
         best["log_params"] = log_params.copy()
         best["K_res"]      = K_res
         best["K_biz"]      = K_biz
+        best["K_sch"]      = K_sch
 
     if eval_count[0] % 20 == 0:
         elapsed = time.time() - t0
@@ -864,11 +940,13 @@ def objective(log_params, log_ref=None):
 
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
 grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0, "BETA": 1.0,
-              "P_biz": 600.0, "ALPHA_biz": 2.0, "THETA": 1.0}
+              "P_biz": 600.0, "ALPHA_biz": 2.0, "THETA": 1.0,
+              "W_SCHOOL": 1.0, "P_school": 300.0, "ALPHA_school": 2.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
-    for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA"):
+    for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA",
+              "W_SCHOOL", "P_school", "ALPHA_school"):
         if k in tp:
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
@@ -885,6 +963,12 @@ _log_p0_vals = [
 ]
 if _has_stoch:
     _log_p0_vals.append(math.log(max(grav_start["THETA"], _LOG_MIN)))
+if _has_school:
+    _log_p0_vals += [
+        math.log(max(grav_start["W_SCHOOL"],     _LOG_MIN)),
+        math.log(max(grav_start["P_school"],     _LOG_MIN)),
+        math.log(max(grav_start["ALPHA_school"], _LOG_MIN)),
+    ]
 log_p0 = np.array(_log_p0_vals, dtype=np.float64)
 
 # Capture starting gravity params for history (before any optimization)
@@ -893,6 +977,9 @@ initial_gravity = {k: grav_start[k]
                    if k in grav_start}
 if _has_stoch and "THETA" in grav_start:
     initial_gravity["THETA"] = grav_start["THETA"]
+if _has_school:
+    for k in ("W_SCHOOL", "P_school", "ALPHA_school"):
+        initial_gravity[k] = grav_start[k]
 
 log_ref = None
 
@@ -908,12 +995,17 @@ if stage == "full":
         log_p0 = np.append(log_p0, math.log(ref_damp))
 
     log_ref = log_p0.copy()
+    _sch_note = " + 3 school" if _has_school else ""
     print(f"Full stage: {len(log_p0)} params "
-          f"({n_gravity} gravity + {n_city} city pop/wp + {n_damp} dampings)")
+          f"({n_gravity} gravity{_sch_note} + {n_city} city pop/wp + {n_damp} dampings)")
 else:
-    _theta_note = ("  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]" if _has_stoch
-                   else "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]")
-    print(f"Gravity stage: {len(log_p0)} params{_theta_note}")
+    if _has_stoch:
+        _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]"
+    elif _has_school:
+        _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school]"
+    else:
+        _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
+    print(f"Gravity stage: {len(log_p0)} params{_grav_note}")
 
 # ── Run optimization ──────────────────────────────────────────────────────────
 
@@ -945,6 +1037,13 @@ BETA      = math.exp(log_best[3])
 P_biz     = math.exp(log_best[4])
 ALPHA_biz = math.exp(log_best[5])
 THETA     = math.exp(log_best[6]) if _has_stoch else None
+_sch_off  = 7 if _has_stoch else 6
+if _has_school:
+    W_SCHOOL     = math.exp(log_best[_sch_off])
+    P_school     = math.exp(log_best[_sch_off + 1])
+    ALPHA_school = math.exp(log_best[_sch_off + 2])
+else:
+    W_SCHOOL = P_school = ALPHA_school = None
 
 ext_pop_map  = {}
 ext_biz_map  = {}
@@ -974,7 +1073,7 @@ if stage == "full":
             ext_pop_map[node_id] = city_pops_out[city_name] * damp
             ext_biz_map[node_id] = city_wps_out[city_name]  * damp
 
-# Final evaluation for clean chi2, K_res, K_biz, and slot_fracs (no L2 term)
+# Final evaluation for clean chi2, K_res, K_biz, K_sch, and slot_fracs (no L2 term)
 w_pop_f = base_w_pop.copy() if ext_pop_map else base_w_pop
 w_biz_f = base_w_biz.copy() if ext_biz_map else base_w_biz
 for arr_i, nid in ext_indices:
@@ -982,19 +1081,29 @@ for arr_i, nid in ext_indices:
         w_pop_f[arr_i] = ext_pop_map[nid]
         w_biz_f[arr_i] = ext_biz_map[nid]
 
-flow_res, flow_biz                             = run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, w_pop_f, w_biz_f, THETA)
-m_res, m_biz                                   = model_obs_2c(flow_res, flow_biz)
-K_res, K_biz, slot_fracs_res, slot_fracs_biz  = calibrate_Ks_and_fracs(m_res, m_biz)
-K = K_res + K_biz   # total scale (for display and backward compat)
+_ws_final = 1.0 if not _has_school else W_SCHOOL
+_ps_final = 1.0 if not _has_school else P_school
+_as_final = 1.0 if not _has_school else ALPHA_school
+flow_res, flow_biz, flow_school = run_assignment(
+    W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+    _ws_final, _ps_final, _as_final,
+    w_pop_f, w_biz_f, THETA)
+m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
+K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
+    calibrate_Ks_and_fracs(m_res, m_biz, m_school)
+K = K_res + K_biz + K_sch   # total scale (for display and backward compat)
 _obs_f_r = np.empty(n_obs, dtype=np.float64)
 _obs_f_b = np.empty(n_obs, dtype=np.float64)
+_obs_f_s = np.empty(n_obs, dtype=np.float64)
 chi2_pen = 0.0
-for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfa, gam in _slot_data:
-    f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]
-    _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b
-    chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb
-                 + gam * (f_r + f_b - mfa)**2)
-_pred = K_res * m_res * obs_Th * _obs_f_r + K_biz * m_biz * obs_Th * _obs_f_b
+for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfs, ivs, mfa, gam in _slot_data:
+    f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]; f_s = slot_fracs_school[sk]
+    _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b; _obs_f_s[ia] = f_s
+    chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb + (f_s - mfs)**2 * ivs
+                 + gam * (f_r + f_b + f_s - mfa)**2)
+_pred = (K_res * m_res * obs_Th * _obs_f_r
+         + K_biz * m_biz * obs_Th * _obs_f_b
+         + K_sch * m_school * obs_Th * _obs_f_s)
 _resid = _pred - obs_rhs_arr
 chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
 chi2_per_n = chi2 / n_obs
@@ -1016,33 +1125,44 @@ for i, (kind, target, links, _obs, _sig, Ts) in enumerate(observations):
         if sk is not None:
             f_r = slot_fracs_res.get(sk, slot_prior[sk][2])
             f_b = slot_fracs_biz.get(sk, slot_prior[sk][3])
-            mod_eff[i] = K_res * m_res[i] * Th * f_r + K_biz * m_biz[i] * Th * f_b
+            f_s = slot_fracs_school.get(sk, slot_prior[sk][4])
+            mod_eff[i] = (K_res * m_res[i] * Th * f_r
+                          + K_biz * m_biz[i] * Th * f_b
+                          + K_sch * m_school[i] * Th * f_s)
         else:
-            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i]) * Th
+            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i] + K_sch * m_school[i]) * Th
     else:  # walking: show as vehicles/hour using slot fraction
         n_eff_i = obs_rhs_arr[i]
         if sk is not None and Th > 0 and n_eff_i > 0:
             f_r = slot_fracs_res.get(sk, slot_prior[sk][2])
             f_b = slot_fracs_biz.get(sk, slot_prior[sk][3])
-            # Combined f_s for this obs (weighted by component flow at this link)
-            m_r_i, m_b_i = m_res[i], m_biz[i]
-            m_tot = m_r_i * f_r + m_b_i * f_b
-            f_eff = m_tot / (m_r_i + m_b_i) if (m_r_i + m_b_i) > 0 else (f_r + f_b) / 2
+            f_s = slot_fracs_school.get(sk, slot_prior[sk][4])
+            m_r_i, m_b_i, m_s_i = m_res[i], m_biz[i], m_school[i]
+            raw_wtd = m_r_i * f_r + m_b_i * f_b + m_s_i * f_s
+            denom   = m_r_i + m_b_i + m_s_i
+            f_eff   = raw_wtd / denom if denom > 0 else (f_r + f_b + f_s) / 3
+            K_hour  = K_res * m_r_i * f_r + K_biz * m_b_i * f_b + K_sch * m_s_i * f_s
             obs_eff[i] = n_eff_i / (Th * f_eff)
             sig_eff[i] = math.sqrt(n_eff_i) / (Th * f_eff)
-            mod_eff[i] = (K_res * m_r_i * f_r + K_biz * m_b_i * f_b) / f_eff
+            mod_eff[i] = K_hour / f_eff if f_eff > 0 else 0.0
         else:
             obs_eff[i] = n_eff_i / max(Th, 1e-9)
             sig_eff[i] = math.sqrt(n_eff_i) / max(Th, 1e-9)
-            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i])
+            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i] + K_sch * m_school[i])
 resid = np.where(sig_eff > 0, (mod_eff - obs_eff) / sig_eff, 0.0)
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
 _theta_str = f"  THETA={THETA:.4f}" if THETA is not None else ""
-print(f"  K_res={K_res:.4e}  K_biz={K_biz:.4e}  (K={K:.4e})")
+K_tot = K_res + K_biz + K_sch
+phi_biz_out = K_biz / K_tot if K_tot > 0 else 0.0
+phi_sch_out = K_sch / K_tot if K_tot > 0 else 0.0
+print(f"  K_res={K_res:.4e}  K_biz={K_biz:.4e}  K_sch={K_sch:.4e}  (K={K:.4e})")
+print(f"  phi_biz={phi_biz_out:.3f}  phi_sch={phi_sch_out:.3f}")
 print(f"  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}  BETA={BETA:.4f}"
       f"  P_biz={P_biz:.2f}s  ALPHA_biz={ALPHA_biz:.4f}{_theta_str}")
+if _has_school:
+    print(f"  W_SCHOOL={W_SCHOOL:.4f}  P_school={P_school:.2f}s  ALPHA_school={ALPHA_school:.4f}")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -1067,18 +1187,21 @@ if stage == "full":
 # ── Per-slot fraction table ───────────────────────────────────────────────────
 
 _DT_NAMES = {0: "Wkday", 1: "Sat", 2: "Sun"}
-print(f"\n  Per-slot hourly fractions (res / biz vs NTS priors):")
-print(f"  {'Type':<5}  {'Hr':>2}  {'PriorAgg':>9}  {'f_res':>9}  {'f_biz':>9}  {'Δres%':>6}  {'Δbiz%':>6}  N")
+print(f"\n  Per-slot hourly fractions (res / biz / school vs NTS priors):")
+print(f"  {'Type':<5}  {'Hr':>2}  {'PriorAgg':>9}  {'f_res':>9}  {'f_biz':>9}  {'f_sch':>9}"
+      f"  {'Δres%':>6}  {'Δbiz%':>6}  {'Δsch%':>6}  N")
 for sk in sorted(slot_fracs_res):
-    dt, h              = sk
-    mfa, std_f, mfr, mfb = slot_prior[sk]
-    f_r                = slot_fracs_res[sk]
-    f_b                = slot_fracs_biz[sk]
-    n_in_slot          = len(slot_groups.get(sk, []))
+    dt, h                    = sk
+    mfa, std_f, mfr, mfb, mfs = slot_prior[sk]
+    f_r                      = slot_fracs_res[sk]
+    f_b                      = slot_fracs_biz[sk]
+    f_s                      = slot_fracs_school[sk]
+    n_in_slot                = len(slot_groups.get(sk, []))
     dr  = 100.0 * (f_r - mfr) / mfr if mfr > 0 else 0.0
     db  = 100.0 * (f_b - mfb) / mfb if mfb > 0 else 0.0
-    print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.6f}  {f_r:>9.6f}  {f_b:>9.6f}"
-          f"  {dr:>+5.1f}%  {db:>+5.1f}%  {n_in_slot}")
+    ds  = 100.0 * (f_s - mfs) / mfs if mfs > 0 else 0.0
+    print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.6f}  {f_r:>9.6f}  {f_b:>9.6f}  {f_s:>9.6f}"
+          f"  {dr:>+5.1f}%  {db:>+5.1f}%  {ds:>+5.1f}%  {n_in_slot}")
 
 # ── Goodness-of-fit table (sorted by |z|) ────────────────────────────────────
 
@@ -1098,9 +1221,10 @@ print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 
 tuned = {
     "kernel":    "rational",
-    "K":         round(K, 6),      # K_res + K_biz (backward compat for build_assignment.py)
+    "K":         round(K, 6),      # K_res + K_biz + K_sch (backward compat)
     "K_res":     round(K_res, 6),
     "K_biz":     round(K_biz, 6),
+    "K_sch":     round(K_sch, 6),
     "W_BIZ":     round(W_BIZ, 6),
     "P":         round(P, 4),
     "ALPHA":     round(ALPHA, 6),
@@ -1108,8 +1232,12 @@ tuned = {
     "P_biz":     round(P_biz, 4),
     "ALPHA_biz": round(ALPHA_biz, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
-    "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
+    **( {"W_SCHOOL":     round(W_SCHOOL,     6),
+         "P_school":     round(P_school,     4),
+         "ALPHA_school": round(ALPHA_school, 6)} if _has_school else {} ),
+    "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
+    "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
+    "slot_fracs_school": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
     "external_node_pop": {str(k): round(v) for k, v in ext_pop_map.items()},
     "external_node_biz": {str(k): round(v) for k, v in ext_biz_map.items()},
     "chi2":       round(chi2, 3),
@@ -1148,6 +1276,12 @@ try:
             label=f"Business     P_biz={P_biz/60:.1f}min  ALPHA_biz={ALPHA_biz:.3f}  K_biz={K_biz:.3e}")
     ax.axvline(P     / 60.0, color="C0", linestyle=":", alpha=0.6)
     ax.axvline(P_biz / 60.0, color="C1", linestyle=":", alpha=0.6)
+    if _has_school and W_SCHOOL is not None:
+        u_sch   = d_sec / P_school
+        k_sch_c = K_sch * (ALPHA_school + BETA) * u_sch**BETA / (ALPHA_school + BETA * u_sch**(ALPHA_school + BETA))
+        ax.plot(d_min, k_sch_c, linewidth=1.8, linestyle=":",
+                label=f"School       P_sch={P_school/60:.1f}min  ALPHA_sch={ALPHA_school:.3f}  K_sch={K_sch:.3e}")
+        ax.axvline(P_school / 60.0, color="C2", linestyle=":", alpha=0.6)
     ax.set_xlabel("Travel time (minutes)")
     ax.set_ylabel("K_c · kernel(d; P_c, ALPHA_c, BETA)")
     ax.set_title(
@@ -1173,6 +1307,7 @@ params = {
     "K":         round(K, 6),
     "K_res":     round(K_res, 6),
     "K_biz":     round(K_biz, 6),
+    "K_sch":     round(K_sch, 6),
     "W_BIZ":     round(W_BIZ, 6),
     "P":         round(P, 4),
     "ALPHA":     round(ALPHA, 6),
@@ -1180,8 +1315,12 @@ params = {
     "P_biz":     round(P_biz, 4),
     "ALPHA_biz": round(ALPHA_biz, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    "slot_fracs_res": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
-    "slot_fracs_biz": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
+    **( {"W_SCHOOL":     round(W_SCHOOL,     6),
+         "P_school":     round(P_school,     4),
+         "ALPHA_school": round(ALPHA_school, 6)} if _has_school else {} ),
+    "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
+    "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
+    "slot_fracs_school": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
 }
 if stage == "full":
     params["external_node_pop"] = {str(k): round(v) for k, v in ext_pop_map.items()}
@@ -1206,6 +1345,8 @@ history_entry = {
     "tuner_hyperparams": {
         "phi_prior":            phi_prior,
         "phi_std":              phi_std,
+        "phi_school_prior":     phi_school_prior,
+        "phi_school_std":       phi_school_std,
         "gamma_coupling_scale": gamma_coupling_scale,
         "gravity_lambda":       grav_lam_raw,
         "lambda":               lam,
@@ -1213,8 +1354,8 @@ history_entry = {
     },
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
-        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8), round(mfb, 8)]
-        for (dt, h), (mfa, std_f, mfr, mfb) in slot_prior.items()
+        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8), round(mfb, 8), round(mfs, 8)]
+        for (dt, h), (mfa, std_f, mfr, mfb, mfs) in slot_prior.items()
     },
     "observations": [
         {

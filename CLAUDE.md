@@ -21,8 +21,10 @@ python3 analysis/parse_official_hourly.py    # parse ODS hourly counts → data/
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
 python3 analysis/aggregate_counts.py         # combine per-session AADT → link_aadt.json
 
-python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (6 params, no THETA; ~14s after probit cache rebuild)
-python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (26 params, ~40s after probit cache rebuild)
+python3 analysis/derive_component_profiles.py              # regenerate hourly_fractions.csv school column (re-run when NTS files change)
+
+python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (9 params; ~40-50s after probit cache rebuild)
+python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (31 params, ~70s after probit cache rebuild)
 python3 analysis/tune_assignment.py --fast                 # looser tolerances + fewer alt-min iters (~2× faster, minimal precision loss)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 
@@ -43,27 +45,28 @@ than restart.
 
 | File | Role |
 |------|------|
-| `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. **Population distribution:** building centroids snapped to road edges; DZs with <3 buildings fall back to road-length weighting. **Business demand:** workplace population × POI count, augmented with OSM car park polygon area (public: area/25, private: area/50 equivalent persons). **Flow map layers:** reads `newtownards_flows.json` and adds: (1) combined AADT layer (shown by default, blue→yellow→red, tooltip includes res/biz breakdown if component flows present); (2) residential layer (teal, off by default); (3) business-adjacent layer (amber→red, off by default). Component layers only appear if `flows_res`/`flows_biz` keys exist in the flows file. Map also includes parking (blue/red) and POI layers. **Adding a new external zone:** add an entry to `_EXT_GEO` (the dict at the top of the file) and to `tuner_config.json` cities — `BOUNDARY_NODE_IDS` is now derived automatically from `_EXT_GEO.keys()` so no separate update is needed there. |
+| `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. **Population distribution:** building centroids snapped to road edges; DZs with <3 buildings fall back to road-length weighting. **Business demand:** workplace population × POI count (school/college/university excluded from this layer), augmented with OSM car park polygon area (public: area/25, private: area/50 equivalent persons). **School demand:** separate `node_school_demand` layer from OSM school POIs (amenity=school/secondary_school/college/university); weights 1.5/3.0/3.0/3.0; no DZ control total — W_SCHOOL absorbs the scale. **Flow map layers:** reads `newtownards_flows.json` and adds: (1) combined AADT layer (shown by default, blue→yellow→red, tooltip includes res/biz/school breakdown); (2) residential layer (teal, off by default); (3) business-adjacent layer (amber→red, off by default); (4) school layer (violet→purple, off by default). Component layers only appear if `flows_res`/`flows_biz`/`flows_school` keys exist. Map also includes parking (blue/red) and POI layers. **Adding a new external zone:** add an entry to `_EXT_GEO` and to `tuner_config.json` cities. |
 | `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes, `HIGHWAY_COST_FACTOR` values change, or `N_PASSES`/`PROBIT_CV` change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0). Also reads `tuner_config.json` to filter external→external OD pairs. **Probit stochastic loading:** runs `N_PASSES=25` Dijkstra passes with log-normal edge-cost noise (CV=0.25), accumulates fractional link-assignment weights (`link_weight` per entry = fraction of passes using that link for that OD pair). `od_dist` is the mean path distance across passes. Build time ~30–60 min. |
-| `simulation/model.py` | **Shared constants and functions:** `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel, `return_components=True` returns `(flow_res, flow_biz)` tuple), `site_flow()`, `compute_chi2()`, `print_chi2_table()`. `gravity_assign()` accepts optional `link_weight` array (float, parallel to `pair_idx`/`link_idx`): when provided, each entry's flow contribution is scaled by its fractional weight (probit loading); when `None`, falls back to binary all-or-nothing. `compute_chi2()` has two modes: **two-component** (when `link_flow_biz_dict` provided) uses 216 official hourly obs + count-space formula matching the tuner; **legacy** (single flow dict) uses 3 AADT obs + Woodbury correction. |
-| `simulation/build_assignment.py` | Gravity model assignment. Requires `simulation/newtownards_paths.npz` (exits with an informative error if absent). Calls `gravity_assign(return_components=True)` and `compute_chi2` two-component mode when K_res/K_biz are in `tuned_params.json`. Saves `flows_res` and `flows_biz` alongside `flows` in `newtownards_flows.json` when two-component. Falls back to legacy single-K mode for old param files. **Two-component mode does not require `official_hourly.json` to be present** — `compute_chi2` handles a missing file gracefully; the res/biz assignment and map layers work from K_res/K_biz alone. |
+| `simulation/model.py` | **Shared constants and functions:** `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel; `return_components=True` with `w_school` provided returns `(flow_res, flow_biz, flow_school)` tuple, without `w_school` returns `(flow_res, flow_biz)`), `site_flow()`, `compute_chi2()`, `print_chi2_table()`. `gravity_assign()` accepts optional `link_weight` array (probit fractional weights). `compute_chi2()` dispatches to three-component mode when `link_flow_school_dict` provided (N_eff = N − 3·N_slots); two-component when only `link_flow_biz_dict` provided; legacy single-flow otherwise. |
+| `simulation/build_assignment.py` | Gravity model assignment. Requires `simulation/newtownards_paths.npz`. Three-component mode activated when K_sch > 0 and W_SCHOOL are in `tuned_params.json` and `node_school_demand` is in `node_weights.json`. Saves `flows_res`, `flows_biz`, `flows_school` in `newtownards_flows.json`. Falls back to two-component (K_res/K_biz only) or legacy single-K for old param files. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
 | `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, gravity param regularization, and temporal coupling. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/BETA/W_BIZ/P_biz/ALPHA_biz; `gamma_coupling_scale` controls the per-slot aggregate coupling (γ = scale/std_f²); `phi_prior` + `phi_std` set the Gaussian prior on the business flow fraction (see Model Design). |
 | `analysis/parse_official_hourly.py` | Parses sheets 444/507/508 from the 2023 NI ODS traffic count file → `data/official_hourly.json`. Run once (or when the ODS file changes). Weekday sigma = max(between-day std, 10% relative, √count); weekend sigma = max(√count, 15% relative). The √count floor prevents unrealistically tight sigmas at overnight low-count hours. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. **`MANUAL_LINK_OVERRIDES`** dict at the top maps session IDs to forced directed links; use when the observer was on a parallel carriageway and GPS snap would land on the wrong road (e.g. A20 Kempe Stones sessions `e644eae2`/`760b0c8e` → link 8→7). After every new link assignment (manual or auto), validates that each non-null count direction maps to a real directed edge in G; raises `ValueError` if not, preventing counts from silently hitting a zero-flow phantom edge. Edges without geometry (virtual stub nodes such as Dundonald 10000) are skipped during snap candidate construction. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry now carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s` so the tuner can work in count space. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Two-component model:** gravity flows split into residential (pop→pop, `flow_res`) and business-adjacent (pb+bb, `flow_biz`) components, each with its own temporal profile (f_s_res, f_s_biz) and scale (K_res, K_biz). Stage 1 tunes 6 gravity params (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz); `--full` adds 14 city pop/wp + 6 dampings (26 params total). Uses 216 official hourly obs from `official_hourly.json` plus per-session walking obs from `link_aadt.json`. **Alternating minimisation (4 blocks, up to 10 iters, early-exit on K convergence):** K-step (1D, total scale); phi-step (1D, K_biz/K ratio, Gaussian prior N(0.35, 0.15²) prevents K_biz→0); f_res-step (per-slot analytical); f_biz-step (symmetric) + aggregate coupling γ·(f_res+f_biz−f_agg)² per slot. **Performance:** With probit cache (build_paths.py rebuilt): distance-bin matmul path active (~100× faster run_assignment) + vectorised calibrate_Ks_and_fracs (28× faster, replaces 72-slot Python loops with bincount over 559 obs) → ~10–12 ms/eval; ~14 s stage 1, ~40 s stage 2. With old k=3 cache (current): ~250 ms/eval. **`--fast` mode:** ftol/xtol loosened 5×, alt-min capped at 5 iters for intermediate evals; ~2× fewer optimizer iterations with negligible change to final χ²/N. Recorded in history under `tuner_hyperparams.fast`. |
-| `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` (summary, chi² by measurement, chi² by link, gravity params with K_res/K_biz/phi, external zones, slot fractions table showing f_res and f_biz side by side with component pulls) and `reports/slot_pulls_{id}.png` (two side-by-side heatmaps: 24 h × 3 day-types per component, colour = pull from prior). History `slot_prior` entries carry 4 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz]`. History `tuner_hyperparams` carries phi_prior, phi_std, gamma_coupling_scale, gravity_lambda, lambda at run time. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component model:** gravity flows split into residential (pop→pop, `flow_res`), business-adjacent (pb+bb, `flow_biz`), and school (pop→school, `flow_school`) components. Stage 1 tunes 9 gravity params (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school); `--full` adds 14 city pop/wp + 6 dampings (31 params total). Uses 216 official hourly obs + 343 walking obs. **Alternating minimisation (5 blocks, up to 10 iters):** K-step (1D); phi_biz-step (1D, Gaussian prior from `phi_prior`/`phi_std` in config); phi_sch-step (1D, Gaussian prior from `phi_school_prior`/`phi_school_std`); f_res/f_biz/f_school steps (per-slot analytical via bincount) + aggregate coupling γ·(f_res+f_biz+f_school−f_agg)² per slot. School component disabled gracefully if `node_school_demand` absent from weights. **Performance estimate with probit cache:** ~40–50 s stage 1, ~70 s stage 2. `--fast` mode caps alt-min at 5 iters. |
+| `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` (summary, chi² tables, gravity params with K_res/K_biz/K_sch/phi_biz/phi_sch, external zones, slot fractions table showing f_res/f_biz/f_school with pulls) and `reports/slot_pulls_{id}.png` (two or three side-by-side heatmaps: 24 h × 3 day-types per component). History `slot_prior` entries carry 5 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz, mean_f_school]`. Old entries with 4 values handled gracefully. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. Writes all keys from `params` dict (K_res, K_biz, slot_fracs_res, slot_fracs_biz, external zone params etc.); clears stale `slot_fracs` legacy key. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
-| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile (fraction of AADT per hour×day-of-week). Includes `mean_fraction_res` and `mean_fraction_biz` columns: temporal profile priors for the two-component model. **Derived from NTS Table NTS0502a** via `analysis/derive_component_profiles.py` (see below). Re-running `hourly_fractions.py` preserves these columns automatically; do not edit the aggregate columns by hand. **Summation convention:** `mean_fraction[D,H] = count[D,H] / AADT` where `AADT = weekly_total / 7`. Consequently the 168 rows sum to **7.0** (not 1.0): each day sums to that day's traffic relative to AADT (Mon ≈ 1.00, Fri ≈ 1.12, Sun ≈ 0.77). This is intentional — the day-of-week volume differences are encoded in the magnitude. The AADT-weighted business share across the whole week is `Σ(mean_fraction_biz) / Σ(mean_fraction) = 3.07 / 7.0 ≈ 44%`. |
-| `analysis/derive_component_profiles.py` | Derives `mean_fraction_res` and `mean_fraction_biz` from DfT NTS data (2023–2024 rolling average). **Weekdays (NTS0502a, `data/nts0502.ods`):** per-hour `biz_share(h)` = (commuting + employer's business + education×⅕ + escort education + shopping) / adjusted_all. **Education is downweighted by ÷5**: the NTS records all modes; the standalone "education" trip is predominantly the child travelling, with far lower car trip generation than commuting — the adult car driver is already counted under "escort education". The denominator shrinks by the same amount so all other shares are proportionally increased. **Weekends (NTS0504b, `data/nts0504.ods`):** Saturday and Sunday each get a distinct flat `biz_share` from the actual day-of-week trip rates (2023–2024), with "Just walk" trips removed from the denominator (vehicle counts contain no pedestrian trips) and the same education ÷5 applied. Results: Saturday 36.8% business, Sunday 31.2%. The temporal shape within each weekend day comes from the aggregate `mean_fraction` profile. Re-run whenever the NTS files or purpose classification change. |
+| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile. Includes `mean_fraction_res`, `mean_fraction_biz`, and `mean_fraction_school` columns: temporal profile priors for the three-component model. **Derived from NTS** via `analysis/derive_component_profiles.py`. Constraint: res + biz + school = agg for all 168 rows. **Summation convention:** rows sum to 7.0 (AADT normalisation). Re-run `derive_component_profiles.py` whenever NTS files change; do not edit aggregate columns by hand. |
+| `analysis/derive_component_profiles.py` | Derives `mean_fraction_res`, `mean_fraction_biz`, and `mean_fraction_school` from DfT NTS data (2023–2024 rolling average). **Purpose classification:** biz = commuting + employer's business + shopping; school = education×⅕ + escort education; res = remainder. Education ÷5: the standalone child trip has far lower car generation; escort education is the adult drop-off car trip, kept at full weight. **Weekdays (NTS0502a):** per-hour shares computed for each of the three components. **Weekends (NTS0504b):** flat school_share and biz_share per Saturday/Sunday, with "Just walk" removed and education ÷5 applied; temporal shape from aggregate profile. Constraint: res + biz + school = agg exactly. Re-run whenever NTS files or purpose classification change. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
 `simulation/newtownards_map.html`, `simulation/tuned_params.json` — all regenerated by the pipeline.
-`simulation/newtownards_flows.json` — combined flows plus optional `flows_res`/`flows_biz` keys when two-component params active.
+`simulation/node_weights.json` keys: `node_population`, `node_business_demand`, `node_school_demand`, `node_parking_equiv`, `node_effective_utm`, `boundary_node_ids`.
+`simulation/newtownards_flows.json` — combined flows plus optional `flows_res`/`flows_biz`/`flows_school` keys when three-component params active.
 `reports/` — generated by `report_tune.py` and `tune_assignment.py`; not tracked.
 
 ### Tracked generated outputs
@@ -128,40 +131,37 @@ Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
 Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds, Dundonald↔LowerArds,
 Dundonald↔Donaghadee, Dundonald↔Millisle.
 
-### Two-component flow decomposition
-The gravity OD flows are split into two spatial components at each tuner evaluation:
+### Three-component flow decomposition
+The gravity OD flows are split into three spatial components at each tuner evaluation:
 
 - **Residential** (`flow_res`): `all_bin_pp @ f_b` — purely pop×pop trips
 - **Business-adjacent** (`flow_biz`): `W_BIZ·(all_bin_pb @ f_b) + W_BIZ²·(all_bin_bb @ f_b)` — home↔work/retail trips
+- **School** (`flow_school`): `W_SCHOOL·(all_bin_ps @ f_b)` — pop→school cross-term, using (P_school, ALPHA_school, BETA) kernel
 
-Each component has its own temporal profile (f_s_res, f_s_biz) and scale (K_res, K_biz).
+Each component has its own temporal profile and scale (K_res, K_biz, K_sch).
 Predicted count for observation i in slot s:
-`pred_i = K_res · flow_res[link_i] · (T_i/3600) · f_s_res[s] + K_biz · flow_biz[link_i] · (T_i/3600) · f_s_biz[s]`
+`pred_i = K_res·flow_res·(T/3600)·f_res[s] + K_biz·flow_biz·(T/3600)·f_biz[s] + K_sch·flow_school·(T/3600)·f_school[s]`
 
-### Four-block analytical calibration
-At each optimizer evaluation, (K, phi, f_s_res, f_s_biz) are calibrated via alternating
-minimisation (up to 10 iterations, early exit on K convergence; typically 3–5 suffice),
-where K_res = K·(1−phi), K_biz = K·phi. `--fast` caps at 5 iterations for intermediate evals.
+### Five-block analytical calibration
+At each optimizer evaluation, (K, phi_biz, phi_sch, f_res, f_biz, f_school) are calibrated via
+alternating minimisation (up to 10 iterations; `--fast` caps at 5).
+K_res = K·(1−phi_biz−phi_sch), K_biz = K·phi_biz, K_sch = K·phi_sch.
 
-**K-step:** 1D solve (same structure as old single-K step), using combined coefficient
-`(1−phi)·c_r·f_res + phi·c_b·f_biz` per observation.
+**K-step:** 1D solve, using combined coefficient `(1−phi_b−phi_s)·c_r·f_r + phi_b·c_b·f_b + phi_s·c_s·f_s`.
 
-**phi-step:** 1D solve for business fraction, with Gaussian prior phi ~ N(0.35, 0.15²).
-This prior prevents K_biz collapsing to 0 (the K_biz/W_BIZ degeneracy otherwise exploited
-by the optimizer). phi = 0 means all-residential; phi = 1 means all-business.
+**phi_biz-step / phi_sch-step:** sequential 1D solves with Gaussian priors.
+phi_biz ~ N(phi_prior, phi_std²); phi_sch ~ N(phi_school_prior, phi_school_std²) from `tuner_config.json`.
+These priors prevent degeneracy K_biz→0 or K_sch→0. Applied sequentially (fix one, solve for the other).
 
-**f_res-step / f_biz-step:** per-slot analytical update, anchored by component-specific
-priors from `hourly_fractions.csv` columns `mean_fraction_res` / `mean_fraction_biz`
-(synthetic profiles: business peaks weekday AM/PM; residential is complement).
+**f_res / f_biz / f_school steps:** per-slot analytical update, anchored by NTS-derived priors from
+`hourly_fractions.csv` columns `mean_fraction_res` / `mean_fraction_biz` / `mean_fraction_school`.
+School profile: sharp weekday double-peak (h08/h15), near-zero weekends.
 
-**Aggregate coupling:** each slot also carries a penalty γ·(f_res + f_biz − f_agg)²
-where γ = `gamma_coupling_scale` / std_f_agg² (per-slot, from `tuner_config.json`).
-This prevents the two profiles collectively drifting from the known NI aggregate profile.
-`gamma_coupling_scale = 0.0` disables coupling; `1.0` gives coupling as strong as the
-individual component priors.
+**Aggregate coupling:** each slot carries γ·(f_res + f_biz + f_school − f_agg)² where
+γ = `gamma_coupling_scale` / std_f_agg². Updated in all three f-steps.
 
 Slot key: (day_type, hour), day_type = 0 (weekday), 1 (Saturday), 2 (Sunday).
-Prior std derived from `hourly_fractions.csv` via law of total variance.
+Prior std from `hourly_fractions.csv` via law of total variance.
 
 ### Observations
 All 559 observations are in count space with per-obs weights:
@@ -170,9 +170,9 @@ All 559 observations are in count space with per-obs weights:
 - **Walking** (343 obs): from `data/link_aadt.json`; Poisson error; weight = 1/n_eff.
 
 ### Goodness of fit
-`χ²/N` (mean squared z-score; N=559 obs, N_eff = N − 2·N_slots = 559 − 144 = 415).
-Two df lost per slot (one each for f_s_res and f_s_biz). With coupling enabled,
-chi²/N includes the coupling penalty terms; pure data-fit chi²/N is lower.
+`χ²/N` (mean squared z-score; N=559 obs, N_eff = N − 3·N_slots = 559 − 216 = 343).
+Three df lost per slot (one each for f_s_res, f_s_biz, f_s_school). With coupling enabled,
+chi²/N includes coupling penalty terms; pure data-fit chi²/N is lower.
 
 `build_assignment.py` uses the two-component `compute_chi2()` when K_res/K_biz are present in tuned_params.json. This gives a **data-only** chi²/N (pure sum of squared z-scores) — it excludes the f-prior penalties `(f_r−mfr)²/std_f²` and the aggregate coupling penalty that the tuner includes in its chi²/N. Expect the build_assignment chi²/N to be somewhat lower than the tuner's; the two are directionally comparable but not numerically equal. The legacy Woodbury path is used only for old single-K param files.
 
@@ -218,25 +218,28 @@ New sessions added 2026-06-18 (7 sessions): Saratoga Avenue (333↔335), Glenfor
 | 2026-06-17 | full | 545 | 26 | 1.6640 | first two-component full tune; phi=16.5%; LowerArds wp +1303% flag |
 | 2026-06-18 | full | 545 | 26 | 1.6432 | NTS-derived component priors; LowerArds wp +645% (improved); Belfast wp +1083% new flag |
 | 2026-06-19 | full | 559 | 28 | **1.3742** | first probit-cache tune; P=125s, ALPHA=4.10; phi=30.4%; city refs updated |
+| 2026-06-19 | gravity | 559 | 9 | 1.3292 | three-component model (school added); phi_biz=27%, phi_sch=1.2%; school at ref |
+| 2026-06-19 | full | 559 | 31 | **1.3146** | three-component full tune; phi_biz=25.6%, phi_sch=1.4%; school params at ref |
 
-**Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-18 count ingest onward: 559 observations (216 official hourly + 343 walking, 72 time slots, N_eff=415).
+**Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-19 three-component model: N_eff = 559 − 3×72 = 343 (one extra df per slot for f_school).
 
-Current best full-tune: chi²/N = 1.3742 (559 obs, N_eff=415; two-component with probit cache, run 8a0fe24b).
-W_BIZ=3.123, P=125.1s, ALPHA=4.10. phi=30.4% business fraction.
-mean|z|=0.81  |z|>2: 42  |z|>3: 13.
-Probit cache (N_PASSES=25, CV=0.25) active from 2026-06-19.
+Current best full-tune: chi²/N = **1.3146** (559 obs, N_eff=343; three-component with probit cache, run f09a003e).
+K_res=1.23e-04, K_biz=4.31e-05, K_sch=2.40e-06. phi_biz=25.6%, phi_sch=1.4%.
+W_BIZ=3.82, P=117.6s, ALPHA=4.02, BETA=7.67. P_biz=83.4s, ALPHA_biz=3.66.
+W_SCHOOL=1.00, P_school=600s, ALPHA_school=2.00 (at ref — school params not driven by data).
+mean|z|=0.80  |z|>2: 40  |z|>3: 12.
 
 **Confirmed working:**
-- Temporal profiles separating meaningfully: business peaks weekday h06 earlier than residential (Δ/σ_biz=+1.54 vs −1.39); overnight business fraction higher (deliveries/early commuters).
-- Site 444 overnight z-scores improved: previously z≈−5 at h04; now worst official-hourly is h06 at z=−3.04.
-- Map layers (residential/business) confirmed — `build_assignment.py` populated `flows_res`/`flows_biz`.
+- Three-component model runs end-to-end; display bug fixed (K scaling in walking display).
+- School temporal prior correct: weekday h08=40.1% school, h15=34.5%; weekends ~0.5%.
+- External zone tuning improved: Belfast wp now +20.7% (was +891% before ref update); Bangor wp −43.8%.
 
 **Outstanding concerns:**
-- **Belfast wp = 1,822,862 (ref 183,661, +891%)** — persistent external-zone inflation. P improved from 57s → 125s with gravity_lambda=0.5 but Belfast wp still strongly inflated. Further tightening or a Belfast-specific lambda may be warranted.
-- Structural outliers: `22→12 Regent Street` (z=+4.36), `23→295 Frances Street` (z=+3.98), `296→297 Nursery Road` (z=−3.61), `139→137 Portaferry Road` (z=−3.64) — not necessarily model failures.
-- `73→70` Mill Street severe underprediction (z=−3.33; obs 23,644 vs model 2,222).
-- `719→325` / `325→719` Messines Road persistent (z=−3.13/−2.83).
-- `18→21` / `68→21` / `21→68` Hardford Link persistent (z=−3.28/−3.28/−2.78).
+- **phi_sch=1.4%** — school component contributes very little. School params sit at gravity_ref because walking count sessions don't cover h08/h15 school-peak hours. The school kernel (P/ALPHA) is unidentifiable without school-peak observations.
+- Structural outliers: `22→12 Regent Street` (z=+4.03), `23→295 Frances Street` (z=+3.94), `296→297 Nursery Road` (z=−3.70), `139→137 Portaferry Road` (z=−3.70).
+- `73→70` Mill Street severe underprediction (z=−3.30; obs 26,377 vs model 2,682).
+- `719→325` / `325→719` Messines Road persistent (z=−3.33/−2.53).
+- Hardford Link persistent (z=−3.25/−3.19/−2.73).
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
@@ -286,7 +289,7 @@ or `through_route_pairs` changes.
   entry point for that street). No change to `build_paths.py`, `model.py`, or the paths
   cache. Running `build_demographics.py` now prints "Added N ghost dead-end edges to
   STRtree (absorbed termini)".
-- **`tuned_params.json` structure:** contains `slot_fracs_res` and `slot_fracs_biz` (dicts keyed `"dt,h"`); does **not** contain a `slot_fracs` key (legacy combined average, removed). `restore_params.py` also strips `slot_fracs` if found in old history entries.
+- **`tuned_params.json` structure:** contains `K_res`, `K_biz`, `K_sch`, `W_SCHOOL`, `P_school`, `ALPHA_school`, `slot_fracs_res`, `slot_fracs_biz`, `slot_fracs_school` (dicts keyed `"dt,h"`); does **not** contain a `slot_fracs` key (legacy). Old param files without school keys fall back to two-component or legacy mode in `build_assignment.py`.
 
 ---
 

@@ -49,12 +49,10 @@ EXCLUDE_AMENITY = {
 # Per-tag trip-generation weights relative to baseline (café/small shop = 1.0).
 # Parking layer already handles large retail anchors; weights here add signal
 # from institutional employers and high-turnover stops without parking polygons.
+# Schools are intentionally excluded — they have their own node_school_demand layer.
 POI_WEIGHTS = {
     # amenity tag → weight
     "hospital":        5.0,
-    "school":          3.0,
-    "college":         3.0,
-    "university":      3.0,
     "cinema":          3.0,
     "theatre":         3.0,
     "fuel":            2.0,
@@ -66,6 +64,16 @@ POI_WEIGHTS = {
     "supermarket":     1.5,
     # any office tag → 2.0 (applied inline; not listed here as the value covers all subtypes)
 }
+
+# School POI weights for the dedicated school trip demand layer.
+# Secondary schools and colleges draw larger car catchments than primary schools.
+SCHOOL_POI_WEIGHTS = {
+    "school":            1.5,   # generic (often primary; OSM doesn't always distinguish)
+    "secondary_school":  3.0,
+    "college":           3.0,
+    "university":        3.0,
+}
+_SCHOOL_TAGS = set(SCHOOL_POI_WEIGHTS)
 
 HIGHWAY_STYLE = {
     "trunk":         {"color": "#f5a623", "weight": 4},
@@ -139,6 +147,9 @@ if "--zones-only" in sys.argv:
     for node_id, (name, lat, lon, pop, workplace, damping) in EXTERNAL_ZONES.items():
         w["node_population"][str(node_id)]      = pop * damping
         w["node_business_demand"][str(node_id)] = workplace * damping
+        # External nodes have no school demand (schools are internal features)
+        if "node_school_demand" in w:
+            w["node_school_demand"][str(node_id)] = 0.0
         zone = name or "local access"
         print(f"  Node {node_id:4d}  {zone:<22}  pop={pop * damping:>8.0f}  workplace={workplace * damping:>8.0f}  damping={damping}")
     with open(weights_path, "w") as f:
@@ -148,8 +159,9 @@ if "--zones-only" in sys.argv:
     sys.exit(0)
 
 # Sentinels: set by full run path; remain None in --map-only path.
-_park_utm = None
-pois_utm  = None
+_park_utm          = None
+pois_utm           = None
+node_school_demand = {}
 
 # ── Fast path: --map-only ──────────────────────────────────────────────────────
 # Rebuilds only the map HTML, reusing node_weights.json and
@@ -171,6 +183,7 @@ if "--map-only" in sys.argv:
     node_population      = {int(k): v for k, v in _w["node_population"].items()}
     node_business_demand = {int(k): v for k, v in _w["node_business_demand"].items()}
     node_parking_equiv   = {int(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
+    node_school_demand   = {int(k): v for k, v in _w.get("node_school_demand", {}).items()}
     print("Loading DZ boundaries …")
     dz_final = gpd.read_file(f"{OUT_DIR}/newtownards_demographics.geojson")
     print(f"  {len(dz_final)} Data Zones · {len(node_ids)} nodes")
@@ -620,6 +633,39 @@ else:
           f"({_n_pub} public +{_eq_pub:.0f} eq-persons, "
           f"{_n_priv} private +{_eq_priv:.0f} eq-persons)")
 
+    # ── School demand layer ───────────────────────────────────────────────────────
+    # Snap school POIs to road edges; accumulate SCHOOL_POI_WEIGHTS per node.
+    # This layer is separate from node_business_demand — school POIs are no longer
+    # in POI_WEIGHTS, so workplace population is NOT allocated to school nodes.
+    # W_SCHOOL in the gravity model absorbs the global scale; the weights here
+    # are dimensionless POI-weight units summed per road node.
+
+    node_school_demand = {}
+    _n_school = 0
+    for _, _poi_row in pois_utm.iterrows():
+        _amenity = _poi_row.get("amenity") if "amenity" in pois_utm.columns else None
+        if not (pd.notna(_amenity) and _amenity in _SCHOOL_TAGS):
+            continue
+        _sw = SCHOOL_POI_WEIGHTS[_amenity]
+        _eidx = _edge_strtree.nearest(_poi_row.geometry)
+        if _eidx in _ghost_junction:
+            _junc = _ghost_junction[_eidx]
+            node_school_demand[_junc] = node_school_demand.get(_junc, 0.0) + _sw
+        else:
+            _eu, _ev = _edge_keys[_eidx]
+            _t = _edge_geom_list[_eidx].project(_poi_row.geometry, normalized=True)
+            node_school_demand[_eu] = node_school_demand.get(_eu, 0.0) + _sw * (1.0 - _t)
+            node_school_demand[_ev] = node_school_demand.get(_ev, 0.0) + _sw * _t
+        _n_school += 1
+
+    # External zone nodes have no school demand (schools are internal features)
+    for _bid in EXTERNAL_ZONES:
+        node_school_demand.pop(_bid, None)
+
+    _tot_sch = sum(node_school_demand.values())
+    print(f"  {_n_school} school POIs → {len(node_school_demand)} nodes"
+          f"  total weight={_tot_sch:.1f}")
+
     # node_id → effective UTM centroid used for gravity-model distances:
     #   internal nodes  → their own network coordinates
     #   boundary nodes  → external destination centroid (or own coords for node 180)
@@ -641,6 +687,7 @@ else:
         json.dump({
             "node_population":      {str(k): v for k, v in node_population.items()},
             "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
+            "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             "node_parking_equiv":   {str(k): v for k, v in node_parking_equiv.items()},
             "node_effective_utm":   {str(k): list(v) for k, v in node_effective_utm.items()},
             "boundary_node_ids":    list(EXTERNAL_ZONES.keys()),
@@ -917,10 +964,12 @@ if os.path.exists(_flows_path):
         return {tuple(int(x) for x in k.split(",")): v
                 for k, v in _flows_data.get(key, {}).items()}
 
-    _link_flow     = _parse_flows("flows")
-    _link_flow_res = _parse_flows("flows_res")
-    _link_flow_biz = _parse_flows("flows_biz")
-    _has_components = bool(_link_flow_res)
+    _link_flow        = _parse_flows("flows")
+    _link_flow_res    = _parse_flows("flows_res")
+    _link_flow_biz    = _parse_flows("flows_biz")
+    _link_flow_school = _parse_flows("flows_school")
+    _has_components   = bool(_link_flow_res)
+    _has_school_layer = bool(_link_flow_school)
 
     # ── colour helpers ────────────────────────────────────────────────────────
     def _log_scale(flow_dict):
@@ -964,6 +1013,13 @@ if os.path.exists(_flows_path):
         r = min(255, int(200 + 55 * t))
         g = int(160 * (1 - t * 0.85))
         b = int(20  * (1 - t))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _color_school(t):
+        """Light violet → deep purple (school trips)."""
+        r = int(160 + 60 * (1 - t))
+        g = int(80  * (1 - t * 0.6))
+        b = min(255, int(180 + 75 * t))
         return f"#{r:02x}{g:02x}{b:02x}"
 
     # ── helper to build one FeatureGroup ─────────────────────────────────────
@@ -1010,10 +1066,14 @@ if os.path.exists(_flows_path):
         if _has_components:
             _r = _link_flow_res.get((_u, _v), 0) + _link_flow_res.get((_v, _u), 0)
             _b = _link_flow_biz.get((_u, _v), 0) + _link_flow_biz.get((_v, _u), 0)
-            _tot = _r + _b
+            _s = (_link_flow_school.get((_u, _v), 0) + _link_flow_school.get((_v, _u), 0)
+                  if _has_school_layer else 0)
+            _tot = _r + _b + _s
             if _tot > 0:
                 _tip += f"<br>&nbsp;&nbsp;residential: {_r:,.0f} ({100*_r/_tot:.0f}%)"
                 _tip += f"<br>&nbsp;&nbsp;business: {_b:,.0f} ({100*_b/_tot:.0f}%)"
+                if _has_school_layer:
+                    _tip += f"<br>&nbsp;&nbsp;school: {_s:,.0f} ({100*_s/_tot:.0f}%)"
         _tip += f"<br>length: {float(_data.get('length', 0)):.0f}m"
         folium.PolyLine(
             _coords,
@@ -1038,7 +1098,16 @@ if os.path.exists(_flows_path):
             ),
             show=False,
         )
-        print(f"Added flow layers from {_flows_path} (combined + res + biz, {len(_link_flow)} links)")
+        if _has_school_layer:
+            _add_flow_fg(
+                _link_flow_school, "Road flows — school (pop→school)", _color_school,
+                lambda name, flow, length: (
+                    f"{name or 'link'}<br>school AADT: {flow:,.0f}<br>length: {length:.0f}m"
+                ),
+                show=False,
+            )
+        _layer_str = "combined + res + biz" + (" + school" if _has_school_layer else "")
+        print(f"Added flow layers from {_flows_path} ({_layer_str}, {len(_link_flow)} links)")
     else:
         print(f"Added flow layer from {_flows_path} ({len(_link_flow)} links)")
 else:

@@ -23,21 +23,23 @@ if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         existing = json.load(f)
 
-GRAVITY_KEYS = ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA")
+GRAVITY_KEYS = ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA",
+                "W_SCHOOL", "P_school", "ALPHA_school")
 
 print("Resetting gravity params (tuner_config gravity_ref → tuned_params.json):\n")
-print(f"  {'param':<8}  {'before':>12}  {'after':>12}")
-for key in ("K", "K_res", "K_biz") + GRAVITY_KEYS:
+print(f"  {'param':<12}  {'before':>12}  {'after':>12}")
+for key in ("K", "K_res", "K_biz", "K_sch") + GRAVITY_KEYS:
     before = existing.get(key, "—")
-    after  = 1.0 if key in ("K", "K_res", "K_biz") else grav_ref.get(key)
+    after  = 1.0 if key in ("K", "K_res", "K_biz") else (0.0 if key == "K_sch" else grav_ref.get(key))
     before_str = f"{before:.6g}" if isinstance(before, float) else str(before)
-    after_str  = f"{after:.6g}"  if isinstance(after,  float) else str(after)
-    print(f"  {key:<8}  {before_str:>12}  {after_str:>12}")
+    after_str  = f"{after:.6g}"  if isinstance(after,  float) else str(after) if after is not None else "—"
+    print(f"  {key:<12}  {before_str:>12}  {after_str:>12}")
 
 existing.update({k: grav_ref[k] for k in GRAVITY_KEYS if k in grav_ref})
-existing["K"] = 1.0
+existing["K"]     = 1.0
 existing["K_res"] = 1.0
 existing["K_biz"] = 1.0
+existing["K_sch"] = 0.0
 for _stale in ("MU", "SIGMA"):
     existing.pop(_stale, None)
 

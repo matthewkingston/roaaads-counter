@@ -44,6 +44,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                    W_BIZ, P, ALPHA, w_pop, w_biz,
                    BETA=1.0, THETA=None,
                    P_biz=None, ALPHA_biz=None, BETA_biz=None,
+                   W_SCHOOL=None, P_school=None, ALPHA_school=None, w_school=None,
                    od_dist_2=None, pair_idx_2=None, link_idx_2=None,
                    od_dist_3=None, pair_idx_3=None, link_idx_3=None,
                    link_weight=None,
@@ -66,10 +67,14 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
     P_biz/ALPHA_biz/BETA_biz: optional separate kernel for the business component.
       Only used when return_components=True.
 
+    W_SCHOOL/P_school/ALPHA_school/w_school: optional school-trip component.
+      When w_school is provided and return_components=True, returns a third component:
+      flow_school = W_SCHOOL·(pop→school + school→pop) using P_school/ALPHA_school kernel.
+      w_school uses BETA (shared with residential kernel).
+
     return_components=False (default): returns combined pre-K flow array (N_links,).
-    return_components=True: returns (flow_res, flow_biz) where
-      flow_res = pop→pop component (uses P/ALPHA/BETA kernel),
-      flow_biz = W_BIZ·pb + W_BIZ²·bb component (uses P_biz/ALPHA_biz/BETA_biz kernel).
+    return_components=True, w_school=None: returns (flow_res, flow_biz).
+    return_components=True, w_school provided: returns (flow_res, flow_biz, flow_school).
     """
     _has_stoch = (THETA is not None and od_dist_2 is not None)
 
@@ -77,6 +82,10 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
     _P_biz    = P_biz    if P_biz    is not None else P
     _A_biz    = ALPHA_biz if ALPHA_biz is not None else ALPHA
     _B_biz    = BETA_biz  if BETA_biz  is not None else BETA
+
+    _has_school = (w_school is not None and W_SCHOOL is not None and W_SCHOOL > 0)
+    _P_sch  = P_school    if P_school    is not None else P
+    _A_sch  = ALPHA_school if ALPHA_school is not None else ALPHA
 
     if not _has_stoch:
         u    = od_dist / P
@@ -87,6 +96,8 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
 
         if not return_components:
             w_vec = w_pop + W_BIZ * w_biz
+            if _has_school:
+                w_vec = w_vec + W_SCHOOL * w_school
             t_ij  = w_vec[od_src] * w_vec[od_dst] * kern
             return np.bincount(link_idx, weights=t_ij[pair_idx] * entry_w, minlength=N_links)
 
@@ -104,7 +115,20 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         flow_biz = np.bincount(link_idx,
                                weights=((W_BIZ * pb + W_BIZ ** 2 * bb)[pair_idx]) * entry_w,
                                minlength=N_links)
-        return flow_res, flow_biz
+        if not _has_school:
+            return flow_res, flow_biz
+
+        # School component: separate kernel, pop×school cross-term only
+        if _P_sch == P and _A_sch == ALPHA:
+            kern_sch = kern
+        else:
+            u_s      = od_dist / _P_sch
+            kern_sch = (_A_sch + BETA) * u_s**BETA / (_A_sch + BETA * u_s**(_A_sch + BETA))
+        ps = (w_pop[od_src] * w_school[od_dst] + w_school[od_src] * w_pop[od_dst]) * kern_sch
+        flow_school = np.bincount(link_idx,
+                                  weights=(W_SCHOOL * ps[pair_idx]) * entry_w,
+                                  minlength=N_links)
+        return flow_res, flow_biz, flow_school
 
     # ── Stochastic logit ──────────────────────────────────────────────────────
     d_mat  = np.stack([od_dist, od_dist_2, od_dist_3], axis=1)
@@ -168,22 +192,40 @@ def _site_flow_2c(flow_res_dict, flow_biz_dict, node, links):
         m_b = sum(f for (u, v), f in flow_biz_dict.items() if u == node or v == node)
     return m_r, m_b
 
+
+def _site_flow_3c(flow_res_dict, flow_biz_dict, flow_school_dict, node, links):
+    """Return (m_res, m_biz, m_school) for a site defined by node or directed links."""
+    if links:
+        m_r = sum(flow_res_dict.get(tuple(lnk), 0.0)    for lnk in links)
+        m_b = sum(flow_biz_dict.get(tuple(lnk), 0.0)    for lnk in links)
+        m_s = sum(flow_school_dict.get(tuple(lnk), 0.0) for lnk in links)
+    else:
+        m_r = sum(f for (u, v), f in flow_res_dict.items()    if u == node or v == node)
+        m_b = sum(f for (u, v), f in flow_biz_dict.items()    if u == node or v == node)
+        m_s = sum(f for (u, v), f in flow_school_dict.items() if u == node or v == node)
+    return m_r, m_b, m_s
+
 # ── Chi²/N ───────────────────────────────────────────────────────────────────
 
 def compute_chi2(link_flow_dict, label_fn=None,
                  link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS,
                  official_hourly_file=OFFICIAL_HOURLY,
-                 link_flow_biz_dict=None,
-                 slot_fracs_res=None, slot_fracs_biz=None):
+                 link_flow_biz_dict=None, link_flow_school_dict=None,
+                 slot_fracs_res=None, slot_fracs_biz=None, slot_fracs_school=None):
     """
-    Compute chi²/N matching the tuner's two-component formulation.
+    Compute chi²/N matching the tuner's component formulation.
 
-    Two-component mode (link_flow_biz_dict provided):
-      link_flow_dict     — {(u,v): K_res * flow_res}  (residential component, scaled)
-      link_flow_biz_dict — {(u,v): K_biz * flow_biz}  (business component, scaled)
-      slot_fracs_res/biz — {(day_type, hour): f}  from tuned_params.json
-      Uses 216 official hourly obs (count-space Gaussian) from official_hourly_file
-      plus per-session walking obs (count-space Poisson) from link_aadt_file.
+    Three-component mode (link_flow_biz_dict and link_flow_school_dict provided):
+      link_flow_dict        — {(u,v): K_res * flow_res}
+      link_flow_biz_dict    — {(u,v): K_biz * flow_biz}
+      link_flow_school_dict — {(u,v): K_school * flow_school}
+      slot_fracs_res/biz/school — {(day_type, hour): f}
+      N_eff = N − 3·N_slots.
+
+    Two-component mode (link_flow_biz_dict provided, link_flow_school_dict=None):
+      link_flow_dict     — {(u,v): K_res * flow_res}
+      link_flow_biz_dict — {(u,v): K_biz * flow_biz}
+      slot_fracs_res/biz — {(day_type, hour): f}
       N_eff = N − 2·N_slots.  No coupling penalty (pure data fit).
 
     Legacy mode (link_flow_biz_dict=None):
@@ -194,6 +236,11 @@ def compute_chi2(link_flow_dict, label_fn=None,
     Returns (rows, chi2, n_obs, n_eff).
       rows: list of (kind, label, obs, sig, mod, z) sorted by |z| descending.
     """
+    if link_flow_school_dict is not None and link_flow_biz_dict is not None:
+        return _compute_chi2_3c(link_flow_dict, link_flow_biz_dict, link_flow_school_dict,
+                                slot_fracs_res, slot_fracs_biz, slot_fracs_school,
+                                label_fn, link_aadt_file, exclude_links,
+                                official_hourly_file)
     if link_flow_biz_dict is not None:
         return _compute_chi2_2c(link_flow_dict, link_flow_biz_dict,
                                 slot_fracs_res, slot_fracs_biz,
@@ -277,11 +324,91 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
 
     n_obs   = len(rows)
     # N_eff: 2 df per slot (f_res and f_biz each).
-    # Official obs cover all 72 possible (day_type, hour) slots; walking slots are a subset.
-    # Take the union so overlapping slots aren't counted twice.
     if n_official:
         n_slots_seen |= {(dt, h) for dt in range(3) for h in range(24)}
     n_eff   = n_obs - 2 * len(n_slots_seen)
+
+    rows.sort(key=lambda r: abs(r[5]), reverse=True)
+    return rows, chi2, n_obs, n_eff
+
+
+def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
+                     slot_fracs_res, slot_fracs_biz, slot_fracs_school,
+                     label_fn, link_aadt_file, exclude_links,
+                     official_hourly_file):
+    """Three-component chi² (res + biz + school).  N_eff = N − 3·N_slots."""
+    rows  = []
+    chi2  = 0.0
+    excl  = exclude_links or set()
+
+    def _fracs(slot_key):
+        f_r = (slot_fracs_res    or {}).get(slot_key, 1.0 / 24)
+        f_b = (slot_fracs_biz    or {}).get(slot_key, 1.0 / 24)
+        f_s = (slot_fracs_school or {}).get(slot_key, 0.0)
+        return f_r, f_b, f_s
+
+    n_official = 0
+    if official_hourly_file and os.path.exists(official_hourly_file):
+        with open(official_hourly_file) as f:
+            oh = json.load(f)
+        for site_id, site in oh.items():
+            node  = site["node"]
+            links = [tuple(lnk) for lnk in site["links"]] if site["links"] else None
+            m_r, m_b, m_s = _site_flow_3c(flow_res_dict, flow_biz_dict,
+                                           flow_school_dict, node, links)
+            for obs in site["observations"]:
+                dt, h    = obs["time_slot"]
+                sk       = (dt, h)
+                f_r, f_b, f_s = _fracs(sk)
+                count    = float(obs["count"])
+                sigma    = float(obs["sigma"])
+                pred     = m_r * f_r + m_b * f_b + m_s * f_s
+                z        = (pred - count) / sigma if sigma > 0 else 0.0
+                chi2    += z ** 2
+                lbl      = f"{site['label']} h{h:02d}"
+                rows.append(("official", lbl, count, sigma, pred, z))
+                n_official += 1
+
+    n_slots_seen = set()
+    if link_aadt_file and os.path.exists(link_aadt_file):
+        with open(link_aadt_file) as f:
+            link_aadt = json.load(f)["links"]
+        for key, entry in sorted(link_aadt.items()):
+            u, v = map(int, key.split(","))
+            if (u, v) in excl:
+                continue
+            lbl  = label_fn(u, v) if label_fn else f"{u}→{v}"
+            m_r  = flow_res_dict.get((u, v), 0.0)
+            m_b  = flow_biz_dict.get((u, v), 0.0)
+            m_s  = flow_school_dict.get((u, v), 0.0)
+            for sess in entry.get("observations", []):
+                ts   = sess.get("time_slot")
+                neff = float(sess.get("n_eff", 0.5))
+                dur  = float(sess.get("duration_s", 0.0))
+                if ts is None or dur <= 0:
+                    continue
+                sk       = (_DOW_TO_TYPE[ts[0]], ts[1])
+                f_r, f_b, f_s = _fracs(sk)
+                Th       = dur / 3600.0
+                pred     = (m_r * f_r + m_b * f_b + m_s * f_s) * Th
+                z        = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
+                chi2    += z ** 2
+                n_slots_seen.add(sk)
+                m_tot = m_r + m_b + m_s + 1e-30
+                f_eff = (m_r * f_r + m_b * f_b + m_s * f_s) / m_tot
+                if f_eff > 0 and Th > 0:
+                    obs_disp = neff / (Th * f_eff)
+                    sig_disp = math.sqrt(neff) / (Th * f_eff)
+                    mod_disp = pred / f_eff
+                else:
+                    obs_disp = sig_disp = mod_disp = 0.0
+                rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))
+
+    n_obs = len(rows)
+    if n_official:
+        n_slots_seen |= {(dt, h) for dt in range(3) for h in range(24)}
+    # N_eff: 3 df per slot (f_res, f_biz, f_school each consume one df)
+    n_eff = n_obs - 3 * len(n_slots_seen)
 
     rows.sort(key=lambda r: abs(r[5]), reverse=True)
     return rows, chi2, n_obs, n_eff

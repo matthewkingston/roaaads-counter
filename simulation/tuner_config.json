@@ -14,23 +14,31 @@
     ["Dundonald",   "Donaghadee"],
     ["Dundonald",   "Millisle"]
   ],
+  "phi_school_prior": 0.10,
+  "phi_school_std":   0.08,
   "gravity_lambda": {
-    "W_BIZ":     1.0,
-    "P":         2.0,
-    "ALPHA":     0.5,
-    "BETA":      0.5,
-    "P_biz":     2.0,
-    "ALPHA_biz": 0.5,
-    "THETA":     0.5
+    "W_BIZ":      1.0,
+    "P":          2.0,
+    "ALPHA":      0.5,
+    "BETA":       0.5,
+    "P_biz":      2.0,
+    "ALPHA_biz":  0.5,
+    "THETA":      0.5,
+    "W_SCHOOL":   1.0,
+    "P_school":   2.0,
+    "ALPHA_school": 0.5
   },
   "gravity_ref": {
-    "W_BIZ":     1.0,
-    "P":         600.0,
-    "ALPHA":     2.0,
-    "BETA":      1.0,
-    "P_biz":     600.0,
-    "ALPHA_biz": 2.0,
-    "THETA":     1.0
+    "W_BIZ":      1.0,
+    "P":          600.0,
+    "ALPHA":      2.0,
+    "BETA":       1.0,
+    "P_biz":      600.0,
+    "ALPHA_biz":  2.0,
+    "THETA":      1.0,
+    "W_SCHOOL":   1.0,
+    "P_school":   600.0,
+    "ALPHA_school": 2.0
   },
   "cities": {
     "Donaghadee": {

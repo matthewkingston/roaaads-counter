@@ -47,14 +47,20 @@ with open(WEIGHTS_FILE) as f:
 
 node_population      = {int(k): v for k, v in weights["node_population"].items()}
 node_business_demand = {int(k): v for k, v in weights["node_business_demand"].items()}
+node_school_demand   = {int(k): v for k, v in weights.get("node_school_demand", {}).items()}
 
 THETA          = None
 K_res          = None
 K_biz          = None
+K_sch          = None
 P_biz          = None
 ALPHA_biz      = None
-slot_fracs_res = {}
-slot_fracs_biz = {}
+W_SCHOOL       = None
+P_school       = None
+ALPHA_school   = None
+slot_fracs_res    = {}
+slot_fracs_biz    = {}
+slot_fracs_school = {}
 
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
@@ -67,6 +73,9 @@ if os.path.exists(TUNED_PARAMS):
     THETA     = _tp.get("THETA",     None)
     P_biz     = _tp.get("P_biz",     None)
     ALPHA_biz = _tp.get("ALPHA_biz", None)
+    W_SCHOOL     = _tp.get("W_SCHOOL",     None)
+    P_school     = _tp.get("P_school",     None)
+    ALPHA_school = _tp.get("ALPHA_school", None)
     for _nid, _val in _tp.get("external_node_pop", {}).items():
         node_population[int(_nid)] = _val
     for _nid, _val in _tp.get("external_node_biz", {}).items():
@@ -74,14 +83,18 @@ if os.path.exists(TUNED_PARAMS):
     if "K_res" in _tp and "K_biz" in _tp:
         K_res = _tp["K_res"]
         K_biz = _tp["K_biz"]
+        K_sch = _tp.get("K_sch", 0.0)
         slot_fracs_res = {tuple(int(x) for x in k.split(",")): v
                           for k, v in _tp.get("slot_fracs_res", {}).items()}
         slot_fracs_biz = {tuple(int(x) for x in k.split(",")): v
                           for k, v in _tp.get("slot_fracs_biz", {}).items()}
+        slot_fracs_school = {tuple(int(x) for x in k.split(",")): v
+                             for k, v in _tp.get("slot_fracs_school", {}).items()}
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}"
           + (f"  THETA={THETA:.4f}"             if THETA is not None     else "")
-          + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if K_res is not None else "")
+          + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}  K_sch={K_sch:.3e}" if K_res is not None else "")
           + (f"  P_biz={P_biz:.1f}s  ALPHA_biz={ALPHA_biz:.4f}" if P_biz is not None else "")
+          + (f"  W_SCHOOL={W_SCHOOL:.4f}  P_school={P_school:.1f}s" if W_SCHOOL is not None else "")
           + "]")
 
 # ── Assignment ────────────────────────────────────────────────────────────────
@@ -128,19 +141,39 @@ else:
             print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
             THETA = None
 
-w_pop = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
-w_biz = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
+w_pop    = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
+w_biz    = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
+w_school = np.array([node_school_demand.get(int(nid), 0)   for nid in node_ids_arr], dtype=np.float64)
 print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
-N_links = len(link_u)
+N_links  = len(link_u)
+_use_3c  = (K_res is not None and K_sch is not None and K_sch > 0
+            and W_SCHOOL is not None and w_school.sum() > 0)
+_use_2c  = (K_res is not None and not _use_3c)
+
 _kw = dict(BETA=BETA, THETA=THETA,
            P_biz=P_biz, ALPHA_biz=ALPHA_biz,
            od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
            od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3,
            link_weight=link_weight)
-_use_2c = (K_res is not None)
 
-if _use_2c:
+if _use_3c:
+    _kw_3c = dict(**_kw, W_SCHOOL=W_SCHOOL, P_school=P_school,
+                  ALPHA_school=ALPHA_school, w_school=w_school)
+    raw_res, raw_biz, raw_sch = gravity_assign(
+        od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
+        W_BIZ, P, ALPHA, w_pop, w_biz, return_components=True, **_kw_3c)
+    _nonzero = (raw_res + raw_biz + raw_sch) > 0
+    link_flow_res    = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
+                        for k in range(N_links) if _nonzero[k]}
+    link_flow_biz    = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
+                        for k in range(N_links) if _nonzero[k]}
+    link_flow_school = {(int(link_u[k]), int(link_v[k])): raw_sch[k] * K_sch
+                        for k in range(N_links) if _nonzero[k]}
+    link_flow = {lnk: (link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
+                       + link_flow_school.get(lnk, 0.0))
+                 for lnk in set(link_flow_res) | set(link_flow_biz) | set(link_flow_school)}
+elif _use_2c:
     raw_res, raw_biz = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                                       W_BIZ, P, ALPHA, w_pop, w_biz,
                                       return_components=True, **_kw)
@@ -150,12 +183,13 @@ if _use_2c:
                      for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
     link_flow = {lnk: link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
                  for lnk in set(link_flow_res) | set(link_flow_biz)}
+    link_flow_school = None
 else:
     raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                                   W_BIZ, P, ALPHA, w_pop, w_biz, **_kw)
     link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k] * K
                  for k in range(N_links) if raw_flow_arr[k] > 0}
-    link_flow_res = link_flow_biz = None
+    link_flow_res = link_flow_biz = link_flow_school = None
 
 print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
 
@@ -177,20 +211,24 @@ def _link_label(u, v):
 # ── Report ────────────────────────────────────────────────────────────────────
 
 print(f"\nOfficial count sites  (K = {K:.4e}"
-      + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}" if _use_2c else "") + ")")
+      + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}"
+         + (f"  K_sch={K_sch:.3e}" if _use_3c else "")
+         if (_use_2c or _use_3c) else "") + ")")
 print(f"  {'Site':<45s}  {'Modelled':>9s}  {'Observed':>9s}  {'Ratio':>6s}")
 for s in COUNT_SITES:
     f = site_flow(link_flow, s)
     print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
 rows, chi2, n_obs, n_eff = compute_chi2(
-    link_flow_res if _use_2c else link_flow,
+    link_flow_res if (_use_2c or _use_3c) else link_flow,
     label_fn=_link_label,
     link_aadt_file=LINK_AADT,
     exclude_links=EXCLUDE_LINKS,
-    link_flow_biz_dict=link_flow_biz if _use_2c else None,
-    slot_fracs_res=slot_fracs_res if _use_2c else None,
-    slot_fracs_biz=slot_fracs_biz if _use_2c else None,
+    link_flow_biz_dict=link_flow_biz if (_use_2c or _use_3c) else None,
+    link_flow_school_dict=link_flow_school if _use_3c else None,
+    slot_fracs_res=slot_fracs_res if (_use_2c or _use_3c) else None,
+    slot_fracs_biz=slot_fracs_biz if (_use_2c or _use_3c) else None,
+    slot_fracs_school=slot_fracs_school if _use_3c else None,
 )
 print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
@@ -201,14 +239,19 @@ out = {
     "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "BETA": BETA, "K": K,
     "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
 }
-if _use_2c:
+if _use_3c or _use_2c:
     out["K_res"] = K_res
     out["K_biz"] = K_biz
     out["flows_res"] = {f"{u},{v}": flow for (u, v), flow in link_flow_res.items()}
     out["flows_biz"] = {f"{u},{v}": flow for (u, v), flow in link_flow_biz.items()}
+if _use_3c:
+    out["K_sch"] = K_sch
+    out["flows_school"] = {f"{u},{v}": flow for (u, v), flow in link_flow_school.items()}
 with open(flows_path, "w") as f:
     json.dump(out, f)
+_comp_str = ("+ res/biz/school" if _use_3c else ("+ res/biz" if _use_2c else ""))
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
-      + (f"  (+ res/biz components)" if _use_2c else ""))
+      + (f"  ({_comp_str} components)" if _comp_str else ""))
 print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}  BETA={BETA}"
-      + (f"  P_biz={P_biz}  ALPHA_biz={ALPHA_biz}" if P_biz is not None else ""))
+      + (f"  P_biz={P_biz}  ALPHA_biz={ALPHA_biz}" if P_biz is not None else "")
+      + (f"  W_SCHOOL={W_SCHOOL}  P_school={P_school}" if W_SCHOOL is not None else ""))
