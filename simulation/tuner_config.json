@@ -37,8 +37,8 @@
     "ALPHA_biz":  2.0,
     "THETA":      1.0,
     "W_SCHOOL":   1.0,
-    "P_school":   600.0,
-    "ALPHA_school": 2.0
+    "P_school":   180.0,
+    "ALPHA_school": 4.0
   },
   "cities": {
     "Donaghadee": {
