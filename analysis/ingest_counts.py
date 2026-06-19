@@ -31,14 +31,14 @@ HOURLY_FRACTIONS = "analysis/hourly_fractions.csv"
 LOCAL_TZ = pytz.timezone("Europe/London")
 
 # Sessions where GPS snap would land on the wrong link (e.g. observer on the
-# parallel carriageway of a dual one-way road).  Maps session_id → forced
-# directed links.  Takes priority over auto-snap; idempotent on re-ingest.
-MANUAL_LINK_OVERRIDES = {
-    # A20 Kempe Stones eastbound: observer was on the westbound carriageway
-    # and could not access the eastbound side.
-    "e644eae2": {"link_with": [8, 7], "link_against": [7, 8]},
-    "760b0c8e": {"link_with": [8, 7], "link_against": [7, 8]},
-}
+# parallel carriageway of a dual one-way road).  Loaded from JSON so entries
+# can be added via analysis/manual_assign_link.py without editing source.
+MANUAL_OVERRIDES_FILE = "data/manual_link_overrides.json"
+if os.path.exists(MANUAL_OVERRIDES_FILE):
+    with open(MANUAL_OVERRIDES_FILE) as _f:
+        MANUAL_LINK_OVERRIDES = json.load(_f)
+else:
+    MANUAL_LINK_OVERRIDES = {}
 
 
 def parse_iso(s):
