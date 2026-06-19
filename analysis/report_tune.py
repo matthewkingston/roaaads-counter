@@ -185,15 +185,17 @@ def _section_gravity(e, prev_entry, config):
 
     # Determine initial gravity: prefer entry's own field, else previous entry, else grav_ref
     init_src = "run start"
+    _all_grav_keys = ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA",
+                      "W_SCHOOL", "P_school", "ALPHA_school")
+
     if "initial_gravity" in e:
         init_g = e["initial_gravity"]
     elif prev_entry is not None:
-        init_g = {k: prev_entry["params"].get(k)
-                  for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA")}
+        init_g = {k: prev_entry["params"].get(k) for k in _all_grav_keys}
         init_g = {k: v for k, v in init_g.items() if v is not None}
         init_src = f"prev run ({prev_entry['id'][:8]})"
     else:
-        init_g = {k: grav_ref.get(k) for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz")}
+        init_g = {k: grav_ref.get(k) for k in _all_grav_keys}
         init_g = {k: v for k, v in init_g.items() if v is not None}
         init_src = "gravity_ref (no prior run)"
 
@@ -201,8 +203,7 @@ def _section_gravity(e, prev_entry, config):
     lines.append(f"  Initial from: {init_src}")
     lines.append("")
 
-    grav_keys = [k for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA")
-                 if k in params]
+    grav_keys = [k for k in _all_grav_keys if k in params]
     header = (
         f"  {'Param':<8}  {'Initial':>12}  {'Final':>12}  "
         f"{'Δ%':>8}  {'ref':>12}  {'Δ%_ref':>8}  {'pull_ref':>9}"
