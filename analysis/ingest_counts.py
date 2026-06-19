@@ -50,6 +50,16 @@ def _u(n):
     return round(math.sqrt(n + 0.5), 3) if n is not None else None
 
 
+def _road_name(G, link_with, link_against):
+    """Human-readable road name for a link pair; tries both directed edges."""
+    for u, v in [link_with, link_against]:
+        if u is not None and v is not None and G.has_edge(u, v):
+            name = G[u][v][0].get("name")
+            if name:
+                return "; ".join(name) if isinstance(name, list) else name
+    return None
+
+
 # ── Load hourly fraction profile ─────────────────────────────────────────────
 
 hourly_fracs = {}  # (day_of_week, hour) → (mean_fraction, std_fraction)
@@ -110,13 +120,16 @@ else:
 
 # ── Load graph and build undirected edge geometry list ───────────────────────
 
-needs_snap = [
+needs_graph = [
     sid for sid, data in sessions.items()
-    if sid not in processed["sessions"] or "matched_link_with" not in processed["sessions"][sid]
+    if sid not in processed["sessions"]
+    or "matched_link_with" not in processed["sessions"][sid]
+    or "matched_link_name" not in processed["sessions"][sid]
 ]
 
-if needs_snap:
-    print(f"Loading graph for link snapping ({len(needs_snap)} session(s) to snap) …")
+G = None
+if needs_graph:
+    print(f"Loading graph ({len(needs_graph)} session(s) need snap or road name) …")
     G = ox.load_graphml(CONS_GRAPH)
 
     to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
@@ -256,6 +269,7 @@ for sid, data in sessions.items():
             processed["sessions"][sid]["matched_link_against"] = ov["link_against"]
             processed["sessions"][sid]["match_rmse_m"]         = None
             processed["sessions"][sid]["match_method"]         = "manual"
+            processed["sessions"][sid]["matched_link_name"]    = _road_name(G, ov["link_with"], ov["link_against"])
             print(f"  {sid}  MANUAL link {ov['link_with'][0]}→{ov['link_with'][1]} "
                   f"(against: {ov['link_against'][0]}→{ov['link_against'][1]})")
         else:
@@ -265,6 +279,7 @@ for sid, data in sessions.items():
                 processed["sessions"][sid]["matched_link_with"]    = link_with
                 processed["sessions"][sid]["matched_link_against"] = link_against
                 processed["sessions"][sid]["match_rmse_m"]         = rmse_m
+                processed["sessions"][sid]["matched_link_name"]    = _road_name(G, link_with, link_against)
                 print(f"  {sid}  link {link_with[0]}→{link_with[1]} "
                       f"(against: {link_against[0]}→{link_against[1]})  "
                       f"RMSE={rmse_m}m")
@@ -286,6 +301,11 @@ for sid, data in sessions.items():
                     f"Add an entry to MANUAL_LINK_OVERRIDES with the correct link."
                 )
         snap_count += 1
+
+    # Backfill road name for sessions snapped before this field was added
+    if "matched_link_name" not in processed["sessions"][sid] and G is not None:
+        rec = processed["sessions"][sid]
+        rec["matched_link_name"] = _road_name(G, rec.get("matched_link_with"), rec.get("matched_link_against"))
 
     # AADT estimation via hourly fraction profile
     if processed["sessions"][sid].get("aadt_method") != "hourly_fraction_v3":

@@ -63,6 +63,16 @@ def main():
     link_with    = [from_node, to_node]
     link_against = [to_node, from_node]
 
+    def _road_name():
+        for u, v in [link_with, link_against]:
+            if G.has_edge(u, v):
+                name = G[u][v][0].get("name")
+                if name:
+                    return "; ".join(name) if isinstance(name, list) else name
+        return None
+
+    road_name = _road_name()
+
     if with_edge_ok:
         print(f"  With direction    {from_node}→{to_node}: edge exists ✓")
     else:
@@ -131,6 +141,7 @@ def main():
         rec["matched_link_against"] = link_against
         rec["match_rmse_m"]         = None
         rec["match_method"]         = "manual"
+        rec["matched_link_name"]    = road_name
 
         with open(PROCESSED_FILE, "w") as f:
             json.dump(processed, f, indent=2)
