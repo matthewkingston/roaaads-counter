@@ -223,7 +223,7 @@ New sessions added 2026-06-18 (7 sessions): Saratoga Avenue (333↔335), Glenfor
 Current best full-tune: chi²/N = 1.6432 (545 obs, N_eff=401; two-component with coupling).
 W_BIZ=2.409, P=56.8s, ALPHA=3.48. phi=14.8% business fraction.
 mean|z|=0.90  |z|>2: 46  |z|>3: 15.
-**Cache rebuild required** (probit scheme) before next tune — paths.npz from 2026-06-17 uses old k=3 format.
+Probit cache rebuilt 2026-06-19 (N_PASSES=25, CV=0.25). Ready for re-tune.
 
 **Confirmed working:**
 - Temporal profiles separating meaningfully: business peaks weekday h06 earlier than residential (Δ/σ_biz=+1.54 vs −1.39); overnight business fraction higher (deliveries/early commuters).
@@ -242,10 +242,10 @@ mean|z|=0.90  |z|>2: 46  |z|>3: 15.
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
 `through_route_pairs` changes, the road network changes, or `N_PASSES`/`PROBIT_CV` change.
 
-**Current cache format** (probit, as of this worktree): contains `link_weight` (float32,
-per entry), `od_dist` (mean across passes), `probit_n_passes`, `probit_cv`. No `pair_idx_2/3`
-keys — `_has_stoch = False`, THETA not tuned. Rebuild with `build_paths.py` if the road
-network or `through_route_pairs` changes.
+**Current cache format** (probit): contains `link_weight` (float32, per entry), `od_dist`
+(mean across passes), `probit_n_passes`, `probit_cv`. No `pair_idx_2/3` keys —
+`_has_stoch = False`, THETA not tuned. Rebuild with `build_paths.py` if the road network
+or `through_route_pairs` changes.
 
 ### Known model behaviour
 - **Two-component K_biz/W_BIZ degeneracy:** Without the phi prior, the optimizer exploits
