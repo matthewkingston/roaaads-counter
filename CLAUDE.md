@@ -216,27 +216,27 @@ New sessions added 2026-06-18 (7 sessions): Saratoga Avenue (333↔335), Glenfor
 | 2026-06-17 | gravity | 374 | 4 | 1.4286 | + aggregate coupling γ=1/std_f²; K_res=8.96e-05, K_biz=1.29e-05 (phi≈13%) |
 | 2026-06-17 | gravity | 545 | 4 | 1.9582 | + new count data (329 walking obs); sqrt(count) sigma floor active |
 | 2026-06-17 | full | 545 | 26 | 1.6640 | first two-component full tune; phi=16.5%; LowerArds wp +1303% flag |
-| 2026-06-18 | full | 545 | 26 | **1.6432** | NTS-derived component priors; LowerArds wp +645% (improved); Belfast wp +1083% new flag |
+| 2026-06-18 | full | 545 | 26 | 1.6432 | NTS-derived component priors; LowerArds wp +645% (improved); Belfast wp +1083% new flag |
+| 2026-06-19 | full | 559 | 28 | **1.3742** | first probit-cache tune; P=125s, ALPHA=4.10; phi=30.4%; city refs updated |
 
 **Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-18 count ingest onward: 559 observations (216 official hourly + 343 walking, 72 time slots, N_eff=415).
 
-Current best full-tune: chi²/N = 1.6432 (545 obs, N_eff=401; two-component with coupling).
-W_BIZ=2.409, P=56.8s, ALPHA=3.48. phi=14.8% business fraction.
-mean|z|=0.90  |z|>2: 46  |z|>3: 15.
-Probit cache rebuilt 2026-06-19 (N_PASSES=25, CV=0.25). Ready for re-tune.
+Current best full-tune: chi²/N = 1.3742 (559 obs, N_eff=415; two-component with probit cache, run 8a0fe24b).
+W_BIZ=3.123, P=125.1s, ALPHA=4.10. phi=30.4% business fraction.
+mean|z|=0.81  |z|>2: 42  |z|>3: 13.
+Probit cache (N_PASSES=25, CV=0.25) active from 2026-06-19.
 
 **Confirmed working:**
 - Temporal profiles separating meaningfully: business peaks weekday h06 earlier than residential (Δ/σ_biz=+1.54 vs −1.39); overnight business fraction higher (deliveries/early commuters).
 - Site 444 overnight z-scores improved: previously z≈−5 at h04; now worst official-hourly is h06 at z=−3.04.
 - Map layers (residential/business) confirmed — `build_assignment.py` populated `flows_res`/`flows_biz`.
 
-**Outstanding concerns (next full run expected to resolve Belfast/LowerArds blowups):**
-- **P = 56.8s / Belfast wp +1083% / LowerArds wp +645%** — these are coupled. Root cause: gravity_lambda=0.05 was too weak to anchor P; 329 short-range walking obs pulled P from 190s → 57s, making the gravity kernel 65× weaker at Belfast's network distance. External zones compensated by inflating weights. **Fixed:** gravity_lambda raised to 0.5, gravity_ref P updated to 600s (TSNI average ≈10 min). Dundonald ref_pop corrected from placeholder 150k → 15k. Belfast/LowerArds refs not updated — expect blowups to resolve after re-tune.
-- **`tuned_params.json` P/Belfast/LowerArds values are stale** — re-run `reset_gravity_params.py` before the next tune to clear the P=57s starting point, or start from gravity stage with fresh params.
-- Structural outliers: `23→295 Frances Street` (z=+4.38), `2→9 Kempe Stones Road` (z=+4.31), `296→297 Nursery Road` (z=−4.00), `139→137 Portaferry Road` (z=−3.92) — persistent from 2026-06-17 count ingest, not necessarily model failures.
-- `719→325` and `325→719` Messines Road remain persistent (z=−3.90/−3.45/−3.35).
-- `18→21` / `68→21` / `21→68` Hardford Link persistent (z=−2.98/−2.89/−2.72).
-- `73→70` Mill Street severe underprediction (z=−3.41; obs 12,868 vs model 924).
+**Outstanding concerns:**
+- **Belfast wp = 1,822,862 (ref 183,661, +891%)** — persistent external-zone inflation. P improved from 57s → 125s with gravity_lambda=0.5 but Belfast wp still strongly inflated. Further tightening or a Belfast-specific lambda may be warranted.
+- Structural outliers: `22→12 Regent Street` (z=+4.36), `23→295 Frances Street` (z=+3.98), `296→297 Nursery Road` (z=−3.61), `139→137 Portaferry Road` (z=−3.64) — not necessarily model failures.
+- `73→70` Mill Street severe underprediction (z=−3.33; obs 23,644 vs model 2,222).
+- `719→325` / `325→719` Messines Road persistent (z=−3.13/−2.83).
+- `18→21` / `68→21` / `21→68` Hardford Link persistent (z=−3.28/−3.28/−2.78).
 
 ### Paths cache note
 The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
@@ -296,20 +296,19 @@ or `through_route_pairs` changes.
 updating them is something to *consider and discuss*, not an automatic step — the refs anchor
 L2 regularization and changing them shifts the penalty basin for all future runs.
 
-Last updated: 2026-06-18.
-- City refs: 2026-06-16 full run (χ²/N=1.2546, 258 obs) except Dundonald (updated 2026-06-18 from placeholder 150k to 15k, matching consistent tuner finding).
+Last updated: 2026-06-19 (run 8a0fe24b, chi²/N=1.3742, 559 obs).
 - gravity_lambda raised 0.05→0.5, gravity_ref P updated 300→600s (TSNI average journey ≈10 min) to prevent P drifting to unrealistic sub-minute values.
 
 | City | Nodes | ref_pop | ref_wp | Tunable dampings |
 |------|-------|---------|--------|-----------------|
-| Donaghadee | 47 | 190,201 | 7,018 | — |
-| Comber | 65, 617, 618, 620 | 53,571 | 2,996 | 617 (×0.38), 618 (×0.35), 620 (×0.43) |
-| LowerArds | 92 | 84,500 | 5,024 | — |
-| Belfast | 97, 119 | 1,034,719 | 183,661 | 119 (×0.31) |
-| Dundonald | 10000 | 15,000 | 8,000 | — |
-| Bangor | 98, 731 | 95,426 | 21,246 | 98 (×0.39) |
-| Holywood | 99 | 3,652 | 1,203 | — |
-| Millisle | 748, 749 | 2,570 | 498 | 749 (×0.47) |
+| Donaghadee | 47 | 386,202 | 11,093 | — |
+| Comber | 65, 617, 618, 620 | 71,927 | 2,208 | 617 (×0.29), 618 (×0.23), 620 (×0.36) |
+| LowerArds | 92 | 136,840 | 5,850 | — |
+| Belfast | 97, 119 | 517,496 | 1,822,862 | 119 (×0.39) |
+| Dundonald | 10000 | 7,370 | 6,820 | — |
+| Bangor | 98, 731 | 150,387 | 6,862 | 98 (×0.44) |
+| Holywood | 99 | 3,785 | 1,204 | — |
+| Millisle | 748, 749 | 2,525 | 496 | 749 (×0.46) |
 
 ---
 
