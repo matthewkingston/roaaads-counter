@@ -249,10 +249,10 @@ def _section_gravity(e, prev_entry, config):
             lines.append(f"  {'K_sch':<8}  {'':>12}  {K_sch:>12.4e}  "
                          f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*phi_s:.1f}% of K, phi_sch)")
         hp = e.get("tuner_hyperparams", {})
-        phi_p = hp.get("phi_prior", 0.35)
+        phi_p = hp.get("phi_biz_prior", hp.get("phi_prior", 0.35))
         phi_sp = hp.get("phi_school_prior", 0.10)
         lines.append(f"  {'phi_biz':<8}  {'':>12}  {phi_b:>12.4f}  "
-                     f"{'':>8}  {phi_p:>12.4f}  {'':>8}  {'':>9}  (phi_prior)")
+                     f"{'':>8}  {phi_p:>12.4f}  {'':>8}  {'':>9}  (phi_biz_prior)")
         if K_sch is not None:
             lines.append(f"  {'phi_sch':<8}  {'':>12}  {phi_s:>12.4f}  "
                          f"{'':>8}  {phi_sp:>12.4f}  {'':>8}  {'':>9}  (phi_school_prior)")

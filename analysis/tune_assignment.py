@@ -220,8 +220,8 @@ with open(TUNER_CONFIG) as f:
 lam                  = config["lambda"]
 gamma_coupling_scale = config.get("gamma_coupling_scale",
                                    config.get("gamma_coupling", 1.0))
-phi_prior            = config.get("phi_prior",        0.35)
-phi_std              = config.get("phi_std",           0.15)
+phi_prior            = config.get("phi_biz_prior", config.get("phi_prior",  0.35))
+phi_std              = config.get("phi_biz_std",   config.get("phi_std",    0.15))
 phi_school_prior     = config.get("phi_school_prior",  0.10)
 phi_school_std       = config.get("phi_school_std",    0.08)
 city_list    = list(config["cities"].items())
@@ -1343,8 +1343,8 @@ history_entry = {
     "chi2_per_n": round(chi2_per_n, 4),
     "params":    params,
     "tuner_hyperparams": {
-        "phi_prior":            phi_prior,
-        "phi_std":              phi_std,
+        "phi_biz_prior":        phi_prior,
+        "phi_biz_std":          phi_std,
         "phi_school_prior":     phi_school_prior,
         "phi_school_std":       phi_school_std,
         "gamma_coupling_scale": gamma_coupling_scale,
