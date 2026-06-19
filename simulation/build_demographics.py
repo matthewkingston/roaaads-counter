@@ -799,6 +799,8 @@ for node_id, (nlat, nlon, dist, deg) in boundary_nodes_map.items():
     zone_name = ez[0] or "local access" if ez else "—"
     damping = ez[5] if ez else 1.0
     damp_str = f" ×{damping}" if damping < 1.0 else ""
+    node_sch = node_school_demand.get(node_id, 0)
+    _sch_str = f"<br>school pupils: {node_sch:.0f}" if node_sch > 0 else ""
     folium.RegularPolygonMarker(
         location=[nlat, nlon],
         number_of_sides=4, radius=6, rotation=45,
@@ -808,6 +810,7 @@ for node_id, (nlat, nlon, dist, deg) in boundary_nodes_map.items():
             f"degree={deg} · {dist:.0f}m from centre<br>"
             f"ext. pop: {node_pop:,.0f}<br>"
             f"ext. workplace: {node_biz:,.0f}"
+            f"{_sch_str}"
         ),
     ).add_to(boundary_fg)
 boundary_fg.add_to(m)
@@ -817,6 +820,8 @@ interior_fg = folium.FeatureGroup(name=f"Interior nodes ({len(interior_nodes_map
 for node_id, (nlat, nlon, dist, deg) in interior_nodes_map.items():
     node_pop = node_population.get(node_id, 0)
     node_biz = node_business_demand.get(node_id, 0)
+    node_sch = node_school_demand.get(node_id, 0)
+    _sch_str = f"<br>school pupils: {node_sch:.1f}" if node_sch > 0 else ""
     folium.CircleMarker(
         location=[nlat, nlon], radius=3,
         color="#1a73e8", fill=True, fill_color="#1a73e8", fill_opacity=0.8, weight=1,
@@ -824,6 +829,7 @@ for node_id, (nlat, nlon, dist, deg) in interior_nodes_map.items():
             f"Node {node_id} · degree={deg} · {dist:.0f}m from centre<br>"
             f"est. pop: {node_pop:.1f}<br>"
             f"workplace pop: {node_biz:.1f}"
+            f"{_sch_str}"
         ),
     ).add_to(interior_fg)
 interior_fg.add_to(m)
@@ -931,6 +937,7 @@ if _park_wgs is not None:
     print(f"Added parking layer ({len(_park_wgs)} polygons)")
 
 # 5g. POI layer — amenity/shop/office features used for workplace allocation
+#     (school POIs excluded — shown in their own layer below)
 _poi_wgs = None
 if pois_utm is not None:  # full run: set in else branch above
     _poi_wgs = pois_utm.to_crs("EPSG:4326")
@@ -943,16 +950,23 @@ elif os.path.exists(POI_CACHE):  # --map-only: reload and re-filter from cache
     _poi_wgs = _pp
 
 if _poi_wgs is not None:
+    # Separate school POIs before building layers
+    _school_mask = (_poi_wgs["amenity"].isin(_SCHOOL_TAGS)
+                    if "amenity" in _poi_wgs.columns
+                    else pd.Series(False, index=_poi_wgs.index))
+    _school_pois_wgs = _poi_wgs[_school_mask].copy()
+    _biz_pois_wgs    = _poi_wgs[~_school_mask].copy()
+
     _POI_COLOURS = {"amenity": "#e67e22", "shop": "#27ae60", "office": "#2980b9"}
-    poi_fg = folium.FeatureGroup(name=f"POIs — workplace allocation ({len(_poi_wgs)})", show=False)
-    for _, _row in _poi_wgs.iterrows():
+    poi_fg = folium.FeatureGroup(name=f"POIs — workplace allocation ({len(_biz_pois_wgs)})", show=False)
+    for _, _row in _biz_pois_wgs.iterrows():
         _kind, _val, _color = None, None, "#888888"
         for _col in ("amenity", "shop", "office"):
-            if _col in _poi_wgs.columns and pd.notna(_row.get(_col)):
+            if _col in _biz_pois_wgs.columns and pd.notna(_row.get(_col)):
                 _kind, _val, _color = _col, _row[_col], _POI_COLOURS[_col]
                 break
         _name = ""
-        if "name" in _poi_wgs.columns and pd.notna(_row.get("name")):
+        if "name" in _biz_pois_wgs.columns and pd.notna(_row.get("name")):
             _name = str(_row["name"])
         _type_str = f"{_kind}: {_val}" if _kind else "unknown"
         _tip = f"<b>{_name}</b><br>{_type_str}" if _name else f"<b>{_type_str}</b>"
@@ -963,7 +977,42 @@ if _poi_wgs is not None:
             tooltip=folium.Tooltip(_tip),
         ).add_to(poi_fg)
     poi_fg.add_to(m)
-    print(f"Added POI layer ({len(_poi_wgs)} POIs: orange=amenity, green=shop, blue=office)")
+    print(f"Added POI layer ({len(_biz_pois_wgs)} non-school POIs: orange=amenity, green=shop, blue=office)")
+
+    # 5h. School POI layer — schools with enrollment, green circles, OFF by default
+    if len(_school_pois_wgs) > 0:
+        school_poi_fg = folium.FeatureGroup(name=f"Schools — OSM ({len(_school_pois_wgs)})", show=False)
+        for _, _row in _school_pois_wgs.iterrows():
+            _amenity = _row.get("amenity") if "amenity" in _school_pois_wgs.columns else None
+            _name = ""
+            if "name" in _school_pois_wgs.columns and pd.notna(_row.get("name")):
+                _name = str(_row["name"])
+            # Resolve enrollment: OSM capacity if present and numeric, else fallback
+            _cap_raw = _row.get("capacity") if "capacity" in _school_pois_wgs.columns else None
+            if pd.notna(_cap_raw):
+                try:
+                    _enroll = int(float(_cap_raw))
+                    _enroll_src = "OSM capacity"
+                except (ValueError, TypeError):
+                    _enroll = SCHOOL_ENROLL_FALLBACK.get(_amenity, 300)
+                    _enroll_src = "fallback"
+            else:
+                _enroll = SCHOOL_ENROLL_FALLBACK.get(_amenity, 300)
+                _enroll_src = "fallback"
+            _label = _name or str(_amenity or "school")
+            _tip = (
+                f"<b>{_label}</b><br>"
+                f"type: {_amenity}<br>"
+                f"enrollment: {_enroll} pupils ({_enroll_src})"
+            )
+            folium.CircleMarker(
+                location=[_row.geometry.y, _row.geometry.x],
+                radius=7,
+                color="#1a7a3c", fill=True, fill_color="#2ecc71", fill_opacity=0.85, weight=1.5,
+                tooltip=folium.Tooltip(_tip),
+            ).add_to(school_poi_fg)
+        school_poi_fg.add_to(m)
+        print(f"Added school POI layer ({len(_school_pois_wgs)} schools)")
 
 # ── Optional flow layers (loaded from newtownards_flows.json if it exists) ────
 _flows_path = f"{OUT_DIR}/newtownards_flows.json"
