@@ -1,8 +1,8 @@
 {
   "lambda": 1.0,
   "gamma_coupling_scale": 1.0,
-  "phi_prior": 0.44,
-  "phi_std":   0.10,
+  "phi_biz_prior": 0.44,
+  "phi_biz_std":   0.10,
   "through_route_pairs": [
     ["Comber",      "Donaghadee"],
     ["Comber",      "LowerArds"],
