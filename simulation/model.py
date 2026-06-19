@@ -45,7 +45,6 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                    BETA=1.0, THETA=None,
                    P_biz=None, ALPHA_biz=None, BETA_biz=None,
                    W_SCHOOL=None, P_school=None, ALPHA_school=None, w_school=None,
-                   w_pop_school=None,
                    od_dist_2=None, pair_idx_2=None, link_idx_2=None,
                    od_dist_3=None, pair_idx_3=None, link_idx_3=None,
                    link_weight=None,
@@ -84,13 +83,9 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
     _A_biz    = ALPHA_biz if ALPHA_biz is not None else ALPHA
     _B_biz    = BETA_biz  if BETA_biz  is not None else BETA
 
-    _has_school  = (w_school is not None and W_SCHOOL is not None and W_SCHOOL > 0)
-    _P_sch       = P_school    if P_school    is not None else P
-    _A_sch       = ALPHA_school if ALPHA_school is not None else ALPHA
-    # w_pop_school: population array used as school trip *production* weight.
-    # Callers may pass an internal-only version (external nodes zeroed) to prevent
-    # large external-zone populations from dominating the pop×school cross-term.
-    _w_pop_sch = w_pop_school if w_pop_school is not None else w_pop
+    _has_school = (w_school is not None and W_SCHOOL is not None and W_SCHOOL > 0)
+    _P_sch  = P_school    if P_school    is not None else P
+    _A_sch  = ALPHA_school if ALPHA_school is not None else ALPHA
 
     if not _has_stoch:
         u    = od_dist / P
@@ -129,7 +124,7 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         else:
             u_s      = od_dist / _P_sch
             kern_sch = (_A_sch + BETA) * u_s**BETA / (_A_sch + BETA * u_s**(_A_sch + BETA))
-        ps = (_w_pop_sch[od_src] * w_school[od_dst] + w_school[od_src] * _w_pop_sch[od_dst]) * kern_sch
+        ps = (w_pop[od_src] * w_school[od_dst] + w_school[od_src] * w_pop[od_dst]) * kern_sch
         flow_school = np.bincount(link_idx,
                                   weights=(W_SCHOOL * ps[pair_idx]) * entry_w,
                                   minlength=N_links)
