@@ -26,7 +26,6 @@ Start OSRM with:
 
 import json, math, time, sys, urllib.request, urllib.parse, urllib.error
 import osmnx as ox
-import pyproj
 
 CENSUS_ZONES_FILE = "data/census_zones.json"
 WEIGHTS_FILE      = "simulation/node_weights.json"
@@ -54,8 +53,9 @@ G = ox.load_graphml(CONS_GRAPH)
 boundary_nodes = []
 for nid in boundary_node_ids:
     nd = G.nodes[nid]
-    to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
-    lon, lat = to_wgs.transform(float(nd["x"]), float(nd["y"]))
+    # osmnx graphml stores x=longitude, y=latitude in WGS84 — no transform needed
+    lon = float(nd["x"])
+    lat = float(nd["y"])
     boundary_nodes.append({"id": int(nid), "lat": lat, "lon": lon})
 boundary_nodes.sort(key=lambda x: x["id"])
 print(f"  {len(boundary_nodes)} boundary nodes with positions")
