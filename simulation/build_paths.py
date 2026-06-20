@@ -88,7 +88,8 @@ with open(EXTERNAL_LINKS) as f:
 ext_boundary_links     = ext_data["ext_boundary_links"]      # X→B
 bnd_external_links     = ext_data["bnd_external_links"]      # B→X
 boundary_boundary_links = ext_data["boundary_boundary_links"] # B1→B2 exterior
-allowed_through_pairs  = {(p[0], p[1]) for p in ext_data["allowed_through_pairs"]}
+allowed_through_pairs  = {int(k): set(v) for k, v in ext_data["allowed_through_pairs"].items()}
+_EMPTY_SET = frozenset()
 boundary_node_ids      = set(ext_data["boundary_node_ids"])
 
 print(f"  {len(ext_boundary_links)} X→B links")
@@ -231,7 +232,7 @@ for src_i, src_nid in enumerate(all_node_ids):
 
         # External→external: only allowed through-route pairs
         if src_is_ext and dst_i in ext_idx_set:
-            if (src_nid, dst_nid) not in allowed_through_pairs:
+            if dst_nid not in allowed_through_pairs.get(src_nid, _EMPTY_SET):
                 continue
 
         d_net = dist_matrix[src_i, dst_i]
