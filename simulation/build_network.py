@@ -64,9 +64,11 @@ ox.save_graphml(G, f"{OUT_DIR}/newtownards_network.graphml")
 # boundary nodes via OSRM-derived links instead.
 
 if os.path.exists(CENSUS_ZONES_FILE):
-    from shapely.geometry import Polygon as _Poly
+    from shapely.geometry import Point as _Pt, Polygon as _Poly
     _core_poly_wgs = _Poly(_cz["core_polygon"])
-    G_core = ox.truncate.truncate_graph_polygon(G, _core_poly_wgs, retain_all=False)
+    _core_nodes = [n for n, d in G.nodes(data=True)
+                   if _core_poly_wgs.contains(_Pt(d["x"], d["y"]))]
+    G_core = G.subgraph(_core_nodes).copy()
     print(f"\nClipped to core polygon: {G.number_of_nodes()} → {G_core.number_of_nodes()} nodes")
 else:
     G_core = G
