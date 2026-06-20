@@ -13,9 +13,9 @@ Queries a local OSRM instance to determine:
 
 Requires:
   - data/census_zones.json          (from build_census_zones.py)
-  - simulation/node_weights.json    (from build_demographics.py — needs boundary_node_ids)
-  - simulation/newtownards_consolidated.graphml (from build_network.py)
-  - Local OSRM instance at OSRM_URL (car profile, NI extract)
+  - simulation/node_weights.json    (from build_demographics.py — needs boundary_node_ids + internal_node_ids)
+  - simulation/newtownards_network.graphml (from build_network.py — raw graph, OSM node IDs + WGS84 coords)
+  - Local OSRM instance at OSRM_HOST:OSRM_PORT (car profile, NI extract)
 
 Output: data/external_links.json
 
@@ -29,7 +29,7 @@ import osmnx as ox
 
 CENSUS_ZONES_FILE = "data/census_zones.json"
 WEIGHTS_FILE      = "simulation/node_weights.json"
-CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
+RAW_GRAPH         = "simulation/newtownards_network.graphml"
 OUTPUT_FILE       = "data/external_links.json"
 OSRM_HOST         = "localhost"
 OSRM_PORT         = 5000
@@ -45,24 +45,20 @@ print(f"  {len(external_nodes)} external nodes")
 print("Loading node weights …")
 with open(WEIGHTS_FILE) as f:
     weights = json.load(f)
-boundary_node_ids = set(weights["boundary_node_ids"])
-print(f"  {len(boundary_node_ids)} boundary nodes")
+boundary_node_ids = set(weights["boundary_node_ids"])   # OSM node IDs
+internal_node_ids = set(weights["internal_node_ids"])   # OSM node IDs
+print(f"  {len(boundary_node_ids)} boundary nodes, {len(internal_node_ids)} internal nodes")
 
-print("Loading consolidated graph …")
-G = ox.load_graphml(CONS_GRAPH)
-# Get lat/lon positions of boundary nodes
+# Raw graph has OSM node IDs and WGS84 coordinates (x=lon, y=lat) — no transform needed.
+# The consolidated graph renumbers nodes and cannot be used here.
+print("Loading raw graph for boundary node positions …")
+G_raw = ox.load_graphml(RAW_GRAPH)
 boundary_nodes = []
 for nid in boundary_node_ids:
-    nd = G.nodes[nid]
-    # osmnx graphml stores x=longitude, y=latitude in WGS84 — no transform needed
-    lon = float(nd["x"])
-    lat = float(nd["y"])
-    boundary_nodes.append({"id": int(nid), "lat": lat, "lon": lon})
+    nd = G_raw.nodes[nid]
+    boundary_nodes.append({"id": int(nid), "lat": float(nd["y"]), "lon": float(nd["x"])})
 boundary_nodes.sort(key=lambda x: x["id"])
-print(f"  {len(boundary_nodes)} boundary nodes with positions")
-
-# Set of all internal (including boundary) node IDs — used for routing checks
-all_node_ids = set(int(n) for n in G.nodes())
+print(f"  {len(boundary_nodes)} boundary nodes with WGS84 positions")
 
 # ── OSRM helper ────────────────────────────────────────────────────────────────
 
@@ -242,7 +238,7 @@ for bi, bnode in enumerate(boundary_nodes):
         first_next = node_seq[1] if len(node_seq) > 1 else None
         if first_next is None:
             continue
-        if first_next in all_node_ids:
+        if first_next in internal_node_ids:
             # Route immediately re-enters core — B is not the natural exit for X.
             continue
 
@@ -281,7 +277,7 @@ for b1 in boundary_nodes:
 
         # Check if first node after B1 is outside the internal network
         first_next = node_seq[1]
-        if first_next in all_node_ids:
+        if first_next in internal_node_ids:
             # Route goes through the core — no external shortcut needed
             continue
 

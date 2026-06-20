@@ -157,6 +157,7 @@ if "--map-only" in sys.argv:
     node_parking_equiv   = {int(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
     node_school_demand   = {int(k): v for k, v in _w.get("node_school_demand", {}).items()}
     _boundary_ids        = set(int(x) for x in _w.get("boundary_node_ids", []))
+    _boundary_ids_cons   = set(int(x) for x in _w.get("boundary_node_ids_cons", _w.get("boundary_node_ids", [])))
     print("Loading DZ boundaries …")
     dz_final = gpd.read_file(f"{OUT_DIR}/newtownards_demographics.geojson")
     print(f"  {len(dz_final)} Data Zones · {len(node_ids)} nodes")
@@ -649,25 +650,36 @@ else:
           f"  ({_n_capacity_used} from OSM capacity, {_n_school - _n_capacity_used} from fallback)")
 
     # ── Auto-detect boundary nodes from core polygon ──────────────────────────
-    # Boundary nodes = internal (in-core) nodes with at least one edge going
-    # to a node outside the core polygon.
+    # Use the raw (pre-consolidation) graph so boundary node IDs are real OSM
+    # node IDs — these match the IDs returned by OSRM annotation.nodes.
+    # The consolidated graph renumbers nodes and cannot be used for OSRM matching.
     if _census_zones is not None:
-        from shapely.geometry import shape as _shape
-        _core_ring  = _census_zones["core_polygon"]
-        _core_poly_wgs = __import__("shapely.geometry", fromlist=["Polygon"]).Polygon(_core_ring)
-        _core_poly_utm = __import__("shapely.ops", fromlist=["transform"]).transform(
-            lambda x, y: transformer_to_utm.transform(x, y), _core_poly_wgs
-        )
-        _internal_ids = {n for n, (x, y) in zip(node_ids, node_coords_utm)
-                         if _core_poly_utm.contains(Point(x, y))}
-        _boundary_ids = {u for u, v in G_cons.edges()
+        from shapely.geometry import Polygon as _Polygon
+        _G_raw_bd = ox.load_graphml(f"{OUT_DIR}/newtownards_network.graphml")
+        _core_poly_wgs = _Polygon(_census_zones["core_polygon"])
+        # raw graph: x=lon, y=lat in WGS84
+        _internal_ids = {n for n, d in _G_raw_bd.nodes(data=True)
+                         if _core_poly_wgs.contains(Point(float(d["x"]), float(d["y"])))}
+        _boundary_ids = {u for u, v in _G_raw_bd.edges()
                          if u in _internal_ids and v not in _internal_ids}
+        # Map OSM boundary IDs → consolidated IDs for map display and build_paths.py
+        _osmid_to_cons = {}
+        for _cid, _cdata in G_cons.nodes(data=True):
+            _osmids = _cdata.get("osmid", _cid)
+            if not isinstance(_osmids, list):
+                _osmids = [_osmids]
+            for _oid in _osmids:
+                _osmid_to_cons[int(_oid)] = _cid
+        _boundary_ids_cons = {_osmid_to_cons[o] for o in _boundary_ids if o in _osmid_to_cons}
         print(f"Auto-detected {len(_internal_ids)} internal nodes, "
-              f"{len(_boundary_ids)} boundary nodes from core polygon")
+              f"{len(_boundary_ids)} boundary nodes from core polygon (raw graph OSM IDs)")
+        print(f"  {len(_boundary_ids_cons)} boundary nodes map to consolidated graph")
     else:
         print(f"WARNING: {CENSUS_ZONES_FILE} not found — boundary_node_ids will be empty.")
         print(f"  Run build_census_zones.py first.")
         _boundary_ids = set()
+        _boundary_ids_cons = set()
+        _internal_ids = set()
 
     # ── Add external node weights from census data ────────────────────────────
     if _census_zones is not None:
@@ -689,7 +701,9 @@ else:
             "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             "node_parking_equiv":   {str(k): v for k, v in node_parking_equiv.items()},
-            "boundary_node_ids":    sorted(_boundary_ids),
+            "boundary_node_ids":      sorted(_boundary_ids),
+            "boundary_node_ids_cons": sorted(_boundary_ids_cons),
+            "internal_node_ids":      sorted(_internal_ids),
         }, f)
     print(f"Saved node weights → {weights_path}"
           f"  ({len(node_ids)} internal + {len(ext_nodes)} external nodes)")
@@ -760,7 +774,7 @@ for htype in all_types:
 
 import math
 
-BOUNDARY_NODE_IDS = _boundary_ids
+BOUNDARY_NODE_IDS = _boundary_ids_cons  # consolidated IDs for map display
 
 boundary_nodes_map = {}   # node_id → (wgs_lat, wgs_lon, dist, degree)
 interior_nodes_map = {}
