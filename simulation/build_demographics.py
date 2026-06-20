@@ -836,7 +836,7 @@ if _census_zones is not None:
     from shapely.geometry import Polygon as _CorePoly
     _core_poly_wgs_map = _CorePoly(_census_zones["core_polygon"])
     _dz_all_wgs = gpd.read_file(DZ_BOUNDARY_FILE).to_crs("EPSG:4326")
-    _dz_core_map = _dz_all_wgs[_dz_all_wgs.geometry.intersects(_core_poly_wgs_map)].copy()
+    _dz_core_map = _dz_all_wgs[_dz_all_wgs.geometry.centroid.within(_core_poly_wgs_map)].copy()
     core_dz_fg = folium.FeatureGroup(
         name=f"Core area DZs — from census_zones.json ({len(_dz_core_map)})", show=False)
     for _, _row in _dz_core_map.iterrows():
