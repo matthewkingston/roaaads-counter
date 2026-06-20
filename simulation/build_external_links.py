@@ -68,10 +68,10 @@ all_node_ids = set(int(n) for n in G.nodes())
 
 _request_count = 0
 _t_start = time.time()
-_conn: http.client.HTTPConnection | None = None
+_conn = None
 
 
-def _get_conn() -> http.client.HTTPConnection:
+def _get_conn():
     global _conn
     if _conn is None:
         _conn = http.client.HTTPConnection(OSRM_HOST, OSRM_PORT, timeout=15)
