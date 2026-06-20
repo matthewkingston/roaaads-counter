@@ -24,14 +24,15 @@ Start OSRM with:
     osrm-routed --algorithm mld /data/northern-ireland.osrm
 """
 
-import json, math, time, sys, urllib.request, urllib.parse, urllib.error
+import json, math, time, sys, http.client
 import osmnx as ox
 
 CENSUS_ZONES_FILE = "data/census_zones.json"
 WEIGHTS_FILE      = "simulation/node_weights.json"
 CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
 OUTPUT_FILE       = "data/external_links.json"
-OSRM_URL          = "http://localhost:5000"
+OSRM_HOST         = "localhost"
+OSRM_PORT         = 5000
 
 # ── Load inputs ────────────────────────────────────────────────────────────────
 
@@ -67,10 +68,18 @@ all_node_ids = set(int(n) for n in G.nodes())
 
 _request_count = 0
 _t_start = time.time()
+_conn: http.client.HTTPConnection | None = None
+
+
+def _get_conn() -> http.client.HTTPConnection:
+    global _conn
+    if _conn is None:
+        _conn = http.client.HTTPConnection(OSRM_HOST, OSRM_PORT, timeout=15)
+    return _conn
 
 
 def osrm_route(lat1, lon1, lat2, lon2, retries=3):
-    """Query OSRM route from (lat1,lon1) to (lat2,lon2).
+    """Query OSRM route from (lat1,lon1) to (lat2,lon2) using a persistent connection.
 
     Returns (node_sequence, total_duration_s, annotation_durations, snaps)
     or None if no route found.
@@ -79,19 +88,22 @@ def osrm_route(lat1, lon1, lat2, lon2, retries=3):
       annotation_durations— per-step durations (len = len(node_sequence)-1)
       snaps               — list of {distance: metres from input to snap point}
     """
-    global _request_count
-    url = (f"{OSRM_URL}/route/v1/driving/"
-           f"{lon1},{lat1};{lon2},{lat2}"
-           f"?annotations=nodes,duration&overview=false")
+    global _request_count, _conn
+    path = (f"/route/v1/driving/"
+            f"{lon1},{lat1};{lon2},{lat2}"
+            f"?annotations=nodes,duration&overview=false")
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(url, timeout=15) as r:
-                data = json.loads(r.read())
+            conn = _get_conn()
+            conn.request("GET", path)
+            r = conn.getresponse()
+            body = r.read()
             _request_count += 1
             if _request_count % 500 == 0:
                 elapsed = time.time() - _t_start
                 print(f"  {_request_count} queries in {elapsed:.0f}s "
                       f"({_request_count/elapsed:.0f} q/s)")
+            data = json.loads(body)
             if data.get("code") != "Ok":
                 return None
             leg = data["routes"][0]["legs"][0]
@@ -100,9 +112,10 @@ def osrm_route(lat1, lon1, lat2, lon2, retries=3):
             total = data["routes"][0]["duration"]
             snaps = [{"distance": w.get("distance", 0)} for w in data["waypoints"]]
             return nodes, total, durs, snaps
-        except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
+        except (http.client.HTTPException, ConnectionError, json.JSONDecodeError, KeyError):
+            _conn = None  # force reconnect on next call
             if attempt < retries - 1:
-                time.sleep(0.5)
+                time.sleep(0.1)
             else:
                 return None
 
@@ -124,19 +137,19 @@ def _duration_up_to_index(annotation_durs, idx):
 
 # ── Check OSRM is reachable ────────────────────────────────────────────────────
 
-print(f"\nChecking OSRM at {OSRM_URL} …")
+print(f"\nChecking OSRM at {OSRM_HOST}:{OSRM_PORT} …")
 try:
     test = osrm_route(54.5933, -5.6960, 54.5933, -5.6960)
 except Exception:
     test = None
 if test is None:
-    # Simple connectivity test
     try:
-        with urllib.request.urlopen(f"{OSRM_URL}/route/v1/driving/-5.696,54.593;-5.696,54.593",
-                                    timeout=5) as r:
-            pass
+        c = http.client.HTTPConnection(OSRM_HOST, OSRM_PORT, timeout=5)
+        c.request("GET", "/route/v1/driving/-5.696,54.593;-5.696,54.593")
+        c.getresponse().read()
+        c.close()
     except Exception as e:
-        print(f"ERROR: Cannot reach OSRM at {OSRM_URL}: {e}")
+        print(f"ERROR: Cannot reach OSRM at {OSRM_HOST}:{OSRM_PORT}: {e}")
         print("Start OSRM with:")
         print("  docker run -t -i -p 5000:5000 -v $(pwd):/data osrm/osrm-backend \\")
         print("    osrm-routed --algorithm mld /data/northern-ireland.osrm")
