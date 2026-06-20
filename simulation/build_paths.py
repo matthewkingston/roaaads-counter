@@ -155,23 +155,30 @@ print(f"  {N_links} road links")
 # External edges (X→B, B→X, boundary→boundary exterior shortcuts)
 # These are NOT added to link_list (they don't appear in flow output),
 # but ARE included in the adjacency matrix for routing.
-rows_ext, cols_ext, data_ext = [], [], []
+# Deduplicate by (i, j) keeping minimum duration: if two OSM boundary nodes
+# B1 and B2 were consolidated into the same node C, both X→B1 and X→B2
+# translate to X→C, and csr_matrix would otherwise sum their durations.
+_ext_edge_min = {}   # (i, j) → min duration_s
 
 for lnk in ext_boundary_links:
     xi = node_to_idx.get(lnk["from_ext"])
     b_cons = _osm_to_cons.get(lnk["to_boundary"])
     bi = node_to_idx.get(b_cons) if b_cons is not None else None
     if xi is not None and bi is not None:
-        rows_ext.append(xi); cols_ext.append(bi)
-        data_ext.append(float(lnk["duration_s"]))
+        key = (xi, bi)
+        d = float(lnk["duration_s"])
+        if key not in _ext_edge_min or d < _ext_edge_min[key]:
+            _ext_edge_min[key] = d
 
 for lnk in bnd_external_links:
     b_cons = _osm_to_cons.get(lnk["from_boundary"])
     bi = node_to_idx.get(b_cons) if b_cons is not None else None
     xi = node_to_idx.get(lnk["to_ext"])
     if bi is not None and xi is not None:
-        rows_ext.append(bi); cols_ext.append(xi)
-        data_ext.append(float(lnk["duration_s"]))
+        key = (bi, xi)
+        d = float(lnk["duration_s"])
+        if key not in _ext_edge_min or d < _ext_edge_min[key]:
+            _ext_edge_min[key] = d
 
 for lnk in boundary_boundary_links:
     f_cons = _osm_to_cons.get(lnk["from"])
@@ -179,10 +186,15 @@ for lnk in boundary_boundary_links:
     i = node_to_idx.get(f_cons) if f_cons is not None else None
     j = node_to_idx.get(t_cons) if t_cons is not None else None
     if i is not None and j is not None:
-        rows_ext.append(i); cols_ext.append(j)
-        data_ext.append(float(lnk["duration_s"]))
+        key = (i, j)
+        d = float(lnk["duration_s"])
+        if key not in _ext_edge_min or d < _ext_edge_min[key]:
+            _ext_edge_min[key] = d
 
-print(f"  {len(data_ext)} external edges (X↔B + boundary shortcuts)")
+rows_ext = [i for i, j in _ext_edge_min]
+cols_ext = [j for i, j in _ext_edge_min]
+data_ext = [d for d in _ext_edge_min.values()]
+print(f"  {len(data_ext)} external edges after dedup (X↔B + boundary shortcuts)")
 
 # Combined adjacency matrix
 all_rows = rows + rows_ext
