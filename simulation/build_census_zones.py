@@ -2,8 +2,9 @@
 Build the hierarchical census-area external zone network for Newtownards.
 
 Classifies all of NI into a three-level hierarchy:
-  - Core area  : union of DZs whose parent SDZ intersects CORE_RADIUS
-  - SDZ nodes  : SDZs within SDZ_ZONE_RADIUS that are not in the core
+  - Core area  : union of DZs that directly intersect CORE_RADIUS
+  - DZ nodes   : non-core DZs from partially-core SDZs (individual DZ-level external nodes)
+  - SDZ nodes  : SDZs within SDZ_ZONE_RADIUS with no core DZs
   - DEA nodes  : DEAs outside SDZ_ZONE_RADIUS (represented by a single centroid)
 
 Population-weighted centroids are computed for each external (SDZ/DEA) node
@@ -153,15 +154,17 @@ if sdz_code_col is None:
     sdz_code_col = candidate[0] if candidate else sdz.columns[0]
     print(f"  SDZ code column inferred: '{sdz_code_col}'")
 
-# ── Determine which SDZs intersect each zone circle ──────────────────────────
+# ── Core DZ classification (DZ-level, not SDZ-level) ─────────────────────────
+# Using DZ polygon intersection avoids pulling in whole SDZs whose boundary
+# merely clips the core circle.
 
-sdz["in_core"]     = sdz.geometry.intersects(core_circle)
+dz["is_core"]    = dz.geometry.intersects(core_circle)
+core_dz_codes    = set(dz.loc[dz["is_core"], "DZ2021_cd"])
+
 sdz["in_sdz_zone"] = sdz.geometry.intersects(sdz_circle)
-
-n_core_sdz = sdz["in_core"].sum()
 n_sdz_zone = sdz["in_sdz_zone"].sum()
-print(f"\nSDZ classification:")
-print(f"  {n_core_sdz} SDZs intersect CORE_RADIUS  ({CORE_RADIUS}m)")
+print(f"\nDZ/SDZ classification:")
+print(f"  {dz['is_core'].sum()} DZs directly intersect CORE_RADIUS ({CORE_RADIUS}m) → core area")
 print(f"  {n_sdz_zone} SDZs intersect SDZ_ZONE_RADIUS ({SDZ_ZONE_RADIUS}m)")
 
 # ── Determine which DEAs intersect the SDZ zone ──────────────────────────────
@@ -198,18 +201,28 @@ if not sdz_to_dea:
     joined2 = gpd.sjoin(sdz_centroids, dea[[dea_code_col, "geometry"]], how="left", predicate="within")
     sdz_to_dea = joined2.set_index(sdz_code_col)[dea_code_col].to_dict()
 
+# Which SDZs have at least one core DZ? (used for external node classification)
+_sdz_has_core = {}
+for dz_cd, sdz_cd in dz_to_sdz.items():
+    if dz_cd in core_dz_codes:
+        _sdz_has_core[sdz_cd] = True
+sdz["has_core_dz"] = sdz[sdz_code_col].map(_sdz_has_core).fillna(False)
+
 # ── Build core area polygon ────────────────────────────────────────────────────
 
-core_sdz_codes = set(sdz.loc[sdz["in_core"], sdz_code_col].tolist())
-
-# Find all DZs whose parent SDZ is in the core
-core_dz_mask = dz["DZ2021_cd"].map(dz_to_sdz).isin(core_sdz_codes)
-core_dz_gdf  = dz[core_dz_mask]
+core_dz_gdf  = dz[dz["is_core"]]
 core_polygon  = unary_union(core_dz_gdf.geometry.values)
 
-print(f"\nCore area: {core_dz_mask.sum()} DZs from {len(core_sdz_codes)} SDZs")
+n_core_sdzs = len({dz_to_sdz.get(cd) for cd in core_dz_codes} - {None})
+print(f"\nCore area: {len(core_dz_gdf)} DZs (from {n_core_sdzs} partially/fully-core SDZs)")
 core_area_km2 = core_polygon.area / 1e6
 print(f"  Core polygon area: {core_area_km2:.2f} km²")
+
+# Max distance from centre to any core polygon vertex — determines minimum RADIUS_M
+centre_pt_utm   = Point(centre_utm_x, centre_utm_y)
+max_vertex_dist = max(centre_pt_utm.distance(Point(x, y))
+                      for x, y in core_polygon.exterior.coords)
+print(f"  Max core polygon vertex distance: {max_vertex_dist:.0f}m")
 
 # ── Determine SDZ zone DEA codes ──────────────────────────────────────────────
 
@@ -237,19 +250,15 @@ next_id = 1
 
 print("\nBuilding external node list …")
 
-# SDZ external nodes: SDZs within SDZ_ZONE_RADIUS but NOT in the core
-# (includes ALL SDZs of broken DEAs, even those outside SDZ_ZONE_RADIUS)
-# First: which SDZs belong to broken DEAs?
+# SDZ external nodes: SDZs in broken DEAs with NO core DZs (fully external)
 sdz["parent_dea"] = sdz[sdz_code_col].map(sdz_to_dea)
 sdz_in_broken_dea = sdz["parent_dea"].isin(broken_dea_codes)
 
-# SDZ external node = in a broken DEA AND not in the core
-sdz_external_mask = sdz_in_broken_dea & ~sdz["in_core"]
+sdz_external_mask = sdz_in_broken_dea & ~sdz["has_core_dz"]
 sdz_external = sdz[sdz_external_mask].copy()
 
 for _, row in sdz_external.iterrows():
     sdz_code = row[sdz_code_col]
-    # Child DZs of this SDZ
     child_dz_codes = [dz_cd for dz_cd, parent in dz_to_sdz.items() if parent == sdz_code]
     child_dz = dz[dz["DZ2021_cd"].isin(child_dz_codes)]
     pop   = child_dz["population"].sum()
@@ -270,6 +279,34 @@ for _, row in sdz_external.iterrows():
     next_id += 1
 
 print(f"  {len(external_nodes)} SDZ external nodes")
+
+# DZ external nodes: non-core DZs from partially-core SDZs
+# (their SDZ has some core DZs but these DZs themselves don't intersect the core circle)
+partial_core_sdz_codes = set(sdz.loc[sdz_in_broken_dea & sdz["has_core_dz"], sdz_code_col])
+orphan_dz_mask = (
+    dz["DZ2021_cd"].map(dz_to_sdz).isin(partial_core_sdz_codes)
+    & ~dz["is_core"]
+)
+orphan_dz = dz[orphan_dz_mask].copy()
+n_dz_ext_start = len(external_nodes)
+
+for _, row in orphan_dz.iterrows():
+    cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
+    lon, lat = to_wgs.transform(cx, cy)
+    external_nodes.append({
+        "id":             next_id,
+        "code":           row["DZ2021_cd"],
+        "level":          "DZ",
+        "centroid_lat":   round(lat, 6),
+        "centroid_lon":   round(lon, 6),
+        "centroid_utm_x": round(cx, 1),
+        "centroid_utm_y": round(cy, 1),
+        "population":     int(round(row["population"])),
+        "workplace_pop":  int(round(row["workplace_pop"])),
+    })
+    next_id += 1
+
+print(f"  {len(external_nodes) - n_dz_ext_start} DZ external nodes (orphan DZs from partially-core SDZs)")
 
 # DEA external nodes: DEAs NOT intersecting SDZ_ZONE_RADIUS
 dea_external = dea[~dea["in_sdz_zone"]].copy()
@@ -320,14 +357,15 @@ core_coords = list(mapping(core_polygon_wgs)["coordinates"][0])  # exterior ring
 # ── Write output ──────────────────────────────────────────────────────────────
 
 output = {
-    "core_radius":      CORE_RADIUS,
-    "sdz_zone_radius":  SDZ_ZONE_RADIUS,
-    "centre_lat":       CENTRE[0],
-    "centre_lon":       CENTRE[1],
-    "core_polygon":     core_coords,
-    "n_core_dzs":       int(core_dz_mask.sum()),
-    "n_core_sdzs":      len(core_sdz_codes),
-    "external_nodes":   external_nodes,
+    "core_radius":             CORE_RADIUS,
+    "sdz_zone_radius":         SDZ_ZONE_RADIUS,
+    "centre_lat":              CENTRE[0],
+    "centre_lon":              CENTRE[1],
+    "max_core_vertex_dist_m":  round(max_vertex_dist, 1),
+    "core_polygon":            core_coords,
+    "n_core_dzs":              int(len(core_dz_gdf)),
+    "n_core_sdzs":             n_core_sdzs,
+    "external_nodes":          external_nodes,
 }
 
 with open(OUTPUT_FILE, "w") as f:

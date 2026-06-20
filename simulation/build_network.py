@@ -10,16 +10,26 @@ Outputs (in the same directory):
   newtownards_consolidated.graphml — junction-consolidated graph (projected CRS)
 """
 
+import json, os
 import osmnx as ox
 import geopandas as gpd
 
-# Newtownards town centre
-CENTRE      = (54.5933779, -5.6960935)
-CORE_RADIUS = 3000   # metres — defines core area (SDZs intersecting this → DZ-level)
-RADIUS_M    = 5000   # metres — OSMnx download bbox; larger than CORE_RADIUS so all
-                     # boundary nodes and their external neighbours are in the graph
+# Newtownards town centre — CORE_RADIUS is defined in build_census_zones.py and
+# written to census_zones.json; read from there to avoid duplication.
+CENTRE               = (54.5933779, -5.6960935)
+NETWORK_MARGIN_M     = 200   # metres beyond core polygon max vertex distance
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
 OUT_DIR   = "simulation"
+
+CENSUS_ZONES_FILE = "data/census_zones.json"
+if os.path.exists(CENSUS_ZONES_FILE):
+    _cz      = json.load(open(CENSUS_ZONES_FILE))
+    _max_dist = _cz["max_core_vertex_dist_m"]
+    RADIUS_M = round(_max_dist) + NETWORK_MARGIN_M
+    print(f"RADIUS_M = {RADIUS_M}m  (core max vertex {_max_dist:.0f}m + {NETWORK_MARGIN_M}m margin)")
+else:
+    RADIUS_M = 5000
+    print(f"RADIUS_M = {RADIUS_M}m  (fallback — run build_census_zones.py first)")
 
 # ── 1. Download ────────────────────────────────────────────────────────────────
 
