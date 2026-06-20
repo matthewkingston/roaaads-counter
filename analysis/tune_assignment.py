@@ -118,7 +118,7 @@ link_idx_arr = cache["link_idx"]
 link_u       = cache["link_u"]
 link_v       = cache["link_v"]
 N_links      = len(link_u)
-node_ids     = [int(nid) for nid in node_ids_arr]
+node_ids     = list(node_ids_arr)
 N_nodes      = len(node_ids)
 
 link_index = {(int(link_u[k]), int(link_v[k])): k for k in range(N_links)}
@@ -175,9 +175,10 @@ print("Loading node weights …")
 with open(WEIGHTS_FILE) as f:
     wdata = json.load(f)
 
-node_pop_full    = {int(k): v for k, v in wdata["node_population"].items()}
-node_biz_full    = {int(k): v for k, v in wdata["node_business_demand"].items()}
-node_school_full = {int(k): v for k, v in wdata.get("node_school_demand", {}).items()}
+_pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
+node_pop_full    = {_pnid(k): v for k, v in wdata["node_population"].items()}
+node_biz_full    = {_pnid(k): v for k, v in wdata["node_business_demand"].items()}
+node_school_full = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
 
 # Precomputed base weight arrays (used in stage 1 and as fallback in stage 2)
 base_w_pop    = np.array([node_pop_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)

@@ -246,7 +246,6 @@ def weighted_centroid_wgs(geometries, weights):
 # ── Build external node list ──────────────────────────────────────────────────
 
 external_nodes = []
-next_id = 1
 
 print("\nBuilding external node list …")
 
@@ -266,8 +265,7 @@ for _, row in sdz_external.iterrows():
     lat, lon, utm_x, utm_y = weighted_centroid_wgs(child_dz.geometry.values,
                                                      child_dz["population"].values)
     external_nodes.append({
-        "id":             next_id,
-        "code":           sdz_code,
+        "id":             sdz_code,
         "level":          "SDZ",
         "centroid_lat":   round(lat, 6),
         "centroid_lon":   round(lon, 6),
@@ -276,8 +274,6 @@ for _, row in sdz_external.iterrows():
         "population":     int(round(pop)),
         "workplace_pop":  int(round(wp)),
     })
-    next_id += 1
-
 print(f"  {len(external_nodes)} SDZ external nodes")
 
 # DZ external nodes: non-core DZs from partially-core SDZs
@@ -294,8 +290,7 @@ for _, row in orphan_dz.iterrows():
     cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
     lon, lat = to_wgs.transform(cx, cy)
     external_nodes.append({
-        "id":             next_id,
-        "code":           row["DZ2021_cd"],
+        "id":             row["DZ2021_cd"],
         "level":          "DZ",
         "centroid_lat":   round(lat, 6),
         "centroid_lon":   round(lon, 6),
@@ -304,8 +299,6 @@ for _, row in orphan_dz.iterrows():
         "population":     int(round(row["population"])),
         "workplace_pop":  int(round(row["workplace_pop"])),
     })
-    next_id += 1
-
 print(f"  {len(external_nodes) - n_dz_ext_start} DZ external nodes (orphan DZs from partially-core SDZs)")
 
 # DEA external nodes: DEAs NOT intersecting SDZ_ZONE_RADIUS
@@ -330,8 +323,7 @@ for _, row in dea_external.iterrows():
         lat, lon, utm_x, utm_y = weighted_centroid_wgs(child_dz.geometry.values,
                                                          child_dz["population"].values)
     external_nodes.append({
-        "id":             next_id,
-        "code":           dea_code,
+        "id":             dea_code,
         "level":          "DEA",
         "centroid_lat":   round(lat, 6),
         "centroid_lon":   round(lon, 6),
@@ -340,8 +332,6 @@ for _, row in dea_external.iterrows():
         "population":     int(round(pop)),
         "workplace_pop":  int(round(wp)),
     })
-    next_id += 1
-
 print(f"  {len(external_nodes) - n_dea_ext_start} DEA external nodes")
 print(f"  {len(external_nodes)} external nodes total")
 print(f"  Total external pop: {sum(n['population'] for n in external_nodes):,}")
