@@ -22,6 +22,7 @@ Run this once after any change to:
   - N_PASSES or PROBIT_CV
 """
 
+import array as _array_mod
 import json, math, time, os
 import numpy as np
 import osmnx as ox
@@ -278,6 +279,18 @@ for src_i, src_nid in enumerate(all_node_ids):
 n_pairs = len(od_src_list)
 print(f"  {n_pairs:,} OD pairs  in {time.time()-t0:.1f}s")
 
+# Compact od_k1_links (Python list-of-lists, ~700 MB for 1M pairs) into a flat
+# numpy int32 ragged array (~80 MB) before memory-intensive pass phase.
+_k1_lengths = np.array([len(p) for p in od_k1_links], dtype=np.int32)
+od_k1_off   = np.zeros(n_pairs + 1, dtype=np.int32)
+np.cumsum(_k1_lengths, out=od_k1_off[1:])
+od_k1_flat  = np.empty(int(od_k1_off[-1]), dtype=np.int32)
+for _i, _p in enumerate(od_k1_links):
+    od_k1_flat[od_k1_off[_i]:od_k1_off[_i + 1]] = _p
+del od_k1_links, _k1_lengths
+
+del dist_matrix, predecessors
+
 # ── Group OD pairs by source ───────────────────────────────────────────────────
 
 src_groups = {}
@@ -300,7 +313,9 @@ all_data_arr = np.array(all_data, dtype=np.float64)
 all_rows_arr = np.array(all_rows, dtype=np.int32)
 all_cols_arr = np.array(all_cols, dtype=np.int32)
 
-hit_accum   = {}
+# Use a running scipy CSR matrix instead of a Python dict to accumulate hits.
+# Python dict with ~20M entries costs ~2.4 GB; CSR costs ~160 MB.
+hit_sparse  = csr_matrix((n_pairs, N_links), dtype=np.float32)
 dist_accum  = np.zeros(n_pairs, dtype=np.float64)
 n_fallbacks = 0
 
@@ -311,6 +326,12 @@ for pass_idx in range(N_PASSES):
     data_p = all_data_arr * np.exp(eps)
     adj_p  = csr_matrix((data_p, (all_rows_arr, all_cols_arr)), shape=(n, n))
     _, pred_p = dijkstra(adj_p, directed=True, return_predecessors=True)
+    del data_p, adj_p
+
+    # Per-pass hit buffers: array.array stores C ints (4 bytes each) vs
+    # Python list-of-ints (~28 bytes each), keeping peak memory low.
+    pass_pairs = _array_mod.array('i')
+    pass_links = _array_mod.array('i')
 
     for src_i, grp in src_groups.items():
         pair_ks = grp['pks']
@@ -350,8 +371,8 @@ for pass_idx in range(N_PASSES):
                 li = int(li_aok[j])
                 pc[m] += float(cost_aok[j])
                 if li >= 0:
-                    key = pair_ks[m] * N_links + li
-                    hit_accum[key] = hit_accum.get(key, 0) + 1
+                    pass_pairs.append(pair_ks[m])
+                    pass_links.append(li)
 
             cur[active_ok] = prev[active_ok]
 
@@ -360,11 +381,25 @@ for pass_idx in range(N_PASSES):
             if fallbk[m]:
                 n_fallbacks += 1
                 dist_accum[pk] += od_k1_dist[pk]
-                for li in od_k1_links[pk]:
-                    key = pk * N_links + li
-                    hit_accum[key] = hit_accum.get(key, 0) + 1
+                _s, _e = od_k1_off[pk], od_k1_off[pk + 1]
+                for li in od_k1_flat[_s:_e]:
+                    pass_pairs.append(pk)
+                    pass_links.append(int(li))
             else:
                 dist_accum[pk] += pc[m]
+
+    del pred_p
+
+    # Accumulate this pass's hits into the running sparse matrix.
+    _n_h = len(pass_pairs)
+    _m   = coo_matrix(
+        (np.ones(_n_h, dtype=np.float32),
+         (np.array(pass_pairs, dtype=np.int32),
+          np.array(pass_links,  dtype=np.int32))),
+        shape=(n_pairs, N_links),
+    ).tocsr()
+    hit_sparse = hit_sparse + _m
+    del pass_pairs, pass_links, _m
 
     print(f"  Pass {pass_idx + 1}/{N_PASSES} done in {time.time() - t_pass:.1f}s")
 
@@ -375,14 +410,11 @@ print(f"  All passes done in {time.time()-t0:.1f}s  ({n_fallbacks:,} pair-pass f
 print("Building output arrays …")
 od_dist_out = (dist_accum / N_PASSES).astype(np.float32)
 
-n_entries    = len(hit_accum)
-keys_arr     = np.fromiter(hit_accum.keys(),   dtype=np.int64,   count=n_entries)
-vals_arr     = np.fromiter(hit_accum.values(), dtype=np.float32, count=n_entries)
-del hit_accum
-
-pair_idx_arr    = (keys_arr // N_links).astype(np.int32)
-link_idx_arr    = (keys_arr %  N_links).astype(np.int32)
-del keys_arr
+_coo         = hit_sparse.tocoo()
+pair_idx_arr = _coo.row.astype(np.int32)
+link_idx_arr = _coo.col.astype(np.int32)
+vals_arr     = _coo.data
+del hit_sparse, _coo
 link_weight_arr = vals_arr / N_PASSES
 del vals_arr
 
