@@ -649,47 +649,18 @@ else:
           f"  total enrollment={_tot_sch:.0f} pupils"
           f"  ({_n_capacity_used} from OSM capacity, {_n_school - _n_capacity_used} from fallback)")
 
-    # ── Auto-detect boundary nodes via OSRM /nearest ─────────────────────────
-    # Internal nodes: raw graph nodes (OSM IDs, WGS84) inside core polygon.
-    # Boundary nodes: internal nodes whose OSRM /nearest neighbours include any
-    # node NOT in internal_ids.  This is airtight for long rural roads where the
-    # next intersection is >1 km beyond the core polygon edge.
+    # ── Auto-detect boundary nodes from core polygon ──────────────────────────
+    # Uses the raw (pre-consolidation) graph for OSM node IDs (OSRM-compatible).
+    # RADIUS_M = max_core_vertex_dist + 200 m, so boundary nodes' immediate
+    # external neighbours are present in the raw graph for the edge check.
     if _census_zones is not None:
-        import http.client as _http
         from shapely.geometry import Polygon as _Polygon
         _G_raw_bd = ox.load_graphml(f"{OUT_DIR}/newtownards_network.graphml")
         _core_poly_wgs = _Polygon(_census_zones["core_polygon"])
         _internal_ids = {n for n, d in _G_raw_bd.nodes(data=True)
                          if _core_poly_wgs.contains(Point(float(d["x"]), float(d["y"])))}
-
-        def _osrm_neighbors(conn, lat, lon, retries=2):
-            path = f"/nearest/v1/driving/{lon},{lat}?number=30"
-            for attempt in range(retries):
-                try:
-                    conn.request("GET", path)
-                    data = json.loads(conn.getresponse().read())
-                    if data.get("code") != "Ok":
-                        return set()
-                    nodes = set()
-                    for wp in data["waypoints"]:
-                        nodes.update(wp.get("nodes", []))
-                    return nodes
-                except Exception:
-                    conn.close()
-                    conn = _http.HTTPConnection("localhost", 5000, timeout=15)
-            return set()
-
-        print(f"  {len(_internal_ids)} internal nodes — querying OSRM for boundary detection …")
-        _osrm_conn = _http.HTTPConnection("localhost", 5000, timeout=15)
-        _boundary_ids = set()
-        for _i, _nid in enumerate(_internal_ids):
-            _nd = _G_raw_bd.nodes[_nid]
-            _neighbors = _osrm_neighbors(_osrm_conn, float(_nd["y"]), float(_nd["x"]))
-            if _neighbors - _internal_ids:
-                _boundary_ids.add(_nid)
-            if (_i + 1) % 500 == 0:
-                print(f"    {_i+1}/{len(_internal_ids)} nodes checked …")
-        _osrm_conn.close()
+        _boundary_ids = {u for u, v in _G_raw_bd.edges()
+                         if u in _internal_ids and v not in _internal_ids}
 
         # Map OSM boundary IDs → consolidated IDs for map display and build_paths.py
         _osmid_to_cons = {}
@@ -700,8 +671,9 @@ else:
             for _oid in _osmids:
                 _osmid_to_cons[int(_oid)] = _cid
         _boundary_ids_cons = {_osmid_to_cons[o] for o in _boundary_ids if o in _osmid_to_cons}
-        print(f"  Detected {len(_boundary_ids)} boundary nodes (OSM IDs), "
-              f"{len(_boundary_ids_cons)} map to consolidated graph")
+        print(f"Auto-detected {len(_internal_ids)} internal nodes, "
+              f"{len(_boundary_ids)} boundary nodes (OSM IDs)")
+        print(f"  {len(_boundary_ids_cons)} boundary nodes map to consolidated graph")
     else:
         print(f"WARNING: {CENSUS_ZONES_FILE} not found — boundary_node_ids will be empty.")
         print(f"  Run build_census_zones.py first.")
