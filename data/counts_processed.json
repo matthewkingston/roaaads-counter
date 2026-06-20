@@ -41,7 +41,8 @@
         5,
         16
       ],
-      "frac_rel_std": 0.116636
+      "frac_rel_std": 0.116636,
+      "matched_link_name": "Westmount Park"
     },
     "8611420e": {
       "session_id": "8611420e",
@@ -84,7 +85,8 @@
         5,
         16
       ],
-      "frac_rel_std": 0.116636
+      "frac_rel_std": 0.116636,
+      "matched_link_name": "Belfast Road"
     },
     "a53b4064": {
       "session_id": "a53b4064",
@@ -127,7 +129,8 @@
         5,
         16
       ],
-      "frac_rel_std": 0.116636
+      "frac_rel_std": 0.116636,
+      "matched_link_name": "Victoria Avenue"
     },
     "e0e99295": {
       "session_id": "e0e99295",
@@ -170,7 +173,8 @@
         5,
         20
       ],
-      "frac_rel_std": 0.155447
+      "frac_rel_std": 0.155447,
+      "matched_link_name": "Belfast Road"
     },
     "0dda12dd": {
       "session_id": "0dda12dd",
@@ -213,7 +217,8 @@
         5,
         20
       ],
-      "frac_rel_std": 0.155447
+      "frac_rel_std": 0.155447,
+      "matched_link_name": "Regent Street"
     },
     "fd190c10": {
       "session_id": "fd190c10",
@@ -256,7 +261,8 @@
         5,
         21
       ],
-      "frac_rel_std": 0.153233
+      "frac_rel_std": 0.153233,
+      "matched_link_name": "Crawfordsburn Road"
     },
     "de9ade9d": {
       "session_id": "de9ade9d",
@@ -299,7 +305,8 @@
         5,
         21
       ],
-      "frac_rel_std": 0.153233
+      "frac_rel_std": 0.153233,
+      "matched_link_name": "Crawfordsburn Road"
     },
     "50b95b49": {
       "session_id": "50b95b49",
@@ -342,7 +349,8 @@
         5,
         21
       ],
-      "frac_rel_std": 0.153233
+      "frac_rel_std": 0.153233,
+      "matched_link_name": "Belfast Road"
     },
     "bf841b3e": {
       "session_id": "bf841b3e",
@@ -385,7 +393,8 @@
         5,
         21
       ],
-      "frac_rel_std": 0.153233
+      "frac_rel_std": 0.153233,
+      "matched_link_name": "Belfast Road"
     },
     "78e26e17": {
       "session_id": "78e26e17",
@@ -428,7 +437,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "Westmount Park"
     },
     "165eb2ec": {
       "session_id": "165eb2ec",
@@ -471,7 +481,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "Belfast Road"
     },
     "4173b28d": {
       "session_id": "4173b28d",
@@ -514,7 +525,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "Church Street"
     },
     "73ea3606": {
       "session_id": "73ea3606",
@@ -557,7 +569,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "William Street"
     },
     "69fcde8e": {
       "session_id": "69fcde8e",
@@ -600,7 +613,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "William Street"
     },
     "0aa54303": {
       "session_id": "0aa54303",
@@ -643,7 +657,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "Hardford Link"
     },
     "ee3e6972": {
       "session_id": "ee3e6972",
@@ -686,7 +701,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "Hardford Link"
     },
     "b09a7f4d": {
       "session_id": "b09a7f4d",
@@ -729,7 +745,8 @@
         6,
         15
       ],
-      "frac_rel_std": 0.187518
+      "frac_rel_std": 0.187518,
+      "matched_link_name": "Belfast Road"
     },
     "ddb4802a": {
       "session_id": "ddb4802a",
@@ -772,7 +789,8 @@
         6,
         19
       ],
-      "frac_rel_std": 0.148807
+      "frac_rel_std": 0.148807,
+      "matched_link_name": "Blair Mayne Road North"
     },
     "d1062f62": {
       "session_id": "d1062f62",
@@ -815,7 +833,8 @@
         6,
         19
       ],
-      "frac_rel_std": 0.148807
+      "frac_rel_std": 0.148807,
+      "matched_link_name": "Blair Mayne Road North"
     },
     "7ea5e505": {
       "session_id": "7ea5e505",
@@ -858,7 +877,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Nursery Road"
     },
     "d1c695eb": {
       "session_id": "d1c695eb",
@@ -901,7 +921,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Nursery Road"
     },
     "f2d72be5": {
       "session_id": "f2d72be5",
@@ -944,7 +965,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Mill Street"
     },
     "bee91a87": {
       "session_id": "bee91a87",
@@ -987,7 +1009,8 @@
         157,
         159
       ],
-      "match_rmse_m": 10.9
+      "match_rmse_m": 10.9,
+      "matched_link_name": "Mill Street"
     },
     "b3437a3b": {
       "session_id": "b3437a3b",
@@ -1030,7 +1053,8 @@
         84,
         298
       ],
-      "match_rmse_m": 23.6
+      "match_rmse_m": 23.6,
+      "matched_link_name": "High Street"
     },
     "5bcd75b5": {
       "session_id": "5bcd75b5",
@@ -1073,7 +1097,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Frances Street"
     },
     "cfa98d4d": {
       "session_id": "cfa98d4d",
@@ -1116,7 +1141,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Frances Street"
     },
     "50323b32": {
       "session_id": "50323b32",
@@ -1159,7 +1185,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Bangor Road"
     },
     "7553939c": {
       "session_id": "7553939c",
@@ -1202,7 +1229,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Bangor Road"
     },
     "c583e89a": {
       "session_id": "c583e89a",
@@ -1245,7 +1273,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Bangor Road"
     },
     "99740b33": {
       "session_id": "99740b33",
@@ -1288,7 +1317,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Bangor Road"
     },
     "f3ed0a4c": {
       "session_id": "f3ed0a4c",
@@ -1331,7 +1361,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "North Road"
     },
     "159c6641": {
       "session_id": "159c6641",
@@ -1374,7 +1405,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "North Road"
     },
     "94270f75": {
       "session_id": "94270f75",
@@ -1417,7 +1449,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "North Road"
     },
     "f5dbcc07": {
       "session_id": "f5dbcc07",
@@ -1460,7 +1493,8 @@
         6,
         20
       ],
-      "frac_rel_std": 0.154203
+      "frac_rel_std": 0.154203,
+      "matched_link_name": "Talbot Street"
     },
     "20c786ef": {
       "session_id": "20c786ef",
@@ -1503,7 +1537,8 @@
         6,
         21
       ],
-      "frac_rel_std": 0.173564
+      "frac_rel_std": 0.173564,
+      "matched_link_name": "William Street"
     },
     "1806eadd": {
       "session_id": "1806eadd",
@@ -1546,7 +1581,8 @@
         6,
         21
       ],
-      "frac_rel_std": 0.173564
+      "frac_rel_std": 0.173564,
+      "matched_link_name": "William Street"
     },
     "f9c950f8": {
       "session_id": "f9c950f8",
@@ -1589,7 +1625,8 @@
         6,
         21
       ],
-      "frac_rel_std": 0.173564
+      "frac_rel_std": 0.173564,
+      "matched_link_name": "Church Street"
     },
     "da6689ce": {
       "session_id": "da6689ce",
@@ -1632,7 +1669,8 @@
         6,
         21
       ],
-      "frac_rel_std": 0.173564
+      "frac_rel_std": 0.173564,
+      "matched_link_name": "Church Street"
     },
     "15bee925": {
       "session_id": "15bee925",
@@ -1675,7 +1713,8 @@
         6,
         21
       ],
-      "frac_rel_std": 0.173564
+      "frac_rel_std": 0.173564,
+      "matched_link_name": "Belfast Road"
     },
     "445e0e4f": {
       "session_id": "445e0e4f",
@@ -1718,7 +1757,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Westmount Park"
     },
     "1fbb2ee8": {
       "session_id": "1fbb2ee8",
@@ -1761,7 +1801,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Glenford Road"
     },
     "1a81303a": {
       "session_id": "1a81303a",
@@ -1804,7 +1845,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Hardford Link"
     },
     "64bcb497": {
       "session_id": "64bcb497",
@@ -1847,7 +1889,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Crawfordsburn Road"
     },
     "1881dead": {
       "session_id": "1881dead",
@@ -1890,7 +1933,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Mountain Road"
     },
     "0a533678": {
       "session_id": "0a533678",
@@ -1933,7 +1977,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Mountain Road"
     },
     "a4ff4257": {
       "session_id": "a4ff4257",
@@ -1976,7 +2021,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Crawfordsburn Road"
     },
     "b044049b": {
       "session_id": "b044049b",
@@ -2019,7 +2065,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Crawfordsburn Road"
     },
     "69ce8194": {
       "session_id": "69ce8194",
@@ -2062,7 +2109,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Crawfordsburn Road"
     },
     "b78b4c7f": {
       "session_id": "b78b4c7f",
@@ -2105,7 +2153,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Saratoga Avenue"
     },
     "e27f765e": {
       "session_id": "e27f765e",
@@ -2148,7 +2197,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Saratoga Avenue"
     },
     "1d462189": {
       "session_id": "1d462189",
@@ -2191,7 +2241,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Saratoga Avenue"
     },
     "527c49e4": {
       "session_id": "527c49e4",
@@ -2234,7 +2285,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Saratoga Avenue"
     },
     "6a4cacb0": {
       "session_id": "6a4cacb0",
@@ -2277,7 +2329,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Saratoga Avenue"
     },
     "01472615": {
       "session_id": "01472615",
@@ -2320,7 +2373,8 @@
         0,
         13
       ],
-      "frac_rel_std": 0.079221
+      "frac_rel_std": 0.079221,
+      "matched_link_name": "Saratoga Avenue"
     },
     "1517d1e4": {
       "session_id": "1517d1e4",
@@ -2363,7 +2417,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Glenford Road"
     },
     "fa21680a": {
       "session_id": "fa21680a",
@@ -2406,7 +2461,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Glenford Road"
     },
     "5cbc5b4b": {
       "session_id": "5cbc5b4b",
@@ -2449,7 +2505,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Hardford Link"
     },
     "2f5912e7": {
       "session_id": "2f5912e7",
@@ -2492,7 +2549,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Blair Mayne Road North"
     },
     "a704744e": {
       "session_id": "a704744e",
@@ -2535,7 +2593,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Blair Mayne Road North"
     },
     "b3c3396f": {
       "session_id": "b3c3396f",
@@ -2578,7 +2637,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Blair Mayne Road South"
     },
     "65ab63e2": {
       "session_id": "65ab63e2",
@@ -2621,7 +2681,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Scrabo Road"
     },
     "bdbfa2be": {
       "session_id": "bdbfa2be",
@@ -2664,7 +2725,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Scrabo Road"
     },
     "c8157a13": {
       "session_id": "c8157a13",
@@ -2707,7 +2769,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Scrabo Road"
     },
     "1264ee97": {
       "session_id": "1264ee97",
@@ -2750,7 +2813,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Scrabo Road"
     },
     "bacafe4b": {
       "session_id": "bacafe4b",
@@ -2793,7 +2857,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Messines Road"
     },
     "466e8946": {
       "session_id": "466e8946",
@@ -2836,7 +2901,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Comber Road"
     },
     "9d6069eb": {
       "session_id": "9d6069eb",
@@ -2879,7 +2945,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Blenheim Drive"
     },
     "df286ae7": {
       "session_id": "df286ae7",
@@ -2922,7 +2989,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Blenheim Drive"
     },
     "f4e6b217": {
       "session_id": "f4e6b217",
@@ -2965,7 +3033,8 @@
         0,
         14
       ],
-      "frac_rel_std": 0.078675
+      "frac_rel_std": 0.078675,
+      "matched_link_name": "Comber Road"
     },
     "942fad08": {
       "session_id": "942fad08",
@@ -3008,7 +3077,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Comber Road"
     },
     "96c14ded": {
       "session_id": "96c14ded",
@@ -3051,7 +3121,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "South Street"
     },
     "97709d2a": {
       "session_id": "97709d2a",
@@ -3094,7 +3165,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "South Street"
     },
     "0b87589d": {
       "session_id": "0b87589d",
@@ -3137,7 +3209,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "South Street"
     },
     "f56b2ce4": {
       "session_id": "f56b2ce4",
@@ -3180,7 +3253,8 @@
         22,
         159
       ],
-      "match_rmse_m": 3.9
+      "match_rmse_m": 3.9,
+      "matched_link_name": "Gibson's Lane"
     },
     "219245fa": {
       "session_id": "219245fa",
@@ -3223,7 +3297,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Regent Street"
     },
     "3767c452": {
       "session_id": "3767c452",
@@ -3266,7 +3341,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Church Street"
     },
     "32978e9a": {
       "session_id": "32978e9a",
@@ -3309,7 +3385,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Church Street"
     },
     "c0d8cc04": {
       "session_id": "c0d8cc04",
@@ -3352,7 +3429,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Church Street"
     },
     "aa7ca35a": {
       "session_id": "aa7ca35a",
@@ -3395,7 +3473,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Belfast Road"
     },
     "2e20d38d": {
       "session_id": "2e20d38d",
@@ -3438,7 +3517,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Westmount Park"
     },
     "fba7330e": {
       "session_id": "fba7330e",
@@ -3481,7 +3561,8 @@
         0,
         15
       ],
-      "frac_rel_std": 0.083171
+      "frac_rel_std": 0.083171,
+      "matched_link_name": "Westmount Park"
     },
     "c63185aa": {
       "session_id": "c63185aa",
@@ -3524,7 +3605,8 @@
         20
       ],
       "frac_rel_std": 0.158274,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Belfast Road"
     },
     "6f0787f9": {
       "session_id": "6f0787f9",
@@ -3567,7 +3649,8 @@
         20
       ],
       "frac_rel_std": 0.158274,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Hardford Link"
     },
     "8e92e70f": {
       "session_id": "8e92e70f",
@@ -3610,7 +3693,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "William Street"
     },
     "d0685841": {
       "session_id": "d0685841",
@@ -3653,7 +3737,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "William Street"
     },
     "a3ed3dda": {
       "session_id": "a3ed3dda",
@@ -3696,7 +3781,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Church Street"
     },
     "ad756d10": {
       "session_id": "ad756d10",
@@ -3739,7 +3825,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Church Street"
     },
     "6fe956e5": {
       "session_id": "6fe956e5",
@@ -3782,7 +3869,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Church Street"
     },
     "e192ac6f": {
       "session_id": "e192ac6f",
@@ -3825,7 +3913,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "5551ad4b": {
       "session_id": "5551ad4b",
@@ -3868,7 +3957,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "82c0bbf4": {
       "session_id": "82c0bbf4",
@@ -3911,7 +4001,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "ddbe2a3b": {
       "session_id": "ddbe2a3b",
@@ -3954,7 +4045,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "368bd140": {
       "session_id": "368bd140",
@@ -3997,7 +4089,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Hardford Link"
     },
     "7fe40469": {
       "session_id": "7fe40469",
@@ -4040,7 +4133,8 @@
         21
       ],
       "frac_rel_std": 0.15148,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "William Street"
     },
     "89b37378": {
       "session_id": "89b37378",
@@ -4083,7 +4177,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Belfast Road"
     },
     "c2fdd3ed": {
       "session_id": "c2fdd3ed",
@@ -4126,7 +4221,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Nursery Road"
     },
     "7d4613ca": {
       "session_id": "7d4613ca",
@@ -4169,7 +4265,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Blair Mayne Road South"
     },
     "7081c731": {
       "session_id": "7081c731",
@@ -4212,7 +4309,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Blair Mayne Road South"
     },
     "06d403da": {
       "session_id": "06d403da",
@@ -4255,7 +4353,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Scrabo Road"
     },
     "6a2c5019": {
       "session_id": "6a2c5019",
@@ -4298,7 +4397,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Scrabo Road"
     },
     "806d92d7": {
       "session_id": "806d92d7",
@@ -4341,7 +4441,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Messines Road"
     },
     "0848f192": {
       "session_id": "0848f192",
@@ -4384,7 +4485,8 @@
         13
       ],
       "frac_rel_std": 0.073372,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Castlebawn Road"
     },
     "0176a856": {
       "session_id": "0176a856",
@@ -4427,7 +4529,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Castlebawn Road"
     },
     "dc8f5e82": {
       "session_id": "dc8f5e82",
@@ -4470,7 +4573,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Castlebawn Road"
     },
     "3532922c": {
       "session_id": "3532922c",
@@ -4513,7 +4617,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Portaferry Road"
     },
     "e84eea9c": {
       "session_id": "e84eea9c",
@@ -4556,7 +4661,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Portaferry Road"
     },
     "e26f3538": {
       "session_id": "e26f3538",
@@ -4599,7 +4705,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Portaferry Road"
     },
     "30abf000": {
       "session_id": "30abf000",
@@ -4642,7 +4749,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Portaferry Road"
     },
     "3af16320": {
       "session_id": "3af16320",
@@ -4685,7 +4793,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Portaferry Road"
     },
     "0748edac": {
       "session_id": "0748edac",
@@ -4728,7 +4837,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Georges Street; New Road"
     },
     "fc108372": {
       "session_id": "fc108372",
@@ -4771,7 +4881,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Upper Greenwell Street"
     },
     "003337cf": {
       "session_id": "003337cf",
@@ -4814,7 +4925,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Upper Greenwell Street"
     },
     "ac02e472": {
       "session_id": "ac02e472",
@@ -4857,7 +4969,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Frances Street"
     },
     "e440cd66": {
       "session_id": "e440cd66",
@@ -4900,7 +5013,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Victoria Avenue"
     },
     "3cc7d6b4": {
       "session_id": "3cc7d6b4",
@@ -4943,7 +5057,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "North Road"
     },
     "fc6aeeeb": {
       "session_id": "fc6aeeeb",
@@ -4986,7 +5101,8 @@
         14
       ],
       "frac_rel_std": 0.076946,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "North Road"
     },
     "f63fe034": {
       "session_id": "f63fe034",
@@ -5029,7 +5145,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Talbot Street"
     },
     "82491134": {
       "session_id": "82491134",
@@ -5072,7 +5189,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "James Street"
     },
     "7f9d1aa0": {
       "session_id": "7f9d1aa0",
@@ -5115,7 +5233,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "James Street"
     },
     "e950746d": {
       "session_id": "e950746d",
@@ -5158,7 +5277,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "James Street"
     },
     "51e2c875": {
       "session_id": "51e2c875",
@@ -5201,7 +5321,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "West Street"
     },
     "acdd1712": {
       "session_id": "acdd1712",
@@ -5244,7 +5365,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "William Street"
     },
     "103cc571": {
       "session_id": "103cc571",
@@ -5287,7 +5409,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "William Street"
     },
     "bea18527": {
       "session_id": "bea18527",
@@ -5330,7 +5453,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Hardford Link"
     },
     "ab7adbe6": {
       "session_id": "ab7adbe6",
@@ -5373,7 +5497,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Hardford Link"
     },
     "d1dec925": {
       "session_id": "d1dec925",
@@ -5416,7 +5541,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "50991e7a": {
       "session_id": "50991e7a",
@@ -5459,7 +5585,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "1d76631d": {
       "session_id": "1d76631d",
@@ -5502,7 +5629,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "08c9228e": {
       "session_id": "08c9228e",
@@ -5545,7 +5673,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "3df1a089": {
       "session_id": "3df1a089",
@@ -5588,7 +5717,8 @@
         15
       ],
       "frac_rel_std": 0.081529,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Manse Road"
     },
     "3a19008b": {
       "session_id": "3a19008b",
@@ -5631,7 +5761,8 @@
         18
       ],
       "frac_rel_std": 0.087851,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Belfast Road"
     },
     "2c64036f": {
       "session_id": "2c64036f",
@@ -5674,7 +5805,8 @@
         19
       ],
       "frac_rel_std": 0.138658,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Circular Road"
     },
     "cfb637ff": {
       "session_id": "cfb637ff",
@@ -5717,7 +5849,8 @@
         19
       ],
       "frac_rel_std": 0.138658,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Mill Street"
     },
     "ff7c17e5": {
       "session_id": "ff7c17e5",
@@ -5760,7 +5893,8 @@
         19
       ],
       "frac_rel_std": 0.138658,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Frederick Street"
     },
     "23a096b1": {
       "session_id": "23a096b1",
@@ -5803,7 +5937,8 @@
         19
       ],
       "frac_rel_std": 0.138658,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Belfast Road"
     },
     "d6703ae4": {
       "session_id": "d6703ae4",
@@ -5846,7 +5981,8 @@
         20
       ],
       "frac_rel_std": 0.172656,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Church Street"
     },
     "eb379a48": {
       "session_id": "eb379a48",
@@ -5889,7 +6025,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Frederick Street"
     },
     "220c0f14": {
       "session_id": "220c0f14",
@@ -5932,7 +6069,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Mill Street"
     },
     "04fcbf21": {
       "session_id": "04fcbf21",
@@ -5975,7 +6113,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Gibson's Lane"
     },
     "4099fab1": {
       "session_id": "4099fab1",
@@ -6018,7 +6157,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Regent Street"
     },
     "3dd83081": {
       "session_id": "3dd83081",
@@ -6061,7 +6201,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "North Street"
     },
     "8c1c8155": {
       "session_id": "8c1c8155",
@@ -6104,7 +6245,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "North Street"
     },
     "198fc331": {
       "session_id": "198fc331",
@@ -6147,7 +6289,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Frances Street"
     },
     "0515db41": {
       "session_id": "0515db41",
@@ -6190,7 +6333,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "East Street"
     },
     "12be9088": {
       "session_id": "12be9088",
@@ -6233,7 +6377,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "East Street"
     },
     "28229d3a": {
       "session_id": "28229d3a",
@@ -6276,7 +6421,8 @@
         21
       ],
       "frac_rel_std": 0.177795,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Victoria Avenue"
     },
     "f3eb2ce8": {
       "session_id": "f3eb2ce8",
@@ -6319,7 +6465,8 @@
         22
       ],
       "frac_rel_std": 0.207661,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Glenford Road"
     },
     "204c1324": {
       "session_id": "204c1324",
@@ -6362,7 +6509,8 @@
         22
       ],
       "frac_rel_std": 0.207661,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Glenford Road"
     },
     "b6684380": {
       "session_id": "b6684380",
@@ -6405,7 +6553,8 @@
         22
       ],
       "frac_rel_std": 0.207661,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Hardford Link"
     },
     "eede6d9c": {
       "session_id": "eede6d9c",
@@ -6448,7 +6597,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Nursery Road"
     },
     "cdfdc935": {
       "session_id": "cdfdc935",
@@ -6491,7 +6641,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Blair Mayne Road South"
     },
     "f5128aeb": {
       "session_id": "f5128aeb",
@@ -6534,7 +6685,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Blair Mayne Road South"
     },
     "dafb23aa": {
       "session_id": "dafb23aa",
@@ -6577,7 +6729,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Scrabo Road"
     },
     "d8cae724": {
       "session_id": "d8cae724",
@@ -6620,7 +6773,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Old Belfast Road"
     },
     "17016b95": {
       "session_id": "17016b95",
@@ -6663,7 +6817,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Old Belfast Road"
     },
     "d9b235e4": {
       "session_id": "d9b235e4",
@@ -6706,7 +6861,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Kempe Stones Road"
     },
     "e644eae2": {
       "session_id": "e644eae2",
@@ -6750,7 +6906,8 @@
         15
       ],
       "frac_rel_std": 0.077767,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Kempe Stones Road"
     },
     "515213d0": {
       "session_id": "515213d0",
@@ -6793,7 +6950,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Kempe Stones Road"
     },
     "760b0c8e": {
       "session_id": "760b0c8e",
@@ -6837,7 +6995,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Kempe Stones Road"
     },
     "6be19f87": {
       "session_id": "6be19f87",
@@ -6880,7 +7039,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Old Belfast Road"
     },
     "c1332f39": {
       "session_id": "c1332f39",
@@ -6923,7 +7083,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Old Belfast Road"
     },
     "4a28caa8": {
       "session_id": "4a28caa8",
@@ -6966,7 +7127,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Scrabo Road"
     },
     "53753858": {
       "session_id": "53753858",
@@ -7009,7 +7171,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Windsor Avenue"
     },
     "5b198f73": {
       "session_id": "5b198f73",
@@ -7052,7 +7215,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Lisbane Drive"
     },
     "e4b15f7a": {
       "session_id": "e4b15f7a",
@@ -7095,7 +7259,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Lisbane Drive"
     },
     "24dc6162": {
       "session_id": "24dc6162",
@@ -7138,7 +7303,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Circular Road"
     },
     "3e23ddf7": {
       "session_id": "3e23ddf7",
@@ -7181,7 +7347,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Comber Road"
     },
     "4ea02105": {
       "session_id": "4ea02105",
@@ -7224,7 +7391,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Castlebawn Road"
     },
     "0c41b7c0": {
       "session_id": "0c41b7c0",
@@ -7267,7 +7435,8 @@
         16
       ],
       "frac_rel_std": 0.126443,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Castlebawn Road"
     },
     "807844f0": {
       "session_id": "807844f0",
@@ -7310,7 +7479,8 @@
         17
       ],
       "frac_rel_std": 0.149169,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "South Street"
     },
     "bd6631e1": {
       "session_id": "bd6631e1",
@@ -7353,7 +7523,8 @@
         21
       ],
       "frac_rel_std": 0.172634,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Saratoga Avenue"
     },
     "7299a100": {
       "session_id": "7299a100",
@@ -7396,7 +7567,8 @@
         21
       ],
       "frac_rel_std": 0.172634,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Saratoga Avenue"
     },
     "d62e9600": {
       "session_id": "d62e9600",
@@ -7439,7 +7611,8 @@
         21
       ],
       "frac_rel_std": 0.172634,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Glenford Road"
     },
     "20bcd7d4": {
       "session_id": "20bcd7d4",
@@ -7482,7 +7655,8 @@
         21
       ],
       "frac_rel_std": 0.172634,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Glenford Road"
     },
     "3fcd8257": {
       "session_id": "3fcd8257",
@@ -7525,7 +7699,8 @@
         22
       ],
       "frac_rel_std": 0.199626,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Glenford Road"
     },
     "25a21689": {
       "session_id": "25a21689",
@@ -7568,7 +7743,8 @@
         22
       ],
       "frac_rel_std": 0.199626,
-      "aadt_method": "hourly_fraction_v3"
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Hardford Link"
     },
     "d25faf26": {
       "session_id": "d25faf26",
@@ -7611,6 +7787,3664 @@
         22
       ],
       "frac_rel_std": 0.199626,
+      "aadt_method": "hourly_fraction_v3",
+      "matched_link_name": "Belfast Road"
+    },
+    "1e5a1f70": {
+      "session_id": "1e5a1f70",
+      "label": "18/06/2026, 22:27:01",
+      "mode": "dual",
+      "start_utc": "2026-06-18T21:27:07.503Z",
+      "end_utc": "2026-06-18T21:28:30.671Z",
+      "duration_s": 83.2,
+      "with_count": 1,
+      "against_count": 0,
+      "total_count": 1,
+      "centroid_lat": 54.597546,
+      "centroid_lng": -5.707218,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 1.225,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        21,
+        67
+      ],
+      "matched_link_against": [
+        67,
+        21
+      ],
+      "match_rmse_m": 5.6,
+      "matched_link_name": "Glenford Road",
+      "with_aadt": 3175,
+      "with_aadt_uncertainty": 2664,
+      "against_aadt": 1058,
+      "against_aadt_uncertainty": 1510,
+      "total_aadt": 3175,
+      "total_aadt_uncertainty": 2664,
+      "hourly_fraction": 0.020439,
+      "hourly_fraction_std": 0.003911,
+      "time_slot": [
+        3,
+        22
+      ],
+      "frac_rel_std": 0.191334,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "01a116d1": {
+      "session_id": "01a116d1",
+      "label": "18/06/2026, 22:28:30",
+      "mode": "dual",
+      "start_utc": "2026-06-18T21:28:37.025Z",
+      "end_utc": "2026-06-18T21:30:07.614Z",
+      "duration_s": 90.6,
+      "with_count": 0,
+      "against_count": 2,
+      "total_count": 2,
+      "centroid_lat": 54.597522,
+      "centroid_lng": -5.707167,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.581,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        67,
+        21
+      ],
+      "matched_link_against": [
+        21,
+        67
+      ],
+      "match_rmse_m": 6.9,
+      "matched_link_name": "Glenford Road",
+      "with_aadt": 972,
+      "with_aadt_uncertainty": 1387,
+      "against_aadt": 4860,
+      "against_aadt_uncertainty": 3211,
+      "total_aadt": 4860,
+      "total_aadt_uncertainty": 3211,
+      "hourly_fraction": 0.020439,
+      "hourly_fraction_std": 0.003911,
+      "time_slot": [
+        3,
+        22
+      ],
+      "frac_rel_std": 0.191334,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "9bf148d0": {
+      "session_id": "9bf148d0",
+      "label": "18/06/2026, 22:31:24",
+      "mode": "dual",
+      "start_utc": "2026-06-18T21:31:27.012Z",
+      "end_utc": "2026-06-18T21:32:43.306Z",
+      "duration_s": 76.3,
+      "with_count": 0,
+      "against_count": 0,
+      "total_count": 0,
+      "centroid_lat": 54.597459,
+      "centroid_lng": -5.707122,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 0.707,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        21,
+        67
+      ],
+      "matched_link_against": [
+        67,
+        21
+      ],
+      "match_rmse_m": 2.5,
+      "matched_link_name": "Glenford Road",
+      "with_aadt": 1154,
+      "with_aadt_uncertainty": 1647,
+      "against_aadt": 1154,
+      "against_aadt_uncertainty": 1647,
+      "total_aadt": 1154,
+      "total_aadt_uncertainty": 1647,
+      "hourly_fraction": 0.020439,
+      "hourly_fraction_std": 0.003911,
+      "time_slot": [
+        3,
+        22
+      ],
+      "frac_rel_std": 0.191334,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d9c41891": {
+      "session_id": "d9c41891",
+      "label": "18/06/2026, 22:32:43",
+      "mode": "dual",
+      "start_utc": "2026-06-18T21:32:47.571Z",
+      "end_utc": "2026-06-18T21:33:58.294Z",
+      "duration_s": 70.7,
+      "with_count": 0,
+      "against_count": 0,
+      "total_count": 0,
+      "centroid_lat": 54.597503,
+      "centroid_lng": -5.70727,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 0.707,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        67,
+        21
+      ],
+      "matched_link_against": [
+        21,
+        67
+      ],
+      "match_rmse_m": 3.6,
+      "matched_link_name": "Glenford Road",
+      "with_aadt": 1246,
+      "with_aadt_uncertainty": 1777,
+      "against_aadt": 1246,
+      "against_aadt_uncertainty": 1777,
+      "total_aadt": 1246,
+      "total_aadt_uncertainty": 1777,
+      "hourly_fraction": 0.020439,
+      "hourly_fraction_std": 0.003911,
+      "time_slot": [
+        3,
+        22
+      ],
+      "frac_rel_std": 0.191334,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "cbd80737": {
+      "session_id": "cbd80737",
+      "label": "19/06/2026, 14:40:32",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:40:34.235Z",
+      "end_utc": "2026-06-19T13:42:30.891Z",
+      "duration_s": 116.7,
+      "with_count": 13,
+      "against_count": 15,
+      "total_count": 28,
+      "centroid_lat": 54.595261,
+      "centroid_lng": -5.70768,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.674,
+      "against_uncertainty": 3.937,
+      "total_uncertainty": 5.339,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        19,
+        739
+      ],
+      "matched_link_against": [
+        739,
+        19
+      ],
+      "match_rmse_m": 7.4,
+      "matched_link_name": "Church Street",
+      "with_aadt": 5056,
+      "with_aadt_uncertainty": 1430,
+      "against_aadt": 5805,
+      "against_aadt_uncertainty": 1541,
+      "total_aadt": 10673,
+      "total_aadt_uncertainty": 2163,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "8f338f5f": {
+      "session_id": "8f338f5f",
+      "label": "19/06/2026, 14:42:30",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:42:31.671Z",
+      "end_utc": "2026-06-19T13:44:28.492Z",
+      "duration_s": 116.8,
+      "with_count": 7,
+      "against_count": 7,
+      "total_count": 14,
+      "centroid_lat": 54.594904,
+      "centroid_lng": -5.705589,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 2.739,
+      "total_uncertainty": 3.808,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        739,
+        14
+      ],
+      "matched_link_against": [
+        14,
+        739
+      ],
+      "match_rmse_m": 6.7,
+      "matched_link_name": "Church Street",
+      "with_aadt": 2806,
+      "with_aadt_uncertainty": 1048,
+      "against_aadt": 2806,
+      "against_aadt_uncertainty": 1048,
+      "total_aadt": 5426,
+      "total_aadt_uncertainty": 1485,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "cc364d8d": {
+      "session_id": "cc364d8d",
+      "label": "19/06/2026, 14:44:28",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:44:29.259Z",
+      "end_utc": "2026-06-19T13:46:04.380Z",
+      "duration_s": 95.1,
+      "with_count": 10,
+      "against_count": 16,
+      "total_count": 26,
+      "centroid_lat": 54.594689,
+      "centroid_lng": -5.703749,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.24,
+      "against_uncertainty": 4.062,
+      "total_uncertainty": 5.148,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        14,
+        10
+      ],
+      "matched_link_against": [
+        10,
+        14
+      ],
+      "match_rmse_m": 6.9,
+      "matched_link_name": "Church Street",
+      "with_aadt": 4825,
+      "with_aadt_uncertainty": 1535,
+      "against_aadt": 7583,
+      "against_aadt_uncertainty": 1956,
+      "total_aadt": 12178,
+      "total_aadt_uncertainty": 2546,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "5e6af2ff": {
+      "session_id": "5e6af2ff",
+      "label": "19/06/2026, 14:46:10",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:46:11.898Z",
+      "end_utc": "2026-06-19T13:47:49.920Z",
+      "duration_s": 98.0,
+      "with_count": 9,
+      "against_count": 5,
+      "total_count": 14,
+      "centroid_lat": 54.594165,
+      "centroid_lng": -5.702844,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.082,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 3.808,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        10,
+        11
+      ],
+      "matched_link_against": [
+        11,
+        10
+      ],
+      "match_rmse_m": 4.9,
+      "matched_link_name": "Frederick Street",
+      "with_aadt": 4237,
+      "with_aadt_uncertainty": 1413,
+      "against_aadt": 2453,
+      "against_aadt_uncertainty": 1063,
+      "total_aadt": 6466,
+      "total_aadt_uncertainty": 1770,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "8ca8f1ab": {
+      "session_id": "8ca8f1ab",
+      "label": "19/06/2026, 14:51:35",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:51:37.315Z",
+      "end_utc": "2026-06-19T13:54:05.189Z",
+      "duration_s": 147.9,
+      "with_count": 17,
+      "against_count": 13,
+      "total_count": 30,
+      "centroid_lat": 54.591785,
+      "centroid_lng": -5.705734,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.183,
+      "against_uncertainty": 3.674,
+      "total_uncertainty": 5.523,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        73,
+        70
+      ],
+      "matched_link_against": [
+        70,
+        73
+      ],
+      "match_rmse_m": 9.9,
+      "matched_link_name": "Mill Street",
+      "with_aadt": 5171,
+      "with_aadt_uncertainty": 1299,
+      "against_aadt": 3989,
+      "against_aadt_uncertainty": 1129,
+      "total_aadt": 9013,
+      "total_aadt_uncertainty": 1774,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "eef25047": {
+      "session_id": "eef25047",
+      "label": "19/06/2026, 14:54:09",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:54:11.316Z",
+      "end_utc": "2026-06-19T13:55:45.707Z",
+      "duration_s": 94.4,
+      "with_count": 7,
+      "against_count": 2,
+      "total_count": 9,
+      "centroid_lat": 54.591011,
+      "centroid_lng": -5.706219,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 1.581,
+      "total_uncertainty": 3.082,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        70,
+        72
+      ],
+      "matched_link_against": [
+        72,
+        70
+      ],
+      "match_rmse_m": 8.0,
+      "matched_link_name": "Circular Road",
+      "with_aadt": 3472,
+      "with_aadt_uncertainty": 1296,
+      "against_aadt": 1157,
+      "against_aadt_uncertainty": 737,
+      "total_aadt": 4398,
+      "total_aadt_uncertainty": 1467,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "fa0dc2b0": {
+      "session_id": "fa0dc2b0",
+      "label": "19/06/2026, 14:55:45",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:55:46.385Z",
+      "end_utc": "2026-06-19T13:57:52.609Z",
+      "duration_s": 126.2,
+      "with_count": 13,
+      "against_count": 9,
+      "total_count": 22,
+      "centroid_lat": 54.590012,
+      "centroid_lng": -5.704977,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.674,
+      "against_uncertainty": 3.082,
+      "total_uncertainty": 4.743,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        72,
+        289
+      ],
+      "matched_link_against": [
+        289,
+        72
+      ],
+      "match_rmse_m": 8.5,
+      "matched_link_name": "Circular Road",
+      "with_aadt": 4675,
+      "with_aadt_uncertainty": 1323,
+      "against_aadt": 3290,
+      "against_aadt_uncertainty": 1097,
+      "total_aadt": 7792,
+      "total_aadt_uncertainty": 1749,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "bc4e03cb": {
+      "session_id": "bc4e03cb",
+      "label": "19/06/2026, 14:57:52",
+      "mode": "dual",
+      "start_utc": "2026-06-19T13:57:53.176Z",
+      "end_utc": "2026-06-19T13:59:27.504Z",
+      "duration_s": 94.3,
+      "with_count": 10,
+      "against_count": 5,
+      "total_count": 15,
+      "centroid_lat": 54.589103,
+      "centroid_lng": -5.703796,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.24,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 3.937,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        289,
+        688
+      ],
+      "matched_link_against": [
+        688,
+        289
+      ],
+      "match_rmse_m": 7.3,
+      "matched_link_name": "Circular Road",
+      "with_aadt": 4866,
+      "with_aadt_uncertainty": 1548,
+      "against_aadt": 2549,
+      "against_aadt_uncertainty": 1104,
+      "total_aadt": 7184,
+      "total_aadt_uncertainty": 1907,
+      "hourly_fraction": 0.082372,
+      "hourly_fraction_std": 0.006362,
+      "time_slot": [
+        4,
+        14
+      ],
+      "frac_rel_std": 0.077232,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b29b0936": {
+      "session_id": "b29b0936",
+      "label": "19/06/2026, 15:00:08",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:00:11.321Z",
+      "end_utc": "2026-06-19T14:03:07.880Z",
+      "duration_s": 176.6,
+      "with_count": 12,
+      "against_count": 13,
+      "total_count": 25,
+      "centroid_lat": 54.587717,
+      "centroid_lng": -5.701418,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.536,
+      "against_uncertainty": 3.674,
+      "total_uncertainty": 5.05,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        688,
+        701
+      ],
+      "matched_link_against": [
+        701,
+        688
+      ],
+      "match_rmse_m": 10.4,
+      "matched_link_name": "Circular Road",
+      "with_aadt": 2922,
+      "with_aadt_uncertainty": 878,
+      "against_aadt": 3155,
+      "against_aadt_uncertainty": 916,
+      "total_aadt": 5960,
+      "total_aadt_uncertainty": 1326,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "15b020d5": {
+      "session_id": "15b020d5",
+      "label": "19/06/2026, 15:03:07",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:03:08.864Z",
+      "end_utc": "2026-06-19T14:04:17.836Z",
+      "duration_s": 69.0,
+      "with_count": 7,
+      "against_count": 5,
+      "total_count": 12,
+      "centroid_lat": 54.587419,
+      "centroid_lng": -5.699282,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 3.536,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        701,
+        718
+      ],
+      "matched_link_against": [
+        718,
+        701
+      ],
+      "match_rmse_m": 10.2,
+      "matched_link_name": "Circular Road",
+      "with_aadt": 4487,
+      "with_aadt_uncertainty": 1700,
+      "against_aadt": 3290,
+      "against_aadt_uncertainty": 1442,
+      "total_aadt": 7478,
+      "total_aadt_uncertainty": 2247,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "2f4b000c": {
+      "session_id": "2f4b000c",
+      "label": "19/06/2026, 15:04:54",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:04:55.834Z",
+      "end_utc": "2026-06-19T14:06:42.843Z",
+      "duration_s": 107.0,
+      "with_count": 12,
+      "against_count": 25,
+      "total_count": 37,
+      "centroid_lat": 54.587988,
+      "centroid_lng": -5.698065,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.536,
+      "against_uncertainty": 5.05,
+      "total_uncertainty": 6.124,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        63,
+        61
+      ],
+      "matched_link_against": [
+        61,
+        63
+      ],
+      "match_rmse_m": 8.0,
+      "matched_link_name": "South Street",
+      "with_aadt": 4822,
+      "with_aadt_uncertainty": 1449,
+      "against_aadt": 9837,
+      "against_aadt_uncertainty": 2188,
+      "total_aadt": 14466,
+      "total_aadt_uncertainty": 2780,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "533a5f34": {
+      "session_id": "533a5f34",
+      "label": "19/06/2026, 15:06:42",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:06:43.593Z",
+      "end_utc": "2026-06-19T14:09:00.782Z",
+      "duration_s": 137.2,
+      "with_count": 10,
+      "against_count": 22,
+      "total_count": 32,
+      "centroid_lat": 54.589181,
+      "centroid_lng": -5.697659,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.24,
+      "against_uncertainty": 4.743,
+      "total_uncertainty": 5.701,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        61,
+        64
+      ],
+      "matched_link_against": [
+        64,
+        61
+      ],
+      "match_rmse_m": 6.8,
+      "matched_link_name": "South Street",
+      "with_aadt": 3159,
+      "with_aadt_uncertainty": 1026,
+      "against_aadt": 6769,
+      "against_aadt_uncertainty": 1583,
+      "total_aadt": 9778,
+      "total_aadt_uncertainty": 1980,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "ea146d87": {
+      "session_id": "ea146d87",
+      "label": "19/06/2026, 15:09:47",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:09:48.697Z",
+      "end_utc": "2026-06-19T14:11:25.503Z",
+      "duration_s": 96.8,
+      "with_count": 6,
+      "against_count": 17,
+      "total_count": 23,
+      "centroid_lat": 54.590829,
+      "centroid_lng": -5.696993,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 4.183,
+      "total_uncertainty": 4.848,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        80,
+        79
+      ],
+      "matched_link_against": [
+        79,
+        80
+      ],
+      "match_rmse_m": 2.7,
+      "matched_link_name": "South Street",
+      "with_aadt": 2772,
+      "with_aadt_uncertainty": 1123,
+      "against_aadt": 7462,
+      "against_aadt_uncertainty": 1937,
+      "total_aadt": 10021,
+      "total_aadt_uncertainty": 2303,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b1e1b516": {
+      "session_id": "b1e1b516",
+      "label": "19/06/2026, 15:11:43",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:11:44.882Z",
+      "end_utc": "2026-06-19T14:12:50.989Z",
+      "duration_s": 66.1,
+      "with_count": 1,
+      "against_count": 11,
+      "total_count": 12,
+      "centroid_lat": 54.591567,
+      "centroid_lng": -5.697543,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 3.391,
+      "total_uncertainty": 3.536,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        79,
+        78
+      ],
+      "matched_link_against": [
+        78,
+        79
+      ],
+      "match_rmse_m": 6.3,
+      "matched_link_name": "Upper Court Street",
+      "with_aadt": 937,
+      "with_aadt_uncertainty": 771,
+      "against_aadt": 7181,
+      "against_aadt_uncertainty": 2239,
+      "total_aadt": 7806,
+      "total_aadt_uncertainty": 2345,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "25f79d2c": {
+      "session_id": "25f79d2c",
+      "label": "19/06/2026, 15:12:50",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:12:51.789Z",
+      "end_utc": "2026-06-19T14:14:16.495Z",
+      "duration_s": 84.7,
+      "with_count": 13,
+      "against_count": 19,
+      "total_count": 32,
+      "centroid_lat": 54.59169,
+      "centroid_lng": -5.698768,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.674,
+      "against_uncertainty": 4.416,
+      "total_uncertainty": 5.701,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        78,
+        75
+      ],
+      "matched_link_against": [
+        75,
+        78
+      ],
+      "match_rmse_m": 5.4,
+      "matched_link_name": "John Street",
+      "with_aadt": 6579,
+      "with_aadt_uncertainty": 1910,
+      "against_aadt": 9503,
+      "against_aadt_uncertainty": 2357,
+      "total_aadt": 15838,
+      "total_aadt_uncertainty": 3208,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "105fce97": {
+      "session_id": "105fce97",
+      "label": "19/06/2026, 15:14:16",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:14:17.242Z",
+      "end_utc": "2026-06-19T14:16:20.733Z",
+      "duration_s": 123.5,
+      "with_count": 13,
+      "against_count": 25,
+      "total_count": 38,
+      "centroid_lat": 54.591824,
+      "centroid_lng": -5.70037,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.674,
+      "against_uncertainty": 5.05,
+      "total_uncertainty": 6.205,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        75,
+        77
+      ],
+      "matched_link_against": [
+        77,
+        75
+      ],
+      "match_rmse_m": 24.6,
+      "matched_link_name": "John Street",
+      "with_aadt": 4512,
+      "with_aadt_uncertainty": 1310,
+      "against_aadt": 8523,
+      "against_aadt_uncertainty": 1896,
+      "total_aadt": 12868,
+      "total_aadt_uncertainty": 2449,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "44b2a131": {
+      "session_id": "44b2a131",
+      "label": "19/06/2026, 15:17:08",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:17:11.509Z",
+      "end_utc": "2026-06-19T14:18:56.502Z",
+      "duration_s": 105.0,
+      "with_count": 19,
+      "against_count": 19,
+      "total_count": 38,
+      "centroid_lat": 54.592223,
+      "centroid_lng": -5.702682,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.416,
+      "against_uncertainty": 4.416,
+      "total_uncertainty": 6.205,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        793,
+        810
+      ],
+      "matched_link_against": [
+        810,
+        793
+      ],
+      "match_rmse_m": 17.2,
+      "matched_link_name": "John Street",
+      "with_aadt": 7666,
+      "with_aadt_uncertainty": 1902,
+      "against_aadt": 7666,
+      "against_aadt_uncertainty": 1902,
+      "total_aadt": 15135,
+      "total_aadt_uncertainty": 2881,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "0a1f4c07": {
+      "session_id": "0a1f4c07",
+      "label": "19/06/2026, 15:19:23",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:19:28.155Z",
+      "end_utc": "2026-06-19T14:20:43.189Z",
+      "duration_s": 75.0,
+      "with_count": 5,
+      "against_count": 7,
+      "total_count": 12,
+      "centroid_lat": 54.592307,
+      "centroid_lng": -5.704122,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.345,
+      "against_uncertainty": 2.739,
+      "total_uncertainty": 3.536,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        288,
+        73
+      ],
+      "matched_link_against": [
+        73,
+        288
+      ],
+      "match_rmse_m": 15.6,
+      "matched_link_name": "Mill Street",
+      "with_aadt": 3027,
+      "with_aadt_uncertainty": 1326,
+      "against_aadt": 4128,
+      "against_aadt_uncertainty": 1564,
+      "total_aadt": 6880,
+      "total_aadt_uncertainty": 2067,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "787d7e49": {
+      "session_id": "787d7e49",
+      "label": "19/06/2026, 15:20:43",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:20:43.887Z",
+      "end_utc": "2026-06-19T14:22:43.317Z",
+      "duration_s": 119.4,
+      "with_count": 5,
+      "against_count": 8,
+      "total_count": 13,
+      "centroid_lat": 54.591824,
+      "centroid_lng": -5.705635,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.345,
+      "against_uncertainty": 2.915,
+      "total_uncertainty": 3.674,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        73,
+        70
+      ],
+      "matched_link_against": [
+        70,
+        73
+      ],
+      "match_rmse_m": 9.7,
+      "matched_link_name": "Mill Street",
+      "with_aadt": 1901,
+      "with_aadt_uncertainty": 833,
+      "against_aadt": 2938,
+      "against_aadt_uncertainty": 1051,
+      "total_aadt": 4667,
+      "total_aadt_uncertainty": 1355,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "80545377": {
+      "session_id": "80545377",
+      "label": "19/06/2026, 15:22:43",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:22:44.380Z",
+      "end_utc": "2026-06-19T14:24:30.207Z",
+      "duration_s": 105.8,
+      "with_count": 5,
+      "against_count": 9,
+      "total_count": 14,
+      "centroid_lat": 54.591069,
+      "centroid_lng": -5.707592,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.345,
+      "against_uncertainty": 3.082,
+      "total_uncertainty": 3.808,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        70,
+        74
+      ],
+      "matched_link_against": [
+        74,
+        70
+      ],
+      "match_rmse_m": 7.5,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 2146,
+      "with_aadt_uncertainty": 940,
+      "against_aadt": 3706,
+      "against_aadt_uncertainty": 1260,
+      "total_aadt": 5657,
+      "total_aadt_uncertainty": 1592,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "32529fde": {
+      "session_id": "32529fde",
+      "label": "19/06/2026, 15:24:30",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:24:31.038Z",
+      "end_utc": "2026-06-19T14:26:44.295Z",
+      "duration_s": 133.3,
+      "with_count": 3,
+      "against_count": 5,
+      "total_count": 8,
+      "centroid_lat": 54.590326,
+      "centroid_lng": -5.709244,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.871,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 2.915,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        70,
+        74
+      ],
+      "matched_link_against": [
+        74,
+        70
+      ],
+      "match_rmse_m": 6.9,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 1084,
+      "with_aadt_uncertainty": 590,
+      "against_aadt": 1703,
+      "against_aadt_uncertainty": 746,
+      "total_aadt": 2632,
+      "total_aadt_uncertainty": 941,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "9bd3873f": {
+      "session_id": "9bd3873f",
+      "label": "19/06/2026, 15:26:44",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:26:45.090Z",
+      "end_utc": "2026-06-19T14:28:09.450Z",
+      "duration_s": 84.4,
+      "with_count": 6,
+      "against_count": 9,
+      "total_count": 15,
+      "centroid_lat": 54.589442,
+      "centroid_lng": -5.710755,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 3.082,
+      "total_uncertainty": 3.937,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        74,
+        178
+      ],
+      "matched_link_against": [
+        178,
+        74
+      ],
+      "match_rmse_m": 7.3,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 3179,
+      "with_aadt_uncertainty": 1288,
+      "against_aadt": 4646,
+      "against_aadt_uncertainty": 1579,
+      "total_aadt": 7580,
+      "total_aadt_uncertainty": 2073,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "c2639ef6": {
+      "session_id": "c2639ef6",
+      "label": "19/06/2026, 15:30:01",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:30:02.929Z",
+      "end_utc": "2026-06-19T14:34:19.308Z",
+      "duration_s": 256.4,
+      "with_count": 22,
+      "against_count": 36,
+      "total_count": 58,
+      "centroid_lat": 54.586884,
+      "centroid_lng": -5.712213,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.743,
+      "against_uncertainty": 6.042,
+      "total_uncertainty": 7.649,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        325,
+        719
+      ],
+      "matched_link_against": [
+        719,
+        325
+      ],
+      "match_rmse_m": 4.3,
+      "matched_link_name": "Messines Road",
+      "with_aadt": 3622,
+      "with_aadt_uncertainty": 847,
+      "against_aadt": 5876,
+      "against_aadt_uncertainty": 1140,
+      "total_aadt": 9418,
+      "total_aadt_uncertainty": 1558,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "acf85b2f": {
+      "session_id": "acf85b2f",
+      "label": "19/06/2026, 15:34:19",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:34:19.941Z",
+      "end_utc": "2026-06-19T14:38:34.733Z",
+      "duration_s": 254.8,
+      "with_count": 30,
+      "against_count": 31,
+      "total_count": 61,
+      "centroid_lat": 54.58686,
+      "centroid_lng": -5.712283,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 5.523,
+      "against_uncertainty": 5.612,
+      "total_uncertainty": 7.842,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        719,
+        325
+      ],
+      "matched_link_against": [
+        325,
+        719
+      ],
+      "match_rmse_m": 2.5,
+      "matched_link_name": "Messines Road",
+      "with_aadt": 4941,
+      "with_aadt_uncertainty": 1025,
+      "against_aadt": 5103,
+      "against_aadt_uncertainty": 1046,
+      "total_aadt": 9963,
+      "total_aadt_uncertainty": 1622,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "50d22d5a": {
+      "session_id": "50d22d5a",
+      "label": "19/06/2026, 15:38:51",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:38:52.077Z",
+      "end_utc": "2026-06-19T14:40:35.021Z",
+      "duration_s": 102.9,
+      "with_count": 3,
+      "against_count": 4,
+      "total_count": 7,
+      "centroid_lat": 54.58826,
+      "centroid_lng": -5.713641,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.871,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 2.739,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        325,
+        623
+      ],
+      "matched_link_against": [
+        623,
+        325
+      ],
+      "match_rmse_m": 3.7,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 1404,
+      "with_aadt_uncertainty": 764,
+      "against_aadt": 1805,
+      "against_aadt_uncertainty": 870,
+      "total_aadt": 3009,
+      "total_aadt_uncertainty": 1140,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "4bc9056c": {
+      "session_id": "4bc9056c",
+      "label": "19/06/2026, 15:40:35",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:40:35.786Z",
+      "end_utc": "2026-06-19T14:43:31.745Z",
+      "duration_s": 176.0,
+      "with_count": 0,
+      "against_count": 1,
+      "total_count": 1,
+      "centroid_lat": 54.587925,
+      "centroid_lng": -5.715721,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.225,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        623,
+        624
+      ],
+      "matched_link_against": [
+        624,
+        623
+      ],
+      "match_rmse_m": 2.2,
+      "matched_link_name": "Old Belfast Road",
+      "with_aadt": 117,
+      "with_aadt_uncertainty": 166,
+      "against_aadt": 352,
+      "against_aadt_uncertainty": 289,
+      "total_aadt": 352,
+      "total_aadt_uncertainty": 289,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "cc9cc072": {
+      "session_id": "cc9cc072",
+      "label": "19/06/2026, 15:43:31",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:43:32.561Z",
+      "end_utc": "2026-06-19T14:44:53.382Z",
+      "duration_s": 80.8,
+      "with_count": 2,
+      "against_count": 0,
+      "total_count": 2,
+      "centroid_lat": 54.588236,
+      "centroid_lng": -5.717733,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        624,
+        738
+      ],
+      "matched_link_against": [
+        738,
+        624
+      ],
+      "match_rmse_m": 0.9,
+      "matched_link_name": "Old Belfast Road",
+      "with_aadt": 1277,
+      "with_aadt_uncertainty": 818,
+      "against_aadt": 255,
+      "against_aadt_uncertainty": 362,
+      "total_aadt": 1277,
+      "total_aadt_uncertainty": 818,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b7430f3c": {
+      "session_id": "b7430f3c",
+      "label": "19/06/2026, 15:50:31",
+      "mode": "single",
+      "start_utc": "2026-06-19T14:50:33.668Z",
+      "end_utc": "2026-06-19T14:56:53.556Z",
+      "duration_s": 379.9,
+      "with_count": 72,
+      "against_count": null,
+      "total_count": null,
+      "centroid_lat": 54.589088,
+      "centroid_lng": -5.727247,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 8.515,
+      "against_uncertainty": null,
+      "total_uncertainty": null,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        2,
+        9
+      ],
+      "matched_link_against": [
+        9,
+        2
+      ],
+      "match_rmse_m": 8.8,
+      "matched_link_name": "Kempe Stones Road",
+      "with_aadt": 7877,
+      "with_aadt_uncertainty": 1222,
+      "against_aadt": null,
+      "against_aadt_uncertainty": null,
+      "total_aadt": null,
+      "total_aadt_uncertainty": null,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "e66989f4": {
+      "session_id": "e66989f4",
+      "label": "19/06/2026, 15:57:25",
+      "mode": "dual",
+      "start_utc": "2026-06-19T14:57:26.569Z",
+      "end_utc": "2026-06-19T15:01:30.339Z",
+      "duration_s": 243.8,
+      "with_count": 4,
+      "against_count": 11,
+      "total_count": 15,
+      "centroid_lat": 54.589382,
+      "centroid_lng": -5.731089,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.121,
+      "against_uncertainty": 3.391,
+      "total_uncertainty": 3.937,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        9,
+        96
+      ],
+      "matched_link_against": [
+        96,
+        9
+      ],
+      "match_rmse_m": null,
+      "match_method": "manual",
+      "matched_link_name": "Ballyrainey Road",
+      "with_aadt": 762,
+      "with_aadt_uncertainty": 367,
+      "against_aadt": 1947,
+      "against_aadt_uncertainty": 607,
+      "total_aadt": 2624,
+      "total_aadt_uncertainty": 718,
+      "hourly_fraction": 0.087216,
+      "hourly_fraction_std": 0.008832,
+      "time_slot": [
+        4,
+        15
+      ],
+      "frac_rel_std": 0.10127,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d70dc7f3": {
+      "session_id": "d70dc7f3",
+      "label": "19/06/2026, 16:02:20",
+      "mode": "single",
+      "start_utc": "2026-06-19T15:02:22.136Z",
+      "end_utc": "2026-06-19T15:08:53.793Z",
+      "duration_s": 391.7,
+      "with_count": null,
+      "against_count": 104,
+      "total_count": null,
+      "centroid_lat": 54.589107,
+      "centroid_lng": -5.727438,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": null,
+      "against_uncertainty": 10.223,
+      "total_uncertainty": null,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        9,
+        2
+      ],
+      "matched_link_against": [
+        2,
+        9
+      ],
+      "match_rmse_m": 9.0,
+      "matched_link_name": "Kempe Stones Road",
+      "with_aadt": null,
+      "with_aadt_uncertainty": null,
+      "against_aadt": 10779,
+      "against_aadt_uncertainty": 1671,
+      "total_aadt": null,
+      "total_aadt_uncertainty": null,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "bb934ba7": {
+      "session_id": "bb934ba7",
+      "label": "19/06/2026, 16:08:56",
+      "mode": "single",
+      "start_utc": "2026-06-19T15:09:00.440Z",
+      "end_utc": "2026-06-19T15:14:01.295Z",
+      "duration_s": 300.9,
+      "with_count": 74,
+      "against_count": null,
+      "total_count": null,
+      "centroid_lat": 54.589283,
+      "centroid_lng": -5.72382,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 8.631,
+      "against_uncertainty": null,
+      "total_uncertainty": null,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        8,
+        7
+      ],
+      "matched_link_against": [
+        7,
+        8
+      ],
+      "match_rmse_m": null,
+      "match_method": "manual",
+      "matched_link_name": "Kempe Stones Road",
+      "with_aadt": 10003,
+      "with_aadt_uncertainty": 1670,
+      "against_aadt": null,
+      "against_aadt_uncertainty": null,
+      "total_aadt": null,
+      "total_aadt_uncertainty": null,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "29cce562": {
+      "session_id": "29cce562",
+      "label": "19/06/2026, 16:20:10",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:20:11.061Z",
+      "end_utc": "2026-06-19T15:22:45.248Z",
+      "duration_s": 154.2,
+      "with_count": 2,
+      "against_count": 5,
+      "total_count": 7,
+      "centroid_lat": 54.587952,
+      "centroid_lng": -5.715794,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 2.739,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        624,
+        623
+      ],
+      "matched_link_against": [
+        623,
+        624
+      ],
+      "match_rmse_m": 2.1,
+      "matched_link_name": "Old Belfast Road",
+      "with_aadt": 655,
+      "with_aadt_uncertainty": 422,
+      "against_aadt": 1441,
+      "against_aadt_uncertainty": 638,
+      "total_aadt": 1965,
+      "total_aadt_uncertainty": 756,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "82539788": {
+      "session_id": "82539788",
+      "label": "19/06/2026, 16:23:51",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:23:55.298Z",
+      "end_utc": "2026-06-19T15:26:33.041Z",
+      "duration_s": 157.7,
+      "with_count": 3,
+      "against_count": 5,
+      "total_count": 8,
+      "centroid_lat": 54.586745,
+      "centroid_lng": -5.713096,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.871,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 2.915,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        737,
+        621
+      ],
+      "matched_link_against": [
+        621,
+        737
+      ],
+      "match_rmse_m": 4.1,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 897,
+      "with_aadt_uncertainty": 491,
+      "against_aadt": 1409,
+      "against_aadt_uncertainty": 624,
+      "total_aadt": 2178,
+      "total_aadt_uncertainty": 791,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "dc132dfe": {
+      "session_id": "dc132dfe",
+      "label": "19/06/2026, 16:26:33",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:26:35.035Z",
+      "end_utc": "2026-06-19T15:29:09.884Z",
+      "duration_s": 154.8,
+      "with_count": 1,
+      "against_count": 1,
+      "total_count": 2,
+      "centroid_lat": 54.586635,
+      "centroid_lng": -5.713119,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        621,
+        737
+      ],
+      "matched_link_against": [
+        737,
+        621
+      ],
+      "match_rmse_m": 2.9,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 391,
+      "with_aadt_uncertainty": 323,
+      "against_aadt": 391,
+      "against_aadt_uncertainty": 323,
+      "total_aadt": 652,
+      "total_aadt_uncertainty": 420,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "53027290": {
+      "session_id": "53027290",
+      "label": "19/06/2026, 16:30:09",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:30:11.095Z",
+      "end_utc": "2026-06-19T15:31:33.684Z",
+      "duration_s": 82.6,
+      "with_count": 0,
+      "against_count": 4,
+      "total_count": 4,
+      "centroid_lat": 54.588161,
+      "centroid_lng": -5.713754,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 2.121,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        623,
+        325
+      ],
+      "matched_link_against": [
+        325,
+        623
+      ],
+      "match_rmse_m": 4.0,
+      "matched_link_name": "Scrabo Road",
+      "with_aadt": 245,
+      "with_aadt_uncertainty": 347,
+      "against_aadt": 2201,
+      "against_aadt_uncertainty": 1071,
+      "total_aadt": 2201,
+      "total_aadt_uncertainty": 1071,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b76240d7": {
+      "session_id": "b76240d7",
+      "label": "19/06/2026, 16:32:42",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:32:50.602Z",
+      "end_utc": "2026-06-19T15:34:57.443Z",
+      "duration_s": 126.8,
+      "with_count": 13,
+      "against_count": 18,
+      "total_count": 31,
+      "centroid_lat": 54.589771,
+      "centroid_lng": -5.712116,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.674,
+      "against_uncertainty": 4.301,
+      "total_uncertainty": 5.612,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        325,
+        4
+      ],
+      "matched_link_against": [
+        4,
+        325
+      ],
+      "match_rmse_m": 5.7,
+      "matched_link_name": "Blair Mayne Road South",
+      "with_aadt": 4302,
+      "with_aadt_uncertainty": 1280,
+      "against_aadt": 5895,
+      "against_aadt_uncertainty": 1543,
+      "total_aadt": 10037,
+      "total_aadt_uncertainty": 2157,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "ec4c7f82": {
+      "session_id": "ec4c7f82",
+      "label": "19/06/2026, 16:34:57",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:34:58.039Z",
+      "end_utc": "2026-06-19T15:36:20.400Z",
+      "duration_s": 82.4,
+      "with_count": 12,
+      "against_count": 17,
+      "total_count": 29,
+      "centroid_lat": 54.590659,
+      "centroid_lng": -5.711963,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.536,
+      "against_uncertainty": 4.183,
+      "total_uncertainty": 5.431,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        325,
+        4
+      ],
+      "matched_link_against": [
+        4,
+        325
+      ],
+      "match_rmse_m": 3.3,
+      "matched_link_name": "Blair Mayne Road South",
+      "with_aadt": 6129,
+      "with_aadt_uncertainty": 1884,
+      "against_aadt": 8581,
+      "against_aadt_uncertainty": 2296,
+      "total_aadt": 14465,
+      "total_aadt_uncertainty": 3181,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "e243af54": {
+      "session_id": "e243af54",
+      "label": "19/06/2026, 16:38:32",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:38:34.015Z",
+      "end_utc": "2026-06-19T15:40:26.237Z",
+      "duration_s": 112.2,
+      "with_count": 24,
+      "against_count": 21,
+      "total_count": 45,
+      "centroid_lat": 54.592817,
+      "centroid_lng": -5.712041,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.95,
+      "against_uncertainty": 4.637,
+      "total_uncertainty": 6.745,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        6,
+        299
+      ],
+      "matched_link_against": [
+        299,
+        6
+      ],
+      "match_rmse_m": 26.8,
+      "matched_link_name": "Blair Mayne Road North",
+      "with_aadt": 8822,
+      "with_aadt_uncertainty": 2074,
+      "against_aadt": 7742,
+      "against_aadt_uncertainty": 1912,
+      "total_aadt": 16384,
+      "total_aadt_uncertainty": 3127,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "a82dc9e4": {
+      "session_id": "a82dc9e4",
+      "label": "19/06/2026, 16:40:26",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:40:27.357Z",
+      "end_utc": "2026-06-19T15:43:18.484Z",
+      "duration_s": 171.1,
+      "with_count": 22,
+      "against_count": 41,
+      "total_count": 63,
+      "centroid_lat": 54.594143,
+      "centroid_lng": -5.710984,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.743,
+      "against_uncertainty": 6.442,
+      "total_uncertainty": 7.969,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        6,
+        299
+      ],
+      "matched_link_against": [
+        299,
+        6
+      ],
+      "match_rmse_m": 6.8,
+      "matched_link_name": "Blair Mayne Road North",
+      "with_aadt": 5313,
+      "with_aadt_uncertainty": 1289,
+      "against_aadt": 9800,
+      "against_aadt_uncertainty": 1924,
+      "total_aadt": 14995,
+      "total_aadt_uncertainty": 2606,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "9f2e4695": {
+      "session_id": "9f2e4695",
+      "label": "19/06/2026, 16:44:01",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:44:03.566Z",
+      "end_utc": "2026-06-19T15:45:44.312Z",
+      "duration_s": 100.7,
+      "with_count": 2,
+      "against_count": 5,
+      "total_count": 7,
+      "centroid_lat": 54.594311,
+      "centroid_lng": -5.711413,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 2.739,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        317,
+        314
+      ],
+      "matched_link_against": [
+        314,
+        317
+      ],
+      "match_rmse_m": 6.7,
+      "matched_link_name": "Manse Road",
+      "with_aadt": 1003,
+      "with_aadt_uncertainty": 646,
+      "against_aadt": 2207,
+      "against_aadt_uncertainty": 978,
+      "total_aadt": 3009,
+      "total_aadt_uncertainty": 1157,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "623b7df7": {
+      "session_id": "623b7df7",
+      "label": "19/06/2026, 16:45:44",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:45:45.142Z",
+      "end_utc": "2026-06-19T15:47:27.281Z",
+      "duration_s": 102.1,
+      "with_count": 2,
+      "against_count": 1,
+      "total_count": 3,
+      "centroid_lat": 54.594211,
+      "centroid_lng": -5.71164,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.871,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        314,
+        317
+      ],
+      "matched_link_against": [
+        317,
+        314
+      ],
+      "match_rmse_m": 4.9,
+      "matched_link_name": "Manse Road",
+      "with_aadt": 989,
+      "with_aadt_uncertainty": 637,
+      "against_aadt": 594,
+      "against_aadt_uncertainty": 490,
+      "total_aadt": 1385,
+      "total_aadt_uncertainty": 759,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "c180fd00": {
+      "session_id": "c180fd00",
+      "label": "19/06/2026, 16:51:20",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:51:21.028Z",
+      "end_utc": "2026-06-19T15:53:33.173Z",
+      "duration_s": 132.1,
+      "with_count": 6,
+      "against_count": 17,
+      "total_count": 23,
+      "centroid_lat": 54.597326,
+      "centroid_lng": -5.712103,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 4.183,
+      "total_uncertainty": 4.848,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        418,
+        420
+      ],
+      "matched_link_against": [
+        420,
+        418
+      ],
+      "match_rmse_m": 31.9,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 1988,
+      "with_aadt_uncertainty": 816,
+      "against_aadt": 5352,
+      "against_aadt_uncertainty": 1432,
+      "total_aadt": 7187,
+      "total_aadt_uncertainty": 1716,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "a534415a": {
+      "session_id": "a534415a",
+      "label": "19/06/2026, 16:53:33",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:53:33.939Z",
+      "end_utc": "2026-06-19T15:54:35.829Z",
+      "duration_s": 61.9,
+      "with_count": 7,
+      "against_count": 7,
+      "total_count": 14,
+      "centroid_lat": 54.597822,
+      "centroid_lng": -5.713499,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 2.739,
+      "total_uncertainty": 3.808,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        492,
+        494
+      ],
+      "matched_link_against": [
+        494,
+        492
+      ],
+      "match_rmse_m": 5.5,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 4895,
+      "with_aadt_uncertainty": 1882,
+      "against_aadt": 4895,
+      "against_aadt_uncertainty": 1882,
+      "total_aadt": 9464,
+      "total_aadt_uncertainty": 2734,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "ec4b9a73": {
+      "session_id": "ec4b9a73",
+      "label": "19/06/2026, 16:55:19",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:55:21.041Z",
+      "end_utc": "2026-06-19T15:56:41.601Z",
+      "duration_s": 80.6,
+      "with_count": 5,
+      "against_count": 11,
+      "total_count": 16,
+      "centroid_lat": 54.598395,
+      "centroid_lng": -5.715374,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.345,
+      "against_uncertainty": 3.391,
+      "total_uncertainty": 4.062,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        784,
+        16
+      ],
+      "matched_link_against": [
+        16,
+        784
+      ],
+      "match_rmse_m": 4.9,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 2757,
+      "with_aadt_uncertainty": 1221,
+      "against_aadt": 5765,
+      "against_aadt_uncertainty": 1836,
+      "total_aadt": 8271,
+      "total_aadt_uncertainty": 2266,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "30ecfe49": {
+      "session_id": "30ecfe49",
+      "label": "19/06/2026, 16:56:41",
+      "mode": "dual",
+      "start_utc": "2026-06-19T15:56:42.333Z",
+      "end_utc": "2026-06-19T16:00:11.762Z",
+      "duration_s": 209.4,
+      "with_count": 11,
+      "against_count": 28,
+      "total_count": 39,
+      "centroid_lat": 54.599023,
+      "centroid_lng": -5.717916,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.391,
+      "against_uncertainty": 5.339,
+      "total_uncertainty": 6.285,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        16,
+        15
+      ],
+      "matched_link_against": [
+        15,
+        16
+      ],
+      "match_rmse_m": 3.1,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 2219,
+      "with_aadt_uncertainty": 707,
+      "against_aadt": 5499,
+      "against_aadt_uncertainty": 1224,
+      "total_aadt": 7621,
+      "total_aadt_uncertainty": 1520,
+      "hourly_fraction": 0.089103,
+      "hourly_fraction_std": 0.010713,
+      "time_slot": [
+        4,
+        16
+      ],
+      "frac_rel_std": 0.120236,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "98afe2bb": {
+      "session_id": "98afe2bb",
+      "label": "19/06/2026, 17:00:11",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:00:12.578Z",
+      "end_utc": "2026-06-19T16:03:50.724Z",
+      "duration_s": 218.1,
+      "with_count": 17,
+      "against_count": 22,
+      "total_count": 39,
+      "centroid_lat": 54.59935,
+      "centroid_lng": -5.721589,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.183,
+      "against_uncertainty": 4.743,
+      "total_uncertainty": 6.285,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        15,
+        17
+      ],
+      "matched_link_against": [
+        17,
+        15
+      ],
+      "match_rmse_m": 3.6,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 3419,
+      "with_aadt_uncertainty": 902,
+      "against_aadt": 4396,
+      "against_aadt_uncertainty": 1049,
+      "total_aadt": 7718,
+      "total_aadt_uncertainty": 1500,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "c05588b7": {
+      "session_id": "c05588b7",
+      "label": "19/06/2026, 17:03:59",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:04:01.237Z",
+      "end_utc": "2026-06-19T16:05:50.715Z",
+      "duration_s": 109.5,
+      "with_count": 10,
+      "against_count": 11,
+      "total_count": 21,
+      "centroid_lat": 54.599778,
+      "centroid_lng": -5.724422,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.24,
+      "against_uncertainty": 3.391,
+      "total_uncertainty": 4.637,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        15,
+        17
+      ],
+      "matched_link_against": [
+        17,
+        15
+      ],
+      "match_rmse_m": 2.4,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 4086,
+      "with_aadt_uncertainty": 1341,
+      "against_aadt": 4475,
+      "against_aadt_uncertainty": 1411,
+      "total_aadt": 8367,
+      "total_aadt_uncertainty": 2032,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "bff1a930": {
+      "session_id": "bff1a930",
+      "label": "19/06/2026, 17:05:50",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:05:52.260Z",
+      "end_utc": "2026-06-19T16:07:44.055Z",
+      "duration_s": 111.8,
+      "with_count": 7,
+      "against_count": 15,
+      "total_count": 22,
+      "centroid_lat": 54.599808,
+      "centroid_lng": -5.724409,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 3.937,
+      "total_uncertainty": 4.743,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        17,
+        15
+      ],
+      "matched_link_against": [
+        15,
+        17
+      ],
+      "match_rmse_m": 4.0,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 2859,
+      "with_aadt_uncertainty": 1092,
+      "against_aadt": 5908,
+      "against_aadt_uncertainty": 1639,
+      "total_aadt": 8576,
+      "total_aadt_uncertainty": 2046,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "5193490e": {
+      "session_id": "5193490e",
+      "label": "19/06/2026, 17:07:44",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:07:44.850Z",
+      "end_utc": "2026-06-19T16:11:59.268Z",
+      "duration_s": 254.4,
+      "with_count": 34,
+      "against_count": 19,
+      "total_count": 53,
+      "centroid_lat": 54.599346,
+      "centroid_lng": -5.721095,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 5.874,
+      "against_uncertainty": 4.416,
+      "total_uncertainty": 7.314,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        17,
+        15
+      ],
+      "matched_link_against": [
+        15,
+        17
+      ],
+      "match_rmse_m": 26.7,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 5779,
+      "with_aadt_uncertainty": 1176,
+      "against_aadt": 3266,
+      "against_aadt_uncertainty": 825,
+      "total_aadt": 8962,
+      "total_aadt_uncertainty": 1581,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d3636cd4": {
+      "session_id": "d3636cd4",
+      "label": "19/06/2026, 17:11:59",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:12:00.033Z",
+      "end_utc": "2026-06-19T16:14:49.525Z",
+      "duration_s": 169.5,
+      "with_count": 22,
+      "against_count": 13,
+      "total_count": 35,
+      "centroid_lat": 54.598864,
+      "centroid_lng": -5.717353,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 4.743,
+      "against_uncertainty": 3.674,
+      "total_uncertainty": 5.958,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        15,
+        16
+      ],
+      "matched_link_against": [
+        16,
+        15
+      ],
+      "match_rmse_m": 6.6,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 5657,
+      "with_aadt_uncertainty": 1349,
+      "against_aadt": 3394,
+      "against_aadt_uncertainty": 998,
+      "total_aadt": 8925,
+      "total_aadt_uncertainty": 1799,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "8005a899": {
+      "session_id": "8005a899",
+      "label": "19/06/2026, 17:18:31",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:18:32.466Z",
+      "end_utc": "2026-06-19T16:20:31.826Z",
+      "duration_s": 119.4,
+      "with_count": 15,
+      "against_count": 18,
+      "total_count": 33,
+      "centroid_lat": 54.59729,
+      "centroid_lng": -5.712221,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 3.937,
+      "against_uncertainty": 4.301,
+      "total_uncertainty": 5.788,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        420,
+        418
+      ],
+      "matched_link_against": [
+        418,
+        420
+      ],
+      "match_rmse_m": 21.4,
+      "matched_link_name": "Belfast Road",
+      "with_aadt": 5532,
+      "with_aadt_uncertainty": 1535,
+      "against_aadt": 6603,
+      "against_aadt_uncertainty": 1703,
+      "total_aadt": 11956,
+      "total_aadt_uncertainty": 2459,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "85249513": {
+      "session_id": "85249513",
+      "label": "19/06/2026, 17:20:35",
+      "mode": "dual",
+      "start_utc": "2026-06-19T16:20:36.289Z",
+      "end_utc": "2026-06-19T16:23:55.622Z",
+      "duration_s": 199.3,
+      "with_count": 0,
+      "against_count": 3,
+      "total_count": 3,
+      "centroid_lat": 54.596607,
+      "centroid_lng": -5.712692,
+      "source_files": [
+        "traffic_2026-06-19.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.871,
+      "total_uncertainty": 1.871,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        418,
+        419
+      ],
+      "matched_link_against": [
+        419,
+        418
+      ],
+      "match_rmse_m": 3.7,
+      "matched_link_name": "Westmount Park",
+      "with_aadt": 107,
+      "with_aadt_uncertainty": 152,
+      "against_aadt": 748,
+      "against_aadt_uncertainty": 409,
+      "total_aadt": 748,
+      "total_aadt_uncertainty": 409,
+      "hourly_fraction": 0.084479,
+      "hourly_fraction_std": 0.009427,
+      "time_slot": [
+        4,
+        17
+      ],
+      "frac_rel_std": 0.111592,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "6e1e8c82": {
+      "session_id": "6e1e8c82",
+      "label": "19/06/2026, 21:20:42",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:20:43.614Z",
+      "end_utc": "2026-06-19T20:22:16.733Z",
+      "duration_s": 93.1,
+      "with_count": 1,
+      "against_count": 5,
+      "total_count": 6,
+      "centroid_lat": 54.59411,
+      "centroid_lng": -5.702799,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 2.55,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        10,
+        11
+      ],
+      "matched_link_against": [
+        11,
+        10
+      ],
+      "match_rmse_m": 8.3,
+      "matched_link_name": "Frederick Street",
+      "with_aadt": 1848,
+      "with_aadt_uncertainty": 1534,
+      "against_aadt": 6774,
+      "against_aadt_uncertainty": 3062,
+      "total_aadt": 8006,
+      "total_aadt_uncertainty": 3362,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "e61b3b4f": {
+      "session_id": "e61b3b4f",
+      "label": "19/06/2026, 21:25:46",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:25:49.642Z",
+      "end_utc": "2026-06-19T20:26:55.013Z",
+      "duration_s": 65.4,
+      "with_count": 1,
+      "against_count": 0,
+      "total_count": 1,
+      "centroid_lat": 54.592025,
+      "centroid_lng": -5.700825,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 1.225,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        793,
+        77
+      ],
+      "matched_link_against": [
+        77,
+        793
+      ],
+      "match_rmse_m": 11.0,
+      "matched_link_name": "John Street",
+      "with_aadt": 2630,
+      "with_aadt_uncertainty": 2184,
+      "against_aadt": 877,
+      "against_aadt_uncertainty": 1247,
+      "total_aadt": 2630,
+      "total_aadt_uncertainty": 2184,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "c7b891df": {
+      "session_id": "c7b891df",
+      "label": "19/06/2026, 21:26:55",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:26:56.115Z",
+      "end_utc": "2026-06-19T20:27:59.398Z",
+      "duration_s": 63.3,
+      "with_count": 3,
+      "against_count": 0,
+      "total_count": 3,
+      "centroid_lat": 54.591912,
+      "centroid_lng": -5.699853,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.871,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 1.871,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        77,
+        75
+      ],
+      "matched_link_against": [
+        75,
+        77
+      ],
+      "match_rmse_m": 8.4,
+      "matched_link_name": "John Street",
+      "with_aadt": 6340,
+      "with_aadt_uncertainty": 3520,
+      "against_aadt": 906,
+      "against_aadt_uncertainty": 1288,
+      "total_aadt": 6340,
+      "total_aadt_uncertainty": 3520,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "a1d61545": {
+      "session_id": "a1d61545",
+      "label": "19/06/2026, 21:27:59",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:27:59.996Z",
+      "end_utc": "2026-06-19T20:29:39.686Z",
+      "duration_s": 99.7,
+      "with_count": 6,
+      "against_count": 4,
+      "total_count": 10,
+      "centroid_lat": 54.591796,
+      "centroid_lng": -5.698844,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 3.24,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        75,
+        78
+      ],
+      "matched_link_against": [
+        78,
+        75
+      ],
+      "match_rmse_m": 5.9,
+      "matched_link_name": "John Street",
+      "with_aadt": 7476,
+      "with_aadt_uncertainty": 3140,
+      "against_aadt": 5176,
+      "against_aadt_uncertainty": 2560,
+      "total_aadt": 12077,
+      "total_aadt_uncertainty": 4143,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b79f37d2": {
+      "session_id": "b79f37d2",
+      "label": "19/06/2026, 21:29:39",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:29:40.419Z",
+      "end_utc": "2026-06-19T20:30:54.174Z",
+      "duration_s": 73.8,
+      "with_count": 7,
+      "against_count": 3,
+      "total_count": 10,
+      "centroid_lat": 54.591701,
+      "centroid_lng": -5.697534,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 1.871,
+      "total_uncertainty": 3.24,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        78,
+        79
+      ],
+      "matched_link_against": [
+        79,
+        78
+      ],
+      "match_rmse_m": 8.4,
+      "matched_link_name": "Upper Court Street",
+      "with_aadt": 11653,
+      "with_aadt_uncertainty": 4600,
+      "against_aadt": 5438,
+      "against_aadt_uncertainty": 3019,
+      "total_aadt": 16315,
+      "total_aadt_uncertainty": 5597,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "86fbb7b0": {
+      "session_id": "86fbb7b0",
+      "label": "19/06/2026, 21:31:53",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:31:55.607Z",
+      "end_utc": "2026-06-19T20:34:15.963Z",
+      "duration_s": 140.4,
+      "with_count": 8,
+      "against_count": 2,
+      "total_count": 10,
+      "centroid_lat": 54.591481,
+      "centroid_lng": -5.694863,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.915,
+      "against_uncertainty": 1.581,
+      "total_uncertainty": 3.24,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        79,
+        82
+      ],
+      "matched_link_against": [
+        82,
+        79
+      ],
+      "match_rmse_m": 7.0,
+      "matched_link_name": "Court Street",
+      "with_aadt": 6942,
+      "with_aadt_uncertainty": 2598,
+      "against_aadt": 2042,
+      "against_aadt_uncertainty": 1327,
+      "total_aadt": 8576,
+      "total_aadt_uncertainty": 2942,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d93b8110": {
+      "session_id": "d93b8110",
+      "label": "19/06/2026, 21:34:25",
+      "mode": "single",
+      "start_utc": "2026-06-19T20:34:26.584Z",
+      "end_utc": "2026-06-19T20:35:34.022Z",
+      "duration_s": 67.4,
+      "with_count": 2,
+      "against_count": null,
+      "total_count": null,
+      "centroid_lat": 54.591653,
+      "centroid_lng": -5.693348,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": null,
+      "total_uncertainty": null,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        82,
+        85
+      ],
+      "matched_link_against": [
+        85,
+        82
+      ],
+      "match_rmse_m": 6.9,
+      "matched_link_name": "Old Cross Street",
+      "with_aadt": 4253,
+      "with_aadt_uncertainty": 2764,
+      "against_aadt": null,
+      "against_aadt_uncertainty": null,
+      "total_aadt": null,
+      "total_aadt_uncertainty": null,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d3ab3d38": {
+      "session_id": "d3ab3d38",
+      "label": "19/06/2026, 21:36:40",
+      "mode": "single",
+      "start_utc": "2026-06-19T20:36:42.259Z",
+      "end_utc": "2026-06-19T20:38:05.863Z",
+      "duration_s": 83.6,
+      "with_count": null,
+      "against_count": 11,
+      "total_count": null,
+      "centroid_lat": 54.593004,
+      "centroid_lng": -5.692854,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": null,
+      "against_uncertainty": 3.391,
+      "total_uncertainty": null,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        83,
+        312
+      ],
+      "matched_link_against": [
+        312,
+        83
+      ],
+      "match_rmse_m": 3.2,
+      "matched_link_name": "Castle Place",
+      "with_aadt": null,
+      "with_aadt_uncertainty": null,
+      "against_aadt": 15774,
+      "against_aadt_uncertainty": 5218,
+      "total_aadt": null,
+      "total_aadt_uncertainty": null,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "210166e1": {
+      "session_id": "210166e1",
+      "label": "19/06/2026, 21:38:15",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:38:16.963Z",
+      "end_utc": "2026-06-19T20:39:53.352Z",
+      "duration_s": 96.4,
+      "with_count": 8,
+      "against_count": 5,
+      "total_count": 13,
+      "centroid_lat": 54.593361,
+      "centroid_lng": -5.692048,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.915,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 3.674,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        312,
+        295
+      ],
+      "matched_link_against": [
+        295,
+        312
+      ],
+      "match_rmse_m": 3.7,
+      "matched_link_name": "Frances Street",
+      "with_aadt": 10111,
+      "with_aadt_uncertainty": 3784,
+      "against_aadt": 6542,
+      "against_aadt_uncertainty": 2957,
+      "total_aadt": 16058,
+      "total_aadt_uncertainty": 4989,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "a1597a32": {
+      "session_id": "a1597a32",
+      "label": "19/06/2026, 21:41:39",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:41:41.804Z",
+      "end_utc": "2026-06-19T20:49:31.900Z",
+      "duration_s": 470.1,
+      "with_count": 5,
+      "against_count": 11,
+      "total_count": 16,
+      "centroid_lat": 54.596352,
+      "centroid_lng": -5.692265,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.345,
+      "against_uncertainty": 3.391,
+      "total_uncertainty": 4.062,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        143,
+        144
+      ],
+      "matched_link_against": [
+        144,
+        143
+      ],
+      "match_rmse_m": 6.0,
+      "matched_link_name": "Victoria Avenue",
+      "with_aadt": 1342,
+      "with_aadt_uncertainty": 606,
+      "against_aadt": 2805,
+      "against_aadt_uncertainty": 928,
+      "total_aadt": 4025,
+      "total_aadt_uncertainty": 1160,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "309cfb49": {
+      "session_id": "309cfb49",
+      "label": "19/06/2026, 21:49:54",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:49:56.482Z",
+      "end_utc": "2026-06-19T20:50:59.885Z",
+      "duration_s": 63.4,
+      "with_count": 2,
+      "against_count": 0,
+      "total_count": 2,
+      "centroid_lat": 54.59733,
+      "centroid_lng": -5.695424,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.581,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        144,
+        154
+      ],
+      "matched_link_against": [
+        154,
+        144
+      ],
+      "match_rmse_m": 4.6,
+      "matched_link_name": "Upper North Street",
+      "with_aadt": 4522,
+      "with_aadt_uncertainty": 2939,
+      "against_aadt": 904,
+      "against_aadt_uncertainty": 1286,
+      "total_aadt": 4522,
+      "total_aadt_uncertainty": 2939,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "46788cd1": {
+      "session_id": "46788cd1",
+      "label": "19/06/2026, 21:51:19",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:51:20.134Z",
+      "end_utc": "2026-06-19T20:52:37.723Z",
+      "duration_s": 77.6,
+      "with_count": 4,
+      "against_count": 4,
+      "total_count": 8,
+      "centroid_lat": 54.598028,
+      "centroid_lng": -5.695454,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.121,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 2.915,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        154,
+        155
+      ],
+      "matched_link_against": [
+        155,
+        154
+      ],
+      "match_rmse_m": 4.3,
+      "matched_link_name": "North Road",
+      "with_aadt": 6650,
+      "with_aadt_uncertainty": 3289,
+      "against_aadt": 6650,
+      "against_aadt_uncertainty": 3289,
+      "total_aadt": 12560,
+      "total_aadt_uncertainty": 4701,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "c47ddf4c": {
+      "session_id": "c47ddf4c",
+      "label": "19/06/2026, 21:55:28",
+      "mode": "dual",
+      "start_utc": "2026-06-19T20:55:29.276Z",
+      "end_utc": "2026-06-19T20:57:28.151Z",
+      "duration_s": 118.9,
+      "with_count": 6,
+      "against_count": 6,
+      "total_count": 12,
+      "centroid_lat": 54.599713,
+      "centroid_lng": -5.692702,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 2.55,
+      "total_uncertainty": 3.536,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        162,
+        164
+      ],
+      "matched_link_against": [
+        164,
+        162
+      ],
+      "match_rmse_m": 2.0,
+      "matched_link_name": "North Road",
+      "with_aadt": 6269,
+      "with_aadt_uncertainty": 2633,
+      "against_aadt": 6269,
+      "against_aadt_uncertainty": 2633,
+      "total_aadt": 12055,
+      "total_aadt_uncertainty": 3859,
+      "hourly_fraction": 0.031395,
+      "hourly_fraction_std": 0.004705,
+      "time_slot": [
+        4,
+        21
+      ],
+      "frac_rel_std": 0.149881,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "e24bd2b7": {
+      "session_id": "e24bd2b7",
+      "label": "19/06/2026, 22:00:17",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:00:19.291Z",
+      "end_utc": "2026-06-19T21:01:46.946Z",
+      "duration_s": 87.7,
+      "with_count": 6,
+      "against_count": 4,
+      "total_count": 10,
+      "centroid_lat": 54.601388,
+      "centroid_lng": -5.689095,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 3.24,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        172,
+        831
+      ],
+      "matched_link_against": [
+        831,
+        172
+      ],
+      "match_rmse_m": 6.4,
+      "matched_link_name": "North Road",
+      "with_aadt": 10943,
+      "with_aadt_uncertainty": 4768,
+      "against_aadt": 7576,
+      "against_aadt_uncertainty": 3849,
+      "total_aadt": 17678,
+      "total_aadt_uncertainty": 6401,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "de3cbad2": {
+      "session_id": "de3cbad2",
+      "label": "19/06/2026, 22:01:46",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:01:47.714Z",
+      "end_utc": "2026-06-19T21:03:19.285Z",
+      "duration_s": 91.6,
+      "with_count": 1,
+      "against_count": 2,
+      "total_count": 3,
+      "centroid_lat": 54.601463,
+      "centroid_lng": -5.688905,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 1.581,
+      "total_uncertainty": 1.871,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        831,
+        172
+      ],
+      "matched_link_against": [
+        172,
+        831
+      ],
+      "match_rmse_m": 6.7,
+      "matched_link_name": "North Road",
+      "with_aadt": 2418,
+      "with_aadt_uncertainty": 2027,
+      "against_aadt": 4030,
+      "against_aadt_uncertainty": 2660,
+      "total_aadt": 5642,
+      "total_aadt_uncertainty": 3200,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "602daf09": {
+      "session_id": "602daf09",
+      "label": "19/06/2026, 22:03:38",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:03:42.087Z",
+      "end_utc": "2026-06-19T21:05:05.223Z",
+      "duration_s": 83.1,
+      "with_count": 0,
+      "against_count": 1,
+      "total_count": 1,
+      "centroid_lat": 54.600808,
+      "centroid_lng": -5.689441,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.225,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        172,
+        173
+      ],
+      "matched_link_against": [
+        173,
+        172
+      ],
+      "match_rmse_m": 4.8,
+      "matched_link_name": "Londonderry Road",
+      "with_aadt": 888,
+      "with_aadt_uncertainty": 1267,
+      "against_aadt": 2665,
+      "against_aadt_uncertainty": 2234,
+      "total_aadt": 2665,
+      "total_aadt_uncertainty": 2234,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "37625d33": {
+      "session_id": "37625d33",
+      "label": "19/06/2026, 22:05:05",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:05:10.473Z",
+      "end_utc": "2026-06-19T21:07:04.412Z",
+      "duration_s": 113.9,
+      "with_count": 0,
+      "against_count": 0,
+      "total_count": 0,
+      "centroid_lat": 54.600258,
+      "centroid_lng": -5.68849,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 0.707,
+      "total_uncertainty": 0.707,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        173,
+        422
+      ],
+      "matched_link_against": [
+        422,
+        173
+      ],
+      "match_rmse_m": 4.8,
+      "matched_link_name": "Belvedere Road",
+      "with_aadt": 648,
+      "with_aadt_uncertainty": 925,
+      "against_aadt": 648,
+      "against_aadt_uncertainty": 925,
+      "total_aadt": 648,
+      "total_aadt_uncertainty": 925,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b764d4f6": {
+      "session_id": "b764d4f6",
+      "label": "19/06/2026, 22:07:04",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:07:15.148Z",
+      "end_utc": "2026-06-19T21:09:10.653Z",
+      "duration_s": 115.5,
+      "with_count": 0,
+      "against_count": 1,
+      "total_count": 1,
+      "centroid_lat": 54.600107,
+      "centroid_lng": -5.688448,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.225,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        422,
+        173
+      ],
+      "matched_link_against": [
+        173,
+        422
+      ],
+      "match_rmse_m": 4.6,
+      "matched_link_name": "Belvedere Road",
+      "with_aadt": 639,
+      "with_aadt_uncertainty": 912,
+      "against_aadt": 1918,
+      "against_aadt_uncertainty": 1608,
+      "total_aadt": 1918,
+      "total_aadt_uncertainty": 1608,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "71321c57": {
+      "session_id": "71321c57",
+      "label": "19/06/2026, 22:09:10",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:09:17.503Z",
+      "end_utc": "2026-06-19T21:10:32.712Z",
+      "duration_s": 75.2,
+      "with_count": 0,
+      "against_count": 2,
+      "total_count": 2,
+      "centroid_lat": 54.600756,
+      "centroid_lng": -5.689294,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 0.707,
+      "against_uncertainty": 1.581,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        173,
+        172
+      ],
+      "matched_link_against": [
+        172,
+        173
+      ],
+      "match_rmse_m": 3.9,
+      "matched_link_name": "Londonderry Road",
+      "with_aadt": 982,
+      "with_aadt_uncertainty": 1401,
+      "against_aadt": 4909,
+      "against_aadt_uncertainty": 3241,
+      "total_aadt": 4909,
+      "total_aadt_uncertainty": 3241,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "dc2425f1": {
+      "session_id": "dc2425f1",
+      "label": "19/06/2026, 22:10:32",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:10:38.071Z",
+      "end_utc": "2026-06-19T21:12:06.083Z",
+      "duration_s": 88.0,
+      "with_count": 4,
+      "against_count": 6,
+      "total_count": 10,
+      "centroid_lat": 54.600692,
+      "centroid_lng": -5.690419,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.121,
+      "against_uncertainty": 2.55,
+      "total_uncertainty": 3.24,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        172,
+        174
+      ],
+      "matched_link_against": [
+        174,
+        172
+      ],
+      "match_rmse_m": 6.1,
+      "matched_link_name": "North Road",
+      "with_aadt": 7550,
+      "with_aadt_uncertainty": 3836,
+      "against_aadt": 10906,
+      "against_aadt_uncertainty": 4752,
+      "total_aadt": 17617,
+      "total_aadt_uncertainty": 6380,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "b0043fd1": {
+      "session_id": "b0043fd1",
+      "label": "19/06/2026, 22:14:41",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:14:43.168Z",
+      "end_utc": "2026-06-19T21:18:45.367Z",
+      "duration_s": 242.2,
+      "with_count": 14,
+      "against_count": 8,
+      "total_count": 22,
+      "centroid_lat": 54.599423,
+      "centroid_lng": -5.693891,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 3.808,
+      "against_uncertainty": 2.915,
+      "total_uncertainty": 4.743,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        162,
+        161
+      ],
+      "matched_link_against": [
+        161,
+        162
+      ],
+      "match_rmse_m": null,
+      "match_method": "manual",
+      "matched_link_name": "North Road",
+      "with_aadt": 8839,
+      "with_aadt_uncertainty": 2863,
+      "against_aadt": 5182,
+      "against_aadt_uncertainty": 2030,
+      "total_aadt": 13716,
+      "total_aadt_uncertainty": 3888,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "29d5f5f0": {
+      "session_id": "29d5f5f0",
+      "label": "19/06/2026, 22:18:45",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:18:46.260Z",
+      "end_utc": "2026-06-19T21:23:47.843Z",
+      "duration_s": 301.6,
+      "with_count": 4,
+      "against_count": 4,
+      "total_count": 8,
+      "centroid_lat": 54.599436,
+      "centroid_lng": -5.693968,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.121,
+      "against_uncertainty": 2.121,
+      "total_uncertainty": 2.915,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        162,
+        163
+      ],
+      "matched_link_against": [
+        163,
+        162
+      ],
+      "match_rmse_m": null,
+      "match_method": "manual",
+      "matched_link_name": "Glenburn Road",
+      "with_aadt": 2203,
+      "with_aadt_uncertainty": 1119,
+      "against_aadt": 2203,
+      "against_aadt_uncertainty": 1119,
+      "total_aadt": 4161,
+      "total_aadt_uncertainty": 1630,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "32d425d6": {
+      "session_id": "32d425d6",
+      "label": "19/06/2026, 22:27:22",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:27:25.267Z",
+      "end_utc": "2026-06-19T21:31:57.186Z",
+      "duration_s": 271.9,
+      "with_count": 7,
+      "against_count": 6,
+      "total_count": 13,
+      "centroid_lat": 54.599428,
+      "centroid_lng": -5.693871,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 2.55,
+      "total_uncertainty": 3.674,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        162,
+        161
+      ],
+      "matched_link_against": [
+        161,
+        162
+      ],
+      "match_rmse_m": null,
+      "match_method": "manual",
+      "matched_link_name": "North Road",
+      "with_aadt": 4073,
+      "with_aadt_uncertainty": 1676,
+      "against_aadt": 3530,
+      "against_aadt_uncertainty": 1538,
+      "total_aadt": 7331,
+      "total_aadt_uncertainty": 2431,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "5e46f88c": {
+      "session_id": "5e46f88c",
+      "label": "19/06/2026, 22:35:27",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:35:29.814Z",
+      "end_utc": "2026-06-19T21:38:56.226Z",
+      "duration_s": 206.4,
+      "with_count": 7,
+      "against_count": 5,
+      "total_count": 12,
+      "centroid_lat": 54.597732,
+      "centroid_lng": -5.697909,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.739,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 3.536,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        154,
+        93
+      ],
+      "matched_link_against": [
+        93,
+        154
+      ],
+      "match_rmse_m": 3.4,
+      "matched_link_name": "Talbot Street",
+      "with_aadt": 5365,
+      "with_aadt_uncertainty": 2207,
+      "against_aadt": 3934,
+      "against_aadt_uncertainty": 1836,
+      "total_aadt": 8942,
+      "total_aadt_uncertainty": 3045,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "48457d98": {
+      "session_id": "48457d98",
+      "label": "19/06/2026, 22:40:02",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:40:03.809Z",
+      "end_utc": "2026-06-19T21:41:05.059Z",
+      "duration_s": 61.2,
+      "with_count": 3,
+      "against_count": 5,
+      "total_count": 8,
+      "centroid_lat": 54.597951,
+      "centroid_lng": -5.701399,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.871,
+      "against_uncertainty": 2.345,
+      "total_uncertainty": 2.915,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        95,
+        816
+      ],
+      "matched_link_against": [
+        816,
+        95
+      ],
+      "match_rmse_m": 13.8,
+      "matched_link_name": null,
+      "with_aadt": 8444,
+      "with_aadt_uncertainty": 4789,
+      "against_aadt": 13269,
+      "against_aadt_uncertainty": 6191,
+      "total_aadt": 20507,
+      "total_aadt_uncertainty": 8035,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "ee83f2ca": {
+      "session_id": "ee83f2ca",
+      "label": "19/06/2026, 22:51:21",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:51:23.119Z",
+      "end_utc": "2026-06-19T21:52:57.329Z",
+      "duration_s": 94.2,
+      "with_count": 1,
+      "against_count": 1,
+      "total_count": 2,
+      "centroid_lat": 54.59752,
+      "centroid_lng": -5.707152,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 1.225,
+      "against_uncertainty": 1.225,
+      "total_uncertainty": 1.581,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        67,
+        21
+      ],
+      "matched_link_against": [
+        21,
+        67
+      ],
+      "match_rmse_m": 5.5,
+      "matched_link_name": "Glenford Road",
+      "with_aadt": 2351,
+      "with_aadt_uncertainty": 1971,
+      "against_aadt": 2351,
+      "against_aadt_uncertainty": 1971,
+      "total_aadt": 3919,
+      "total_aadt_uncertainty": 2587,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
+      "aadt_method": "hourly_fraction_v3"
+    },
+    "d0ca011e": {
+      "session_id": "d0ca011e",
+      "label": "19/06/2026, 22:54:46",
+      "mode": "dual",
+      "start_utc": "2026-06-19T21:54:50.050Z",
+      "end_utc": "2026-06-19T21:57:35.225Z",
+      "duration_s": 165.2,
+      "with_count": 6,
+      "against_count": 9,
+      "total_count": 15,
+      "centroid_lat": 54.596588,
+      "centroid_lng": -5.708051,
+      "source_files": [
+        "traffic_2026-06-19_2.csv"
+      ],
+      "with_uncertainty": 2.55,
+      "against_uncertainty": 3.082,
+      "total_uncertainty": 3.937,
+      "uncertainty_method": "jeffreys",
+      "matched_link_with": [
+        21,
+        18
+      ],
+      "matched_link_against": [
+        18,
+        21
+      ],
+      "match_rmse_m": 2.5,
+      "matched_link_name": "Hardford Link",
+      "with_aadt": 5809,
+      "with_aadt_uncertainty": 2531,
+      "against_aadt": 8491,
+      "against_aadt_uncertainty": 3190,
+      "total_aadt": 13853,
+      "total_aadt_uncertainty": 4390,
+      "hourly_fraction": 0.024382,
+      "hourly_fraction_std": 0.004621,
+      "time_slot": [
+        4,
+        22
+      ],
+      "frac_rel_std": 0.189512,
       "aadt_method": "hourly_fraction_v3"
     }
   }
