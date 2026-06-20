@@ -89,12 +89,21 @@ print(f"  {G_proj.number_of_edges()} -> {G_cons.number_of_edges()} edges")
 # Relabel consolidated nodes to use stable OSM-based IDs so that re-running
 # build_network.py doesn't break downstream node references.
 # Rule: consolidated node → min(osmid_original); single node → int(osmid_original).
-import networkx as nx
+# ox.consolidate_intersections stores osmid_original as a string like
+# '[286949408, 13098508098]' (not a real list) on the in-memory graph; parse
+# with ast.literal_eval before the GraphML write converts it properly.
+import ast, networkx as nx
 _relabel = {}
 for _n, _d in G_cons.nodes(data=True):
     _orig = _d.get("osmid_original")
     if isinstance(_orig, list):
         _relabel[_n] = min(int(x) for x in _orig)
+    elif isinstance(_orig, str):
+        _parsed = ast.literal_eval(_orig)
+        if isinstance(_parsed, list):
+            _relabel[_n] = min(int(x) for x in _parsed)
+        else:
+            _relabel[_n] = int(_parsed)
     elif _orig is not None:
         _relabel[_n] = int(_orig)
     else:
