@@ -9,10 +9,13 @@ Classifies all of NI into a three-level hierarchy:
 Population-weighted centroids are computed for each external (SDZ/DEA) node
 from DZ-level census population data.
 
-Data files required (download from NISRA / OpenDataNI):
-  simulation/dz2021/DZ2021.geojson   — DZ polygon boundaries (already present)
+Data files required:
+  simulation/dz2021/DZ2021.geojson   — DZ polygon boundaries
+    https://www.nisra.gov.uk/support/geography/data-zones-census-2021
   simulation/sdz2021/SDZ2021.geojson  — SDZ polygon boundaries
-  simulation/dea2021/DEA2021.geojson  — DEA polygon boundaries
+    https://www.nisra.gov.uk/support/geography/super-data-zones-census-2021
+  simulation/dea2021/DEA2021.geojson  — DEA polygon boundaries (OSNI Open Data)
+    https://admin.opendatani.gov.uk/dataset/osni-open-data-largescale-boundaries-district-electoral-areas-2012
   data/census-2021-apwp001.xlsx       — DZ-level workplace population
 
 Population is fetched from the NISRA API (cached to data/cache_nisra_population.csv).
@@ -56,10 +59,10 @@ if missing:
     print("ERROR: Missing required data files:")
     for f in missing:
         print(f"  {f}")
-    print("\nDownload from NISRA / OpenDataNI:")
-    print("  DZ2021.geojson  — https://www.nisra.gov.uk/support/geography/data-zones")
-    print("  SDZ2021.geojson — https://www.nisra.gov.uk/support/geography/super-data-zones")
-    print("  DEA2021.geojson — https://www.nisra.gov.uk/support/geography/district-electoral-areas")
+    print("\nDownload from:")
+    print("  DZ2021.geojson  — https://www.nisra.gov.uk/support/geography/data-zones-census-2021")
+    print("  SDZ2021.geojson — https://www.nisra.gov.uk/support/geography/super-data-zones-census-2021")
+    print("  DEA2021.geojson — https://admin.opendatani.gov.uk/dataset/osni-open-data-largescale-boundaries-district-electoral-areas-2012")
     print("  APWP001.xlsx    — https://www.nisra.gov.uk/statistics/census/2021-census/workplace-population")
     sys.exit(1)
 
