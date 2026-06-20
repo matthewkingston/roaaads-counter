@@ -156,6 +156,7 @@ if "--map-only" in sys.argv:
     node_business_demand = {int(k): v for k, v in _w["node_business_demand"].items()}
     node_parking_equiv   = {int(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
     node_school_demand   = {int(k): v for k, v in _w.get("node_school_demand", {}).items()}
+    _boundary_ids        = set(int(x) for x in _w.get("boundary_node_ids", []))
     print("Loading DZ boundaries …")
     dz_final = gpd.read_file(f"{OUT_DIR}/newtownards_demographics.geojson")
     print(f"  {len(dz_final)} Data Zones · {len(node_ids)} nodes")
@@ -639,9 +640,8 @@ else:
             node_school_demand[_ev] = node_school_demand.get(_ev, 0.0) + _enrollment * _t
         _n_school += 1
 
-    # External zone nodes have no school demand (schools are internal features)
-    for _bid in EXTERNAL_ZONES:
-        node_school_demand.pop(_bid, None)
+    # External zone nodes have no school demand (schools are internal features).
+    # Their school_demand entries will be set to 0 in the external node weight block below.
 
     _tot_sch = sum(node_school_demand.values())
     print(f"  {_n_school} school POIs → {len(node_school_demand)} nodes"
@@ -760,7 +760,7 @@ for htype in all_types:
 
 import math
 
-BOUNDARY_NODE_IDS = set(_EXT_GEO.keys())
+BOUNDARY_NODE_IDS = _boundary_ids
 
 boundary_nodes_map = {}   # node_id → (wgs_lat, wgs_lon, dist, degree)
 interior_nodes_map = {}
@@ -781,10 +781,6 @@ boundary_fg = folium.FeatureGroup(name=f"In/Out flow nodes — auto-detected ({l
 for node_id, (nlat, nlon, dist, deg) in boundary_nodes_map.items():
     node_pop = node_population.get(node_id, 0)
     node_biz = node_business_demand.get(node_id, 0)
-    ez = EXTERNAL_ZONES.get(node_id)
-    zone_name = ez[0] or "local access" if ez else "—"
-    damping = ez[5] if ez else 1.0
-    damp_str = f" ×{damping}" if damping < 1.0 else ""
     node_sch = node_school_demand.get(node_id, 0)
     _sch_str = f"<br>school pupils: {node_sch:.0f}" if node_sch > 0 else ""
     folium.RegularPolygonMarker(
@@ -792,10 +788,10 @@ for node_id, (nlat, nlon, dist, deg) in boundary_nodes_map.items():
         number_of_sides=4, radius=6, rotation=45,
         color="#e05c00", fill=True, fill_color="#ff7c20", fill_opacity=0.9, weight=1.5,
         tooltip=(
-            f"<b>Node {node_id}</b> [boundary → {zone_name}{damp_str}]<br>"
+            f"<b>Node {node_id}</b> [boundary]<br>"
             f"degree={deg} · {dist:.0f}m from centre<br>"
-            f"ext. pop: {node_pop:,.0f}<br>"
-            f"ext. workplace: {node_biz:,.0f}"
+            f"pop: {node_pop:,.0f}<br>"
+            f"workplace: {node_biz:,.0f}"
             f"{_sch_str}"
         ),
     ).add_to(boundary_fg)
