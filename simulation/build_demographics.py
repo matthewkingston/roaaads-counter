@@ -663,13 +663,18 @@ else:
                          if u in _internal_ids and v not in _internal_ids}
 
         # Map OSM boundary IDs → consolidated IDs for map display and build_paths.py
+        # osmnx stores original OSM IDs in 'osmid_original': string for single nodes,
+        # list of ints for merged nodes.
         _osmid_to_cons = {}
         for _cid, _cdata in G_cons.nodes(data=True):
-            _osmids = _cdata.get("osmid", _cid)
-            if not isinstance(_osmids, list):
-                _osmids = [_osmids]
-            for _oid in _osmids:
-                _osmid_to_cons[int(_oid)] = _cid
+            _osmids = _cdata.get("osmid_original")
+            if _osmids is None:
+                continue
+            if isinstance(_osmids, list):
+                for _oid in _osmids:
+                    _osmid_to_cons[int(_oid)] = _cid
+            else:
+                _osmid_to_cons[int(_osmids)] = _cid
         _boundary_ids_cons = {_osmid_to_cons[o] for o in _boundary_ids if o in _osmid_to_cons}
         print(f"Auto-detected {len(_internal_ids)} internal nodes, "
               f"{len(_boundary_ids)} boundary nodes (OSM IDs)")

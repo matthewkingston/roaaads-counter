@@ -17,7 +17,7 @@ import geopandas as gpd
 # Newtownards town centre — CORE_RADIUS is defined in build_census_zones.py and
 # written to census_zones.json; read from there to avoid duplication.
 CENTRE               = (54.5933779, -5.6960935)
-NETWORK_MARGIN_M     = 200   # metres beyond core polygon max vertex distance
+NETWORK_MARGIN_M     = 1000  # metres beyond core polygon max vertex distance
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
 OUT_DIR   = "simulation"
 
