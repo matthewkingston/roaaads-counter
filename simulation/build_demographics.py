@@ -152,10 +152,11 @@ if "--map-only" in sys.argv:
     print("Loading node weights …")
     with open(f"{OUT_DIR}/node_weights.json") as _f:
         _w = json.load(_f)
-    node_population      = {int(k): v for k, v in _w["node_population"].items()}
-    node_business_demand = {int(k): v for k, v in _w["node_business_demand"].items()}
-    node_parking_equiv   = {int(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
-    node_school_demand   = {int(k): v for k, v in _w.get("node_school_demand", {}).items()}
+    _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
+    node_population      = {_pnid(k): v for k, v in _w["node_population"].items()}
+    node_business_demand = {_pnid(k): v for k, v in _w["node_business_demand"].items()}
+    node_parking_equiv   = {_pnid(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
+    node_school_demand   = {_pnid(k): v for k, v in _w.get("node_school_demand", {}).items()}
     _boundary_ids        = set(int(x) for x in _w.get("boundary_node_ids", []))
     _boundary_ids_cons   = set(int(x) for x in _w.get("boundary_node_ids_cons", _w.get("boundary_node_ids", [])))
     print("Loading DZ boundaries …")

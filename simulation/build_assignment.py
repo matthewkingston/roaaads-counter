@@ -45,9 +45,10 @@ print("Loading node weights …")
 with open(WEIGHTS_FILE) as f:
     weights = json.load(f)
 
-node_population      = {int(k): v for k, v in weights["node_population"].items()}
-node_business_demand = {int(k): v for k, v in weights["node_business_demand"].items()}
-node_school_demand   = {int(k): v for k, v in weights.get("node_school_demand", {}).items()}
+_pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
+node_population      = {_pnid(k): v for k, v in weights["node_population"].items()}
+node_business_demand = {_pnid(k): v for k, v in weights["node_business_demand"].items()}
+node_school_demand   = {_pnid(k): v for k, v in weights.get("node_school_demand", {}).items()}
 
 THETA          = None
 K_res          = None
@@ -137,9 +138,9 @@ else:
             print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
             THETA = None
 
-w_pop    = np.array([node_population.get(int(nid), 0)      for nid in node_ids_arr], dtype=np.float64)
-w_biz    = np.array([node_business_demand.get(int(nid), 0) for nid in node_ids_arr], dtype=np.float64)
-w_school = np.array([node_school_demand.get(int(nid), 0)   for nid in node_ids_arr], dtype=np.float64)
+w_pop    = np.array([node_population.get(nid, 0)      for nid in node_ids_arr], dtype=np.float64)
+w_biz    = np.array([node_business_demand.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
+w_school = np.array([node_school_demand.get(nid, 0)   for nid in node_ids_arr], dtype=np.float64)
 print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
 N_links  = len(link_u)
@@ -191,9 +192,9 @@ print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded
 
 # ── Street name lookup ────────────────────────────────────────────────────────
 
-node_ids    = [int(nid) for nid in node_ids_arr]
+node_ids    = list(node_ids_arr)
 G           = ox.load_graphml(CONS_GRAPH)
-node_weight = {int(nid): float(wp + W_BIZ * wb)
+node_weight = {nid: float(wp + W_BIZ * wb)
                for nid, wp, wb in zip(node_ids_arr, w_pop, w_biz)}
 
 _link_name = {(int(u), int(v)): d["name"]

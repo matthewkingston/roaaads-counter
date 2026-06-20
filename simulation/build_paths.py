@@ -88,7 +88,7 @@ with open(EXTERNAL_LINKS) as f:
 ext_boundary_links     = ext_data["ext_boundary_links"]      # X→B
 bnd_external_links     = ext_data["bnd_external_links"]      # B→X
 boundary_boundary_links = ext_data["boundary_boundary_links"] # B1→B2 exterior
-allowed_through_pairs  = {int(k): set(v) for k, v in ext_data["allowed_through_pairs"].items()}
+allowed_through_pairs  = {k: set(v) for k, v in ext_data["allowed_through_pairs"].items()}
 _EMPTY_SET = frozenset()
 boundary_node_ids      = set(ext_data["boundary_node_ids"])
 
@@ -392,7 +392,7 @@ print(f"  {n_pairs:,} OD pairs  {n_entries:,} entries  mean {mean_lpp:.1f} links
 print("Saving cache …")
 np.savez_compressed(
     PATHS_CACHE,
-    node_ids        = np.array(all_node_ids, dtype=np.int32),
+    node_ids        = np.array(all_node_ids, dtype=object),
     od_src          = np.array(od_src_list,  dtype=np.int32),
     od_dst          = np.array(od_dst_list,  dtype=np.int32),
     od_dist         = od_dist_out,
