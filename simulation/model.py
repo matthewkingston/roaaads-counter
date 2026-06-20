@@ -15,17 +15,20 @@ import numpy as np
 # AADT totals retained for the quick site-level sanity check in build_assignment.py.
 # The tuner and compute_chi2() use per-hour observations from OFFICIAL_HOURLY instead.
 
+# TODO: node/links values MUST be updated to OSM IDs after running build_network.py
+# and opening newtownards_map.html to identify the correct nodes visually.
+# Previous sequential IDs (731, 47, 92) were stale after graph regeneration.
 COUNT_SITES = [
-    {"label": "site 507, A21 Bangor Road",     "node": 731, "links": [(731, 730), (730, 731)], "observed": 21_202},
-    {"label": "site 508, A48 Donaghadee Road", "node":  47, "links": None,                      "observed": 10_792},
-    {"label": "site 444, A20 Portaferry Road", "node":  92, "links": None,                      "observed":  7_282},
+    {"label": "site 507, A21 Bangor Road",     "node": None, "links": None, "observed": 21_202},
+    {"label": "site 508, A48 Donaghadee Road", "node": None, "links": None, "observed": 10_792},
+    {"label": "site 444, A20 Portaferry Road", "node": None, "links": None, "observed":  7_282},
 ]
 
 # Links present in link_aadt.json but excluded from calibration.
 # Directed: (u, v) excludes only that direction.
-EXCLUDE_LINKS = {
-    (161, 160),  # too-short count, likely distorted by traffic light timing
-}
+# TODO: re-identify excluded link after re-ingesting counts with OSM node IDs.
+# Was (161, 160) under old sequential numbering (too-short count, traffic light distortion).
+EXCLUDE_LINKS = set()
 
 # ── File paths ────────────────────────────────────────────────────────────────
 

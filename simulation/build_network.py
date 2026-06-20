@@ -86,6 +86,23 @@ print(f"  {G_proj.number_of_nodes()} -> {G_cons.number_of_nodes()} nodes  "
       f"({G_proj.number_of_nodes() - G_cons.number_of_nodes()} merged)")
 print(f"  {G_proj.number_of_edges()} -> {G_cons.number_of_edges()} edges")
 
+# Relabel consolidated nodes to use stable OSM-based IDs so that re-running
+# build_network.py doesn't break downstream node references.
+# Rule: consolidated node → min(osmid_original); single node → int(osmid_original).
+import networkx as nx
+_relabel = {}
+for _n, _d in G_cons.nodes(data=True):
+    _orig = _d.get("osmid_original")
+    if isinstance(_orig, list):
+        _relabel[_n] = min(int(x) for x in _orig)
+    elif _orig is not None:
+        _relabel[_n] = int(_orig)
+    else:
+        _relabel[_n] = _n
+G_cons = nx.relabel_nodes(G_cons, _relabel)
+print(f"  Relabeled to OSM IDs: {G_cons.number_of_nodes()} nodes, "
+      f"{G_cons.number_of_edges()} edges")
+
 ox.save_graphml(G_cons, f"{OUT_DIR}/newtownards_consolidated.graphml")
 
 # ── 4. Summary ────────────────────────────────────────────────────────────────
