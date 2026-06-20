@@ -324,3 +324,9 @@ External zone values are now fully data-driven from Census 2021 (via `data/censu
 
 Background/parallel Claude work is done in `.claude/worktrees/` and
 cherry-picked to `main` after review. All work is on `main`.
+
+---
+
+## Agent Behaviour
+
+Even in auto mode, when a user reports a bug or asks a question, agents must not make functional code changes without explicit user approval. Investigate and propose — do not implement unless the user has agreed to the specific change. "Defensive" workarounds (e.g. silent clamps, fallback defaults) are especially suspect: they tend to mask future bugs rather than surface them, and should be proposed and justified before being applied.

@@ -287,7 +287,7 @@ if not _has_stoch:
     from scipy.sparse import coo_matrix as _coo
 
     N_BINS      = 300
-    _d_lo       = max(float(od_dist.min()), 1.0)   # guard: od_dist should be >0
+    _d_lo       = float(od_dist.min())
     _d_hi       = float(od_dist.max()) * 1.001
     _bin_edges  = np.logspace(np.log10(_d_lo), np.log10(_d_hi), N_BINS + 1)
     _bin_centers = np.sqrt(_bin_edges[:-1] * _bin_edges[1:])  # geometric mean per bin
