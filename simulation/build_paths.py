@@ -61,6 +61,17 @@ road_node_ids = list(G.nodes())
 n_road = len(road_node_ids)
 print(f"  {n_road} road nodes  {G.number_of_edges()} edges")
 
+# Build OSM node ID → consolidated node ID mapping.
+# boundary_node_ids from external_links.json are raw OSM IDs (matched by OSRM);
+# the consolidated graph uses renumbered IDs, so we need this to add external edges.
+_osm_to_cons = {}
+for _cid, _cdata in G.nodes(data=True):
+    _osmids = _cdata.get("osmid", _cid)
+    if not isinstance(_osmids, list):
+        _osmids = [_osmids]
+    for _oid in _osmids:
+        _osm_to_cons[int(_oid)] = _cid
+
 # ── Load external links ────────────────────────────────────────────────────────
 
 if not os.path.exists(EXTERNAL_LINKS):
@@ -144,21 +155,25 @@ rows_ext, cols_ext, data_ext = [], [], []
 
 for lnk in ext_boundary_links:
     xi = node_to_idx.get(lnk["from_ext"])
-    bi = node_to_idx.get(lnk["to_boundary"])
+    b_cons = _osm_to_cons.get(lnk["to_boundary"])
+    bi = node_to_idx.get(b_cons) if b_cons is not None else None
     if xi is not None and bi is not None:
         rows_ext.append(xi); cols_ext.append(bi)
         data_ext.append(float(lnk["duration_s"]))
 
 for lnk in bnd_external_links:
-    bi = node_to_idx.get(lnk["from_boundary"])
+    b_cons = _osm_to_cons.get(lnk["from_boundary"])
+    bi = node_to_idx.get(b_cons) if b_cons is not None else None
     xi = node_to_idx.get(lnk["to_ext"])
     if bi is not None and xi is not None:
         rows_ext.append(bi); cols_ext.append(xi)
         data_ext.append(float(lnk["duration_s"]))
 
 for lnk in boundary_boundary_links:
-    i = node_to_idx.get(lnk["from"])
-    j = node_to_idx.get(lnk["to"])
+    f_cons = _osm_to_cons.get(lnk["from"])
+    t_cons = _osm_to_cons.get(lnk["to"])
+    i = node_to_idx.get(f_cons) if f_cons is not None else None
+    j = node_to_idx.get(t_cons) if t_cons is not None else None
     if i is not None and j is not None:
         rows_ext.append(i); cols_ext.append(j)
         data_ext.append(float(lnk["duration_s"]))
