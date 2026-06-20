@@ -224,7 +224,6 @@ phi_prior            = config.get("phi_biz_prior", config.get("phi_prior",  0.35
 phi_std              = config.get("phi_biz_std",   config.get("phi_std",    0.15))
 phi_school_prior     = config.get("phi_school_prior",  0.10)
 phi_school_std       = config.get("phi_school_std",    0.08)
-city_list    = list(config["cities"].items())
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam_raw = config.get("gravity_lambda", 0.0)
@@ -255,45 +254,10 @@ if isinstance(grav_lam_raw, dict):
 else:
     log_grav_lam = np.full(len(_grav_param_names), float(grav_lam_raw))
 
-# External nodes covered by tuner_config (node 180 excluded)
-external_nodes = set()
-for _, city_cfg in city_list:
-    external_nodes.update(city_cfg["nodes"])
-
-# Node array indices for external nodes (for fast overriding in stage 2)
-ext_indices = [(i, nid) for i, nid in enumerate(node_ids) if nid in external_nodes]
-
-# Tunable dampings: those with value < 1.0, in deterministic order
-tunable_dampings = []  # [(city_name, node_id, ref_damping), ...]
-for city_name, city_cfg in city_list:
-    for node_str in sorted(city_cfg["dampings"], key=int):
-        damp = city_cfg["dampings"][node_str]
-        if damp < 1.0:
-            tunable_dampings.append((city_name, int(node_str), damp))
-
 n_gravity = (7 if _has_stoch else 6) + (3 if _has_school else 0)
-n_city    = len(city_list) * 2
-n_damp    = len(tunable_dampings)
-n_ext     = n_city + n_damp  # external params in stage 2
 
-print(f"  {len(city_list)} cities  {len(tunable_dampings)} tunable dampings")
-
-# Override external node weights from tuner_config so gravity-only tuning
-# always uses the same city values as the --full stage, regardless of what
-# node_weights.json contains.
-_ext_pop_cfg = {}
-_ext_biz_cfg = {}
-for _city_name, _city_cfg in city_list:
-    for _nid in _city_cfg["nodes"]:
-        _damp = _city_cfg["dampings"][str(_nid)]
-        _ext_pop_cfg[_nid] = _city_cfg["ref_pop"] * _damp
-        _ext_biz_cfg[_nid] = _city_cfg["ref_wp"]  * _damp
-for _arr_i, _nid in ext_indices:
-    base_w_pop[_arr_i] = _ext_pop_cfg[_nid]
-    base_w_biz[_arr_i] = _ext_biz_cfg[_nid]
-
-# Precompute stochastic-path OD weight products (constant in gravity stage;
-# base weights are at ref values for external nodes after the override above).
+# External node weights come from node_weights.json (census data, fixed — not tuned).
+# Stochastic-path weight products (constant across all evaluations).
 if _has_stoch:
     _pp_od_s1 = base_w_pop[od_src] * base_w_pop[od_dst]
     _pb_od_s1 = (base_w_pop[od_src] * base_w_biz[od_dst]
@@ -331,70 +295,32 @@ if not _has_stoch:
     _pair_bin  = np.clip(np.digitize(od_dist, _bin_edges) - 1, 0, N_BINS - 1).astype(np.int32)
     _col_all   = _pair_bin[pair_idx]   # bin index for every link-pair entry
 
-    # Weight products per OD pair under base weights (ext nodes already at ref values)
+    # Weight products per OD pair under base weights (external nodes fixed from census)
     _pp_od = base_w_pop[od_src] * base_w_pop[od_dst]
     _pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
               + base_w_biz[od_src] * base_w_pop[od_dst])
     _bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
-    # School: pop×school cross-term only (external school demand is 0)
     _ps_od = (base_w_pop[od_src] * base_w_school[od_dst]
               + base_w_school[od_src] * base_w_pop[od_dst])
 
-    # Mask: True for OD pairs that involve at least one external node
-    _is_ext_node = np.zeros(N_nodes, dtype=bool)
-    for _ai, _ in ext_indices:
-        _is_ext_node[_ai] = True
-    _ext_pair_mask  = _is_ext_node[od_src] | _is_ext_node[od_dst]  # (N_OD,)
-    _entry_is_ext   = _ext_pair_mask[pair_idx]                       # (N_entries,)
+    _col_all = _pair_bin[pair_idx]
 
-    _int_sel = np.where(~_entry_is_ext)[0]   # link-pair entries for internal-only pairs
-    _ext_sel = np.where(_entry_is_ext)[0]    # link-pair entries for external-involved pairs
-
-
-    def _link_bin(dat_od, sel=None):
+    def _link_bin(dat_od):
         """Build a dense (N_links, N_BINS) accumulation matrix via COO→dense."""
-        if sel is None:
-            r, c, d = link_idx_arr, _col_all, dat_od[pair_idx]
-            if _link_weight is not None:
-                d = d * _link_weight
-        else:
-            pi = pair_idx[sel]
-            r, c, d = link_idx_arr[sel], _col_all[sel], dat_od[pi]
-            if _link_weight is not None:
-                d = d * _link_weight[sel]
-        return _coo((d, (r, c)), shape=(N_links, N_BINS)).toarray()
+        d = dat_od[pair_idx]
+        if _link_weight is not None:
+            d = d * _link_weight
+        return _coo((d, (link_idx_arr, _col_all)), shape=(N_links, N_BINS)).toarray()
 
-
-    # Stage-1 matrices: all OD pairs (external nodes at reference weights, fixed)
-    # Stored as float32: f32 × f32 BLAS SGEMV is ~30× faster than f64 DGEMV.
+    # All OD pairs use a single set of matrices (external weights are fixed, not tuned)
     all_bin_pp = _link_bin(_pp_od).astype(np.float32)
     all_bin_pb = _link_bin(_pb_od).astype(np.float32)
     all_bin_bb = _link_bin(_bb_od).astype(np.float32)
-    all_bin_ps = _link_bin(_ps_od).astype(np.float32)   # school
+    all_bin_ps = _link_bin(_ps_od).astype(np.float32)
 
-    # Stage-2 matrices: internal-internal pairs only
-    int_bin_pp = _link_bin(_pp_od, _int_sel).astype(np.float32)
-    int_bin_pb = _link_bin(_pb_od, _int_sel).astype(np.float32)
-    int_bin_bb = _link_bin(_bb_od, _int_sel).astype(np.float32)
-    int_bin_ps = _link_bin(_ps_od, _int_sel).astype(np.float32)   # school
-
-    # External pair arrays for exact per-eval scatter in stage 2
-    _ext_p     = np.unique(pair_idx[_ext_sel])                # unique global pair indices
-    _ext_dist  = od_dist[_ext_p]                              # distances for ext OD pairs
-    _ext_src   = od_src[_ext_p]                               # node-array src index
-    _ext_dst   = od_dst[_ext_p]                               # node-array dst index
-    _ext_local = np.empty(len(od_src), dtype=np.int32)        # global→local pair map
-    _ext_local[_ext_p] = np.arange(len(_ext_p), dtype=np.int32)
-    _ext_link        = link_idx_arr[_ext_sel]                  # link idx per ext entry
-    _ext_lp          = _ext_local[pair_idx[_ext_sel]]          # local pair idx per ext entry
-    _ext_link_weight = (_link_weight[_ext_sel]
-                        if _link_weight is not None else None)  # probit weight per ext entry
-
-    del _is_ext_node, _ext_pair_mask, _entry_is_ext, _int_sel, _ext_sel, _ext_local
     del _pp_od, _pb_od, _bb_od, _ps_od, _col_all
 
-    print(f"  {N_BINS} bins  {len(_ext_p):,} ext pairs  {len(_ext_link):,} ext entries"
-          f"  ({time.time()-_t_pc:.1f}s)")
+    print(f"  {N_BINS} bins  {len(od_src):,} OD pairs  ({time.time()-_t_pc:.1f}s)")
 
     def _kern_b(P, ALPHA, BETA):
         u = _bin_centers / P
@@ -605,35 +531,11 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
         f_b_sch = _kern_b(P_school, ALPHA_school, BETA) if _has_school else None
         W   = W_BIZ
         W2  = W_BIZ ** 2
-        if stage == "full":
-            flow_res = (int_bin_pp @ f_b_res).astype(np.float64)
-            flow_biz = (W * (int_bin_pb @ f_b_biz) + W2 * (int_bin_bb @ f_b_biz)).astype(np.float64)
-            if _has_school:
-                flow_school = (W_SCHOOL * (int_bin_ps @ f_b_sch)).astype(np.float64)
-            # Exact scatter for external-involved OD pairs (separate kernels for res/biz)
-            w_src = w_pop[_ext_src]
-            w_dst = w_pop[_ext_dst]
-            b_src = w_biz[_ext_src]
-            b_dst = w_biz[_ext_dst]
-            u_e_res = _ext_dist / P
-            f_e_res = (ALPHA + BETA) * u_e_res**BETA / (ALPHA + BETA * u_e_res**(ALPHA + BETA))
-            u_e_biz = _ext_dist / P_biz
-            f_e_biz = (ALPHA_biz + BETA) * u_e_biz**BETA / (ALPHA_biz + BETA * u_e_biz**(ALPHA_biz + BETA))
-            t_pp  = w_src * w_dst * f_e_res
-            t_pb  = (w_src * b_dst + b_src * w_dst) * f_e_biz
-            t_bb  = b_src * b_dst * f_e_biz
-            _ew = _ext_link_weight if _ext_link_weight is not None else 1.0
-            flow_res += np.bincount(_ext_link, weights=t_pp[_ext_lp] * _ew, minlength=N_links)
-            flow_biz += np.bincount(_ext_link,
-                                    weights=(W_BIZ * t_pb + W_BIZ**2 * t_bb)[_ext_lp] * _ew,
-                                    minlength=N_links)
-            # External school demand = 0 → no ext scatter needed for flow_school
+        flow_res = (all_bin_pp @ f_b_res).astype(np.float64)
+        flow_biz = (W * (all_bin_pb @ f_b_biz) + W2 * (all_bin_bb @ f_b_biz)).astype(np.float64)
+        if _has_school:
+            flow_school = (W_SCHOOL * (all_bin_ps @ f_b_sch)).astype(np.float64)
         else:
-            flow_res = (all_bin_pp @ f_b_res).astype(np.float64)
-            flow_biz = (W * (all_bin_pb @ f_b_biz) + W2 * (all_bin_bb @ f_b_biz)).astype(np.float64)
-            if _has_school:
-                flow_school = (W_SCHOOL * (all_bin_ps @ f_b_sch)).astype(np.float64)
-        if not _has_school:
             flow_school = np.zeros(N_links, dtype=np.float64)
         return flow_res, flow_biz, flow_school
 
@@ -857,41 +759,9 @@ def objective(log_params, log_ref=None):
     else:
         W_SCHOOL = P_school = ALPHA_school = 1.0
 
-    if stage == "full":
-        # Build per-node weight arrays from city-level params and dampings
-        w_pop = base_w_pop.copy()
-        w_biz = base_w_biz.copy()
-
-        idx = n_gravity
-        city_pops = {}
-        city_wps  = {}
-        for city_name, _ in city_list:
-            city_pops[city_name] = math.exp(log_params[idx])
-            city_wps[city_name]  = math.exp(log_params[idx + 1])
-            idx += 2
-
-        # Start from reference dampings, then override tunable ones
-        curr_dampings = {}
-        for city_name, city_cfg in city_list:
-            for node_str, damp in city_cfg["dampings"].items():
-                curr_dampings[int(node_str)] = damp
-        for i_td, (_, node_id, _) in enumerate(tunable_dampings):
-            curr_dampings[node_id] = math.exp(log_params[n_gravity + n_city + i_td])
-
-        # Use ext_indices for efficient override
-        ext_pop_map = {}
-        ext_biz_map = {}
-        for city_name, city_cfg in city_list:
-            for node_id in city_cfg["nodes"]:
-                damp = curr_dampings[node_id]
-                ext_pop_map[node_id] = city_pops[city_name] * damp
-                ext_biz_map[node_id] = city_wps[city_name]  * damp
-        for arr_i, nid in ext_indices:
-            w_pop[arr_i] = ext_pop_map.get(nid, base_w_pop[arr_i])
-            w_biz[arr_i] = ext_biz_map.get(nid, base_w_biz[arr_i])
-    else:
-        w_pop = base_w_pop
-        w_biz = base_w_biz
+    # External node weights are fixed (census data) — no per-stage override needed.
+    w_pop = base_w_pop
+    w_biz = base_w_biz
 
     flow_res, flow_biz, flow_school = run_assignment(
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
@@ -915,8 +785,6 @@ def objective(log_params, log_ref=None):
     _resid = _pred - obs_rhs_arr
     chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
 
-    if stage == "full" and log_ref is not None:
-        chi2 += lam * float(np.sum((log_params[n_gravity:] - log_ref[n_gravity:]) ** 2))
     if np.any(log_grav_lam > 0):
         chi2 += float(np.dot(log_grav_lam, (log_params[:n_gravity] - log_grav_ref) ** 2))
 
@@ -983,29 +851,15 @@ if _has_school:
 
 log_ref = None
 
-if stage == "full":
-    # City pop/wp: reference values from config
-    for city_name, city_cfg in city_list:
-        log_p0 = np.append(log_p0, [
-            math.log(city_cfg["ref_pop"]),
-            math.log(max(city_cfg["ref_wp"], 1)),  # guard against 0 (not present in config)
-        ])
-    # Tunable dampings: reference values from config
-    for _, _, ref_damp in tunable_dampings:
-        log_p0 = np.append(log_p0, math.log(ref_damp))
-
-    log_ref = log_p0.copy()
-    _sch_note = " + 3 school" if _has_school else ""
-    print(f"Full stage: {len(log_p0)} params "
-          f"({n_gravity} gravity{_sch_note} + {n_city} city pop/wp + {n_damp} dampings)")
+# Both gravity and full stages tune only gravity params (external zones are fixed).
+if _has_stoch:
+    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]"
+elif _has_school:
+    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school]"
 else:
-    if _has_stoch:
-        _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]"
-    elif _has_school:
-        _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school]"
-    else:
-        _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
-    print(f"Gravity stage: {len(log_p0)} params{_grav_note}")
+    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
+_stage_label = "Full" if stage == "full" else "Gravity"
+print(f"{_stage_label} stage: {len(log_p0)} params{_grav_note}")
 
 # ── Run optimization ──────────────────────────────────────────────────────────
 
@@ -1045,41 +899,9 @@ if _has_school:
 else:
     W_SCHOOL = P_school = ALPHA_school = None
 
-ext_pop_map  = {}
-ext_biz_map  = {}
-city_pops_out = {}
-city_wps_out  = {}
-dampings_out  = {}
-
-if stage == "full":
-    idx = n_gravity
-    for city_name, city_cfg in city_list:
-        city_pops_out[city_name] = math.exp(log_best[idx])
-        city_wps_out[city_name]  = math.exp(log_best[idx + 1])
-        idx += 2
-
-    curr_dampings = {}
-    for city_name, city_cfg in city_list:
-        for node_str, damp in city_cfg["dampings"].items():
-            curr_dampings[int(node_str)] = damp
-    for i_td, (_, node_id, _) in enumerate(tunable_dampings):
-        d = math.exp(log_best[n_gravity + n_city + i_td])
-        curr_dampings[node_id] = d
-        dampings_out[str(node_id)] = d
-
-    for city_name, city_cfg in city_list:
-        for node_id in city_cfg["nodes"]:
-            damp = curr_dampings[node_id]
-            ext_pop_map[node_id] = city_pops_out[city_name] * damp
-            ext_biz_map[node_id] = city_wps_out[city_name]  * damp
-
 # Final evaluation for clean chi2, K_res, K_biz, K_sch, and slot_fracs (no L2 term)
-w_pop_f = base_w_pop.copy() if ext_pop_map else base_w_pop
-w_biz_f = base_w_biz.copy() if ext_biz_map else base_w_biz
-for arr_i, nid in ext_indices:
-    if nid in ext_pop_map:
-        w_pop_f[arr_i] = ext_pop_map[nid]
-        w_biz_f[arr_i] = ext_biz_map[nid]
+w_pop_f = base_w_pop
+w_biz_f = base_w_biz
 
 _ws_final = 1.0 if not _has_school else W_SCHOOL
 _ps_final = 1.0 if not _has_school else P_school
@@ -1169,20 +991,7 @@ if prev_chi2_per_n is not None:
     direction = "improvement" if delta < 0 else "regression"
     print(f"  vs previous ({prev_id}):  Δχ²/N={delta:+.4f}  ({direction})")
 
-# ── City parameter delta table (full stage) ───────────────────────────────────
-
-if stage == "full":
-    print(f"\n  {'City':<12}  {'ref_pop':>10}  {'tuned_pop':>10}  {'Δpop%':>7}  "
-          f"{'ref_wp':>8}  {'tuned_wp':>8}  {'Δwp%':>7}")
-    for city_name, city_cfg in city_list:
-        rp = city_cfg["ref_pop"]
-        tp = city_pops_out[city_name]
-        rw = city_cfg["ref_wp"]
-        tw = city_wps_out[city_name]
-        dp = 100.0 * (tp - rp) / rp
-        dw = 100.0 * (tw - rw) / rw if rw > 0 else float("nan")
-        print(f"  {city_name:<12}  {rp:>10,.0f}  {tp:>10,.0f}  {dp:>+7.1f}%  "
-              f"{rw:>8,.0f}  {tw:>8,.0f}  {dw:>+7.1f}%")
+# External zone values are census-derived (fixed) — no city delta table needed.
 
 # ── Per-slot fraction table ───────────────────────────────────────────────────
 
@@ -1238,8 +1047,6 @@ tuned = {
     "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
     "slot_fracs_school": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
-    "external_node_pop": {str(k): round(v) for k, v in ext_pop_map.items()},
-    "external_node_biz": {str(k): round(v) for k, v in ext_biz_map.items()},
     "chi2":       round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),
     "n_obs":      n_obs,
@@ -1247,10 +1054,6 @@ tuned = {
     "n_eff":      n_eff,
     "stage":      stage,
 }
-if stage == "full":
-    tuned["external_city_pop"] = {k: round(v) for k, v in city_pops_out.items()}
-    tuned["external_city_wp"]  = {k: round(v) for k, v in city_wps_out.items()}
-    tuned["external_dampings"] = {k: round(v, 4) for k, v in dampings_out.items()}
 
 with open(TUNED_PARAMS, "w") as f:
     json.dump(tuned, f, indent=2)
@@ -1322,12 +1125,6 @@ params = {
     "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
     "slot_fracs_school": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
 }
-if stage == "full":
-    params["external_node_pop"] = {str(k): round(v) for k, v in ext_pop_map.items()}
-    params["external_node_biz"] = {str(k): round(v) for k, v in ext_biz_map.items()}
-    params["external_city_pop"] = {k: round(v) for k, v in city_pops_out.items()}
-    params["external_city_wp"]  = {k: round(v) for k, v in city_wps_out.items()}
-    params["external_dampings"] = {k: round(v, 4) for k, v in dampings_out.items()}
 
 history_entry = {
     "id":        run_id,

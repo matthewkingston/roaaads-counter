@@ -13,9 +13,11 @@ committing. This file is the authoritative record of model state.
 ## Pipeline (run in this order)
 
 ```
-python3 simulation/build_network.py          # build road network from OSM
-python3 simulation/build_demographics.py     # node weights + map scaffold
-python3 simulation/build_paths.py            # probit stochastic paths (N_PASSES=25, CV=0.25; ~30-60 min)
+python3 simulation/build_census_zones.py     # classify NI census areas → data/census_zones.json (one-off; needs SDZ/DEA boundary files)
+python3 simulation/build_network.py          # build road network from OSM (RADIUS_M=5000m)
+python3 simulation/build_demographics.py     # node weights + boundary detection + external weights + map scaffold
+python3 simulation/build_external_links.py   # OSRM queries → external↔boundary links + through-route allowlist (needs local OSRM)
+python3 simulation/build_paths.py            # probit stochastic paths incl. external nodes (N_PASSES=25, CV=0.25; ~30-60 min)
 
 python3 analysis/parse_official_hourly.py    # parse ODS hourly counts → data/official_hourly.json (one-off)
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
@@ -23,8 +25,8 @@ python3 analysis/aggregate_counts.py         # combine per-session AADT → link
 
 python3 analysis/derive_component_profiles.py              # regenerate hourly_fractions.csv school column (re-run when NTS files change)
 
-python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (9 params; ~40-50s after probit cache rebuild)
-python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (31 params, ~70s after probit cache rebuild)
+python3 analysis/tune_assignment.py                        # tune gravity params (~11 params; external zones fixed from census)
+python3 analysis/tune_assignment.py --full                 # equivalent to --gravity (no external zone params to tune)
 python3 analysis/tune_assignment.py --fast                 # looser tolerances + fewer alt-min iters (~2× faster, minimal precision loss)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 

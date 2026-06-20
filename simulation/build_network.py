@@ -13,10 +13,11 @@ Outputs (in the same directory):
 import osmnx as ox
 import geopandas as gpd
 
-# Newtownards town centre (Nominatim returns a point, not a polygon boundary)
-# 3000m radius covers the main built-up area
-CENTRE    = (54.5933779, -5.6960935)
-RADIUS_M  = 3000
+# Newtownards town centre
+CENTRE      = (54.5933779, -5.6960935)
+CORE_RADIUS = 3000   # metres — defines core area (SDZs intersecting this → DZ-level)
+RADIUS_M    = 5000   # metres — OSMnx download bbox; larger than CORE_RADIUS so all
+                     # boundary nodes and their external neighbours are in the graph
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
 OUT_DIR   = "simulation"
 
