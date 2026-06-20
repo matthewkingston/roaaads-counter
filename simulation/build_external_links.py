@@ -233,16 +233,14 @@ for bi, bnode in enumerate(boundary_nodes):
         if len(node_seq) < 2:
             continue
 
-        # Check: is the first node after B (index 1) outside the core (internal set)?
-        # We check if it's NOT in the full internal node set.
-        first_next = node_seq[1] if len(node_seq) > 1 else None
-        if first_next is None:
-            continue
-        if first_next in internal_node_ids:
-            # Route immediately re-enters core — B is not the natural exit for X.
+        # Symmetric with X→B: discard if any other boundary node appears in the route.
+        # That journey is covered by B→B' + B'→X, so B→X would be redundant.
+        # (A route that re-enters the core must also pass another boundary node,
+        # so this single check subsumes the old internal-node check.)
+        if any(nid in boundary_node_ids and nid != bid for nid in node_seq[1:]):
             continue
 
-        # B opens directly onto the external network toward X — keep B→X
+        # B is the last boundary node departed on the way to X — keep B→X
         bnd_external_links.append({
             "from_boundary": bid,
             "to_ext":        xid,
