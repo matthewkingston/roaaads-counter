@@ -307,7 +307,12 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 Th       = dur / 3600.0
                 pred     = (m_r * f_r + m_b * f_b) * Th
                 z        = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
-                chi2    += z ** 2
+                n_actual  = neff - 0.5
+                pred_safe = max(pred, 1e-30)
+                if n_actual > 0:
+                    chi2 += 2.0 * (pred_safe - n_actual * math.log(pred_safe))
+                else:
+                    chi2 += 2.0 * pred_safe
                 n_slots_seen.add(sk)
                 # display in AADT-space: divide by effective f_s
                 m_tot = m_r + m_b + 1e-30
@@ -390,7 +395,12 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
                 Th       = dur / 3600.0
                 pred     = (m_r * f_r + m_b * f_b + m_s * f_s) * Th
                 z        = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
-                chi2    += z ** 2
+                n_actual  = neff - 0.5
+                pred_safe = max(pred, 1e-30)
+                if n_actual > 0:
+                    chi2 += 2.0 * (pred_safe - n_actual * math.log(pred_safe))
+                else:
+                    chi2 += 2.0 * pred_safe
                 n_slots_seen.add(sk)
                 m_tot = m_r + m_b + m_s + 1e-30
                 f_eff = (m_r * f_r + m_b * f_b + m_s * f_s) / m_tot

@@ -468,6 +468,8 @@ _n_df_per_slot = 3 if _has_school else 2
 n_eff = n_obs - _n_df_per_slot * n_slots
 print(f"  {n_obs} observations ({n_official_hourly} official hourly, {n_walking} walking"
       f" in {n_slots} time slot(s))  N_eff={n_eff}")
+print("  Objective: Gaussian chi² for official hourly; Poisson deviance for walking obs."
+      "  χ²/N is a mixed criterion — not comparable to pre-Poisson runs.")
 for sk, idxs in sorted(slot_list):
     if len(idxs) > 3:
         print(f"  Slot {sk}: {len(idxs)} observations")
@@ -497,11 +499,31 @@ _slot_w_arr = np.zeros(n_obs, dtype=np.float64)
 for _, _ia, _w, *_ in _slot_data:
     _slot_w_arr[_ia] = _w
 
+# ── Poisson deviance setup for walking obs ────────────────────────────────────
+# Walking obs occupy positions [n_official_hourly:].
+# Actual integer count: n = n_eff − 0.5 (inverse of the Jeffreys n_eff = n + 0.5).
+# Official hourly obs are Gaussian; walking obs use Poisson deviance 2(pred − n·log pred).
+_walk_n_arr = np.zeros(n_obs, dtype=np.float64)
+_walk_n_arr[n_official_hourly:] = obs_rhs_arr[n_official_hourly:] - 0.5
+
+# Slotted walking obs mask (unslotted obs have _slot_w_arr = 0; mirror that here).
+_walk_slotted = np.zeros(n_obs, dtype=bool)
+_walk_slotted[n_official_hourly:] = _slot_w_arr[n_official_hourly:] > 0
+
+# Gaussian-only weight array: official hourly weights unchanged, walking zeroed.
+# Used in K-step and f_s-steps to isolate the Gaussian chi-squared contribution.
+_gauss_w_arr = _slot_w_arr.copy()
+_gauss_w_arr[n_official_hourly:] = 0.0
+
 # Precomputed arrays for vectorised calibrate_Ks_and_fracs.
 # _obs_slot_id[i] = slot index in slot_list (0..n_slots-1) if slotted, n_slots if not.
 _obs_slot_id = np.full(n_obs, n_slots, dtype=np.int32)
 for _si, (_, _sidxs) in enumerate(slot_list):
     _obs_slot_id[np.array(_sidxs, dtype=np.int64)] = _si
+
+# Slot IDs and counts for slotted walking obs (constant; used in per-slot bincounts).
+_walk_sl_sid = _obs_slot_id[_walk_slotted]
+_walk_sl_n   = _walk_n_arr[_walk_slotted]
 
 _slot_mfr = np.array([e[5]  for e in _slot_data], dtype=np.float64)
 _slot_ivr = np.array([e[6]  for e in _slot_data], dtype=np.float64)
@@ -651,7 +673,6 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
     cs = m_school * obs_Th
 
     _sid = _obs_slot_id
-    _sw  = _slot_w_arr
 
     _fr = np.empty(n_obs)
     _fb = np.empty(n_obs)
@@ -666,16 +687,28 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
         _fs[:] = f_s_s[_sid]
 
         # ── K-step ───────────────────────────────────────────────────────────
+        # Gaussian solve on official hourly obs, then one Newton correction for
+        # Poisson walking obs.  Walking obs are zeroed in _gauss_w_arr.
         coeff = (1 - phi_biz - phi_sch) * cr * _fr + phi_biz * cb * _fb + phi_sch * cs * _fs
-        wc    = _sw * coeff
-        A     = float(wc @ coeff)
-        B     = float(wc @ obs_rhs_arr)
-        K     = max(B / A, 1e-30) if A > 0 else K
+        wc_g  = _gauss_w_arr * coeff
+        A_g   = float(wc_g @ coeff)
+        B_g   = float(wc_g @ obs_rhs_arr)
+        K     = max(B_g / A_g, 1e-30) if A_g > 0 else K
+
+        # Newton correction: grad = Σ coeff_i*(1 - n_i/(K*coeff_i)), hess = Σ n_i/K²
+        walk_c    = coeff[_walk_slotted]
+        safe_pred = np.maximum(K * walk_c, 1e-30)
+        pois_grad = float(np.sum(walk_c * (1.0 - _walk_sl_n / safe_pred)))
+        pois_hess = float(np.sum(_walk_sl_n)) / K ** 2
+        total_h   = A_g + pois_hess
+        if total_h > 1e-60:
+            K = max(K - pois_grad / total_h, 1e-30)
 
         # ── phi_biz-step: fix phi_sch ────────────────────────────────────────
+        # Gaussian (official) obs only; walking obs contribute via K and f_s.
         _base_b = (1 - phi_sch) * cr * _fr + phi_sch * cs * _fs
         _delt_b = cb * _fb - cr * _fr
-        wd_b    = _sw * _delt_b
+        wd_b    = _gauss_w_arr * _delt_b
         A_b     = float(wd_b @ _delt_b) * K ** 2 + INV_PHI_BIZ_V
         B_b     = float(wd_b @ (obs_rhs_arr - K * _base_b)) * K + PHI_BIZ_PRIOR * INV_PHI_BIZ_V
         phi_biz = max(0.01, min(0.98 - phi_sch, B_b / A_b)) if A_b > 0 else phi_biz
@@ -684,7 +717,7 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
         if _has_school:
             _base_s = (1 - phi_biz) * cr * _fr + phi_biz * cb * _fb
             _delt_s = cs * _fs - cr * _fr
-            wd_s    = _sw * _delt_s
+            wd_s    = _gauss_w_arr * _delt_s
             A_s     = float(wd_s @ _delt_s) * K ** 2 + INV_PHI_SCH_V
             B_s     = float(wd_s @ (obs_rhs_arr - K * _base_s)) * K + PHI_SCH_PRIOR * INV_PHI_SCH_V
             phi_sch = max(0.01, min(0.98 - phi_biz, B_s / A_s)) if A_s > 0 else phi_sch
@@ -693,23 +726,48 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
         K_biz = K * phi_biz
         K_sch = K * phi_sch
 
+        # pred for slotted walking obs at current f values (needed by all three f-steps).
+        _pred_walk = np.maximum(
+            K_res * cr[_walk_slotted] * _fr[_walk_slotted]
+            + K_biz * cb[_walk_slotted] * _fb[_walk_slotted]
+            + K_sch * cs[_walk_slotted] * _fs[_walk_slotted],
+            1e-30)
+        _ratio_walk = _walk_sl_n / _pred_walk   # n_i / pred_i
+
         # ── f_res-step ───────────────────────────────────────────────────────
-        h_r   = obs_rhs_arr - K_biz * cb * _fb - K_sch * cs * _fs
-        wcr   = _sw * cr
-        s_num = np.bincount(_sid, weights=wcr * h_r, minlength=_NB)[:n_slots]
-        s_den = np.bincount(_sid, weights=wcr * cr,  minlength=_NB)[:n_slots]
-        num   = (K_res * s_num + _slot_mfr * _slot_ivr
+        h_r    = obs_rhs_arr - K_biz * cb * _fb - K_sch * cs * _fs
+        wcr_g  = _gauss_w_arr * cr
+        s_num  = np.bincount(_sid, weights=wcr_g * h_r, minlength=_NB)[:n_slots]
+        s_den  = np.bincount(_sid, weights=wcr_g * cr,  minlength=_NB)[:n_slots]
+        # Poisson correction: Σ cr_i*(1 − n_i/pred_i) per slot, subtracted from numerator.
+        walk_corr_r = np.bincount(_walk_sl_sid,
+                                   weights=cr[_walk_slotted] * (1.0 - _ratio_walk),
+                                   minlength=_NB)[:n_slots]
+        num   = (K_res * s_num - K_res * walk_corr_r
+                 + _slot_mfr * _slot_ivr
                  + _slot_gam * (_slot_mfa - f_b_s[:n_slots] - f_s_s[:n_slots]))
         den   = K_res ** 2 * s_den + _slot_ivr + _slot_gam
         f_r_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfr)
         _fr[:] = f_r_s[_sid]
 
+        # Update pred after f_res change before next f-step.
+        _pred_walk = np.maximum(
+            K_res * cr[_walk_slotted] * _fr[_walk_slotted]
+            + K_biz * cb[_walk_slotted] * _fb[_walk_slotted]
+            + K_sch * cs[_walk_slotted] * _fs[_walk_slotted],
+            1e-30)
+        _ratio_walk = _walk_sl_n / _pred_walk
+
         # ── f_biz-step ───────────────────────────────────────────────────────
-        h_b   = obs_rhs_arr - K_res * cr * _fr - K_sch * cs * _fs
-        wcb   = _sw * cb
-        s_num = np.bincount(_sid, weights=wcb * h_b, minlength=_NB)[:n_slots]
-        s_den = np.bincount(_sid, weights=wcb * cb,  minlength=_NB)[:n_slots]
-        num   = (K_biz * s_num + _slot_mfb * _slot_ivb
+        h_b    = obs_rhs_arr - K_res * cr * _fr - K_sch * cs * _fs
+        wcb_g  = _gauss_w_arr * cb
+        s_num  = np.bincount(_sid, weights=wcb_g * h_b, minlength=_NB)[:n_slots]
+        s_den  = np.bincount(_sid, weights=wcb_g * cb,  minlength=_NB)[:n_slots]
+        walk_corr_b = np.bincount(_walk_sl_sid,
+                                   weights=cb[_walk_slotted] * (1.0 - _ratio_walk),
+                                   minlength=_NB)[:n_slots]
+        num   = (K_biz * s_num - K_biz * walk_corr_b
+                 + _slot_mfb * _slot_ivb
                  + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_s_s[:n_slots]))
         den   = K_biz ** 2 * s_den + _slot_ivb + _slot_gam
         f_b_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfb)
@@ -717,11 +775,21 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
 
         # ── f_school-step ────────────────────────────────────────────────────
         if _has_school:
-            h_s   = obs_rhs_arr - K_res * cr * _fr - K_biz * cb * _fb
-            wcs   = _sw * cs
-            s_num = np.bincount(_sid, weights=wcs * h_s, minlength=_NB)[:n_slots]
-            s_den = np.bincount(_sid, weights=wcs * cs,  minlength=_NB)[:n_slots]
-            num   = (K_sch * s_num + _slot_mfs * _slot_ivs
+            _pred_walk = np.maximum(
+                K_res * cr[_walk_slotted] * _fr[_walk_slotted]
+                + K_biz * cb[_walk_slotted] * _fb[_walk_slotted]
+                + K_sch * cs[_walk_slotted] * _fs[_walk_slotted],
+                1e-30)
+            _ratio_walk = _walk_sl_n / _pred_walk
+            h_s    = obs_rhs_arr - K_res * cr * _fr - K_biz * cb * _fb
+            wcs_g  = _gauss_w_arr * cs
+            s_num  = np.bincount(_sid, weights=wcs_g * h_s, minlength=_NB)[:n_slots]
+            s_den  = np.bincount(_sid, weights=wcs_g * cs,  minlength=_NB)[:n_slots]
+            walk_corr_s = np.bincount(_walk_sl_sid,
+                                       weights=cs[_walk_slotted] * (1.0 - _ratio_walk),
+                                       minlength=_NB)[:n_slots]
+            num   = (K_sch * s_num - K_sch * walk_corr_s
+                     + _slot_mfs * _slot_ivs
                      + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_b_s[:n_slots]))
             den   = K_sch ** 2 * s_den + _slot_ivs + _slot_gam
             f_s_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfs)
@@ -783,8 +851,14 @@ def objective(log_params, log_ref=None):
     _pred = (K_res * m_res * obs_Th * _obs_f_r
              + K_biz * m_biz * obs_Th * _obs_f_b
              + K_sch * m_school * obs_Th * _obs_f_s)
-    _resid = _pred - obs_rhs_arr
-    chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
+    # Gaussian chi-squared for official hourly obs (_gauss_w_arr zeroes walking obs).
+    _resid    = _pred - obs_rhs_arr
+    chi2_data = float((_gauss_w_arr * _resid) @ _resid)
+    # Poisson deviance 2*(pred - n*log(pred)) for slotted walking obs.
+    _pred_w = np.maximum(_pred[_walk_slotted], 1e-30)
+    _pois_dev = 2.0 * (_pred_w - np.where(_walk_sl_n > 0,
+                                           _walk_sl_n * np.log(_pred_w), 0.0))
+    chi2 = chi2_data + float(_pois_dev.sum()) + chi2_pen
 
     if np.any(log_grav_lam > 0):
         chi2 += float(np.dot(log_grav_lam, (log_params[:n_gravity] - log_grav_ref) ** 2))
@@ -927,8 +1001,12 @@ for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfs, ivs, mfa, gam in _slot_data:
 _pred = (K_res * m_res * obs_Th * _obs_f_r
          + K_biz * m_biz * obs_Th * _obs_f_b
          + K_sch * m_school * obs_Th * _obs_f_s)
-_resid = _pred - obs_rhs_arr
-chi2 = float((_slot_w_arr * _resid) @ _resid) + chi2_pen
+_resid    = _pred - obs_rhs_arr
+chi2_data = float((_gauss_w_arr * _resid) @ _resid)
+_pred_w   = np.maximum(_pred[_walk_slotted], 1e-30)
+_pois_dev = 2.0 * (_pred_w - np.where(_walk_sl_n > 0,
+                                       _walk_sl_n * np.log(_pred_w), 0.0))
+chi2 = chi2_data + float(_pois_dev.sum()) + chi2_pen
 chi2_per_n = chi2 / n_obs
 
 # Build per-obs residuals for the fit table.
@@ -1170,6 +1248,7 @@ history_entry = {
         for i_obs in range(n_obs)
     ],
 }
+history_entry["objective"] = "poisson_deviance_walking"
 if note:
     history_entry["note"] = note
 
