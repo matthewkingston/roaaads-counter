@@ -55,11 +55,25 @@ nodes_out.to_file(f"{OUT_DIR}/newtownards_nodes.geojson", driver="GeoJSON")
 links_out.to_file(f"{OUT_DIR}/newtownards_links.geojson", driver="GeoJSON")
 ox.save_graphml(G, f"{OUT_DIR}/newtownards_network.graphml")
 
-# ── 3. Consolidate junctions ───────────────────────────────────────────────────
-# Project to UTM first so the tolerance is in real metres, not degrees
+# ── 3. Clip to core polygon, then consolidate ─────────────────────────────────
+# The full download covers RADIUS_M so boundary nodes have their external
+# neighbours in the graph (needed for build_demographics.py OSRM boundary
+# detection via newtownards_network.graphml).  The consolidated routing graph
+# used by build_paths.py should contain only core-polygon nodes — buffer nodes
+# outside the core are not road nodes in the model; external zones connect to
+# boundary nodes via OSRM-derived links instead.
 
-print(f"\nConsolidating junctions (tolerance={CONSOLIDATION_TOLERANCE_M}m) …")
-G_proj = ox.project_graph(G)  # auto-selects UTM zone (EPSG:32630 for NI)
+if os.path.exists(CENSUS_ZONES_FILE):
+    from shapely.geometry import Polygon as _Poly
+    _core_poly_wgs = _Poly(_cz["core_polygon"])
+    G_core = ox.truncate.truncate_graph_polygon(G, _core_poly_wgs, retain_all=False)
+    print(f"\nClipped to core polygon: {G.number_of_nodes()} → {G_core.number_of_nodes()} nodes")
+else:
+    G_core = G
+    print("\nNo census_zones.json — skipping core-polygon clip (run build_census_zones.py first)")
+
+print(f"Consolidating junctions (tolerance={CONSOLIDATION_TOLERANCE_M}m) …")
+G_proj = ox.project_graph(G_core)  # auto-selects UTM zone (EPSG:32630 for NI)
 G_cons = ox.consolidate_intersections(
     G_proj,
     tolerance=CONSOLIDATION_TOLERANCE_M,
