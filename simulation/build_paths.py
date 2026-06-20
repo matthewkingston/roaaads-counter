@@ -276,19 +276,17 @@ for k, (si, di) in enumerate(zip(od_src_list, od_dst_list)):
     src_groups[si]['dsts'].append(di)
 
 # ── Stochastic probit passes ───────────────────────────────────────────────────
-# Road edges perturbed with log-normal noise; external edges fixed (no noise).
-# External edges are kept separate so only road weights are perturbed.
+# All edges (road and external) perturbed with log-normal noise each pass.
+# External edges carry noise too so boundary node selection varies stochastically
+# for external→internal OD pairs with similarly-weighted entry options.
 
 print(f"\nRunning {N_PASSES} stochastic probit passes (CV={PROBIT_CV}, seed={RANDOM_SEED}) …")
 t0  = time.time()
 rng = np.random.default_rng(seed=RANDOM_SEED)
 
-data_road_arr = np.array(data_road, dtype=np.float64)
-rows_road_arr = np.array(rows, dtype=np.int32)
-cols_road_arr = np.array(cols, dtype=np.int32)
-
-# Fixed external adjacency (no noise)
-adj_ext_fixed = csr_matrix((data_ext, (rows_ext, cols_ext)), shape=(n, n))
+all_data_arr = np.array(all_data, dtype=np.float64)
+all_rows_arr = np.array(all_rows, dtype=np.int32)
+all_cols_arr = np.array(all_cols, dtype=np.int32)
 
 hit_accum   = {}
 dist_accum  = np.zeros(n_pairs, dtype=np.float64)
@@ -297,10 +295,9 @@ n_fallbacks = 0
 for pass_idx in range(N_PASSES):
     t_pass = time.time()
 
-    eps    = rng.normal(0.0, PROBIT_CV, size=len(data_road_arr))
-    data_p = data_road_arr * np.exp(eps)
-    adj_p  = csr_matrix((data_p, (rows_road_arr, cols_road_arr)), shape=(n, n))
-    adj_p  = adj_p + adj_ext_fixed   # external edges added without noise
+    eps    = rng.normal(0.0, PROBIT_CV, size=len(all_data_arr))
+    data_p = all_data_arr * np.exp(eps)
+    adj_p  = csr_matrix((data_p, (all_rows_arr, all_cols_arr)), shape=(n, n))
     _, pred_p = dijkstra(adj_p, directed=True, return_predecessors=True)
 
     for src_i, grp in src_groups.items():
