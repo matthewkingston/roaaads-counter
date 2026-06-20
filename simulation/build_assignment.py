@@ -76,10 +76,6 @@ if os.path.exists(TUNED_PARAMS):
     W_SCHOOL     = _tp.get("W_SCHOOL",     None)
     P_school     = _tp.get("P_school",     None)
     ALPHA_school = _tp.get("ALPHA_school", None)
-    for _nid, _val in _tp.get("external_node_pop", {}).items():
-        node_population[int(_nid)] = _val
-    for _nid, _val in _tp.get("external_node_biz", {}).items():
-        node_business_demand[int(_nid)] = _val
     if "K_res" in _tp and "K_biz" in _tp:
         K_res = _tp["K_res"]
         K_biz = _tp["K_biz"]

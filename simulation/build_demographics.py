@@ -92,51 +92,15 @@ HIGHWAY_STYLE = {
     "living_street": {"color": "#dddddd", "weight": 1},
 }
 
-# ── External zone weights for boundary nodes ───────────────────────────────────
-# Geographic positions (name, lat, lon) are hardcoded here.
-# Pop, workplace, and damping are read from tuner_config.json — single source of
-# truth shared with the tuner's L2 regularisation anchors.
-# Node 180 (local access) has no external centroid and no tuner_config entry;
-# its pop/wp are hardcoded as it is too small to tune.
+# ── External zone weights from census_zones.json ────────────────────────────────
+# Population and workplace population for external nodes come from census data
+# computed by build_census_zones.py.  No hand-crafted values, no dampings.
 
-_EXT_GEO = {
-    #  node: (name,                    lat,      lon)
-     47: ("Donaghadee",           54.6408, -5.5328),
-     65: ("Comber",               54.5503, -5.7419),
-     92: ("Lower Ards Peninsula", 54.4892, -5.5283),
-     97: ("Belfast",              54.5973, -5.9301),
-     98: ("Bangor",               54.6536, -5.6697),
-     99: ("Holywood",             54.6322, -5.8325),
-    119: ("Belfast",              54.5973, -5.9301),
-    180: (None,                   None,    None   ),
-    617: ("Comber",               54.5503, -5.7419),
-    618: ("Comber",               54.5503, -5.7419),
-    620: ("Comber",               54.5503, -5.7419),
-    731: ("Bangor",               54.6536, -5.6697),
-    748: ("Millisle",             54.6015, -5.5031),
-    749: ("Millisle",             54.6015, -5.5031),
-  10000: ("Dundonald",           54.5790, -5.8450),
-}
-
-with open("simulation/tuner_config.json") as _f:
-    _tuner_cfg_ext = json.load(_f)
-
-_node_cfg = {}  # node_id → (ref_pop, ref_wp, damping)
-for _city_cfg in _tuner_cfg_ext["cities"].values():
-    for _nid in _city_cfg["nodes"]:
-        _node_cfg[_nid] = (
-            _city_cfg["ref_pop"],
-            _city_cfg["ref_wp"],
-            _city_cfg["dampings"][str(_nid)],
-        )
-
-EXTERNAL_ZONES = {}
-for _nid, (name, lat, lon) in _EXT_GEO.items():
-    if _nid == 180:
-        EXTERNAL_ZONES[_nid] = (name, lat, lon, 50, 0, 1.0)
-    else:
-        ref_pop, ref_wp, damp = _node_cfg[_nid]
-        EXTERNAL_ZONES[_nid] = (name, lat, lon, ref_pop, ref_wp, damp)
+CENSUS_ZONES_FILE = "data/census_zones.json"
+_census_zones = None
+if os.path.exists(CENSUS_ZONES_FILE):
+    with open(CENSUS_ZONES_FILE) as _f:
+        _census_zones = json.load(_f)
 
 # ── Fast path: --zones-only ────────────────────────────────────────────────────
 # Patches only boundary node entries in node_weights.json. Skips all internal
@@ -144,21 +108,25 @@ for _nid, (name, lat, lon) in _EXT_GEO.items():
 # in tuner_config.json (not when lat/lon has changed).
 
 if "--zones-only" in sys.argv:
+    if _census_zones is None:
+        print(f"ERROR: {CENSUS_ZONES_FILE} not found. Run build_census_zones.py first.")
+        sys.exit(1)
     weights_path = f"{OUT_DIR}/node_weights.json"
     with open(weights_path) as f:
         w = json.load(f)
-    print("Updating external zone weights …")
-    for node_id, (name, lat, lon, pop, workplace, damping) in EXTERNAL_ZONES.items():
-        w["node_population"][str(node_id)]      = pop * damping
-        w["node_business_demand"][str(node_id)] = workplace * damping
-        # External nodes have no school demand (schools are internal features)
+    print("Updating external zone weights from census data …")
+    ext_nodes = _census_zones["external_nodes"]
+    for ext in ext_nodes:
+        nid = ext["id"]
+        w["node_population"][str(nid)]      = float(ext["population"])
+        w["node_business_demand"][str(nid)] = float(ext["workplace_pop"])
         if "node_school_demand" in w:
-            w["node_school_demand"][str(node_id)] = 0.0
-        zone = name or "local access"
-        print(f"  Node {node_id:4d}  {zone:<22}  pop={pop * damping:>8.0f}  workplace={workplace * damping:>8.0f}  damping={damping}")
+            w["node_school_demand"][str(nid)] = 0.0
+        print(f"  Node {nid:4d}  {ext['level']} {ext['code']}  "
+              f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}")
     with open(weights_path, "w") as f:
         json.dump(w, f)
-    print(f"Saved {len(EXTERNAL_ZONES)} boundary nodes → {weights_path}")
+    print(f"Saved {len(ext_nodes)} external nodes → {weights_path}")
     print("Next: python3 simulation/build_assignment.py")
     sys.exit(0)
 
@@ -680,20 +648,38 @@ else:
           f"  total enrollment={_tot_sch:.0f} pupils"
           f"  ({_n_capacity_used} from OSM capacity, {_n_school - _n_capacity_used} from fallback)")
 
-    # node_id → effective UTM centroid used for gravity-model distances:
-    #   internal nodes  → their own network coordinates
-    #   boundary nodes  → external destination centroid (or own coords for node 180)
-    node_effective_utm = {n: (float(x), float(y)) for n, (x, y) in zip(node_ids, node_coords_utm)}
+    # ── Auto-detect boundary nodes from core polygon ──────────────────────────
+    # Boundary nodes = internal (in-core) nodes with at least one edge going
+    # to a node outside the core polygon.
+    if _census_zones is not None:
+        from shapely.geometry import shape as _shape
+        _core_ring  = _census_zones["core_polygon"]
+        _core_poly_wgs = __import__("shapely.geometry", fromlist=["Polygon"]).Polygon(_core_ring)
+        _core_poly_utm = __import__("shapely.ops", fromlist=["transform"]).transform(
+            lambda x, y: transformer_to_utm.transform(x, y), _core_poly_wgs
+        )
+        _internal_ids = {n for n, (x, y) in zip(node_ids, node_coords_utm)
+                         if _core_poly_utm.contains(Point(x, y))}
+        _boundary_ids = {u for u, v in G_cons.edges()
+                         if u in _internal_ids and v not in _internal_ids}
+        print(f"Auto-detected {len(_internal_ids)} internal nodes, "
+              f"{len(_boundary_ids)} boundary nodes from core polygon")
+    else:
+        print(f"WARNING: {CENSUS_ZONES_FILE} not found — boundary_node_ids will be empty.")
+        print(f"  Run build_census_zones.py first.")
+        _boundary_ids = set()
 
-    print("Assigning external zone weights to boundary nodes …")
-    for node_id, (name, lat, lon, pop, workplace, damping) in EXTERNAL_ZONES.items():
-        node_population[node_id]      = pop * damping
-        node_business_demand[node_id] = workplace * damping
-        if lat is not None:
-            cx, cy = transformer_to_utm.transform(lon, lat)
-            node_effective_utm[node_id] = (cx, cy)
-        zone = name or "local access"
-        print(f"  Node {node_id:4d}  {zone:<22}  pop={pop * damping:>8.0f}  workplace={workplace * damping:>8.0f}  damping={damping}")
+    # ── Add external node weights from census data ────────────────────────────
+    if _census_zones is not None:
+        ext_nodes = _census_zones["external_nodes"]
+        print(f"Adding {len(ext_nodes)} external node weights from census data …")
+        for ext in ext_nodes:
+            nid = ext["id"]
+            node_population[nid]      = float(ext["population"])
+            node_business_demand[nid] = float(ext["workplace_pop"])
+            node_school_demand[nid]   = 0.0   # TBD
+    else:
+        ext_nodes = []
 
     # ── Serialise node weights for assignment script ───────────────────────────
     weights_path = f"{OUT_DIR}/node_weights.json"
@@ -703,10 +689,10 @@ else:
             "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             "node_parking_equiv":   {str(k): v for k, v in node_parking_equiv.items()},
-            "node_effective_utm":   {str(k): list(v) for k, v in node_effective_utm.items()},
-            "boundary_node_ids":    list(EXTERNAL_ZONES.keys()),
+            "boundary_node_ids":    sorted(_boundary_ids),
         }, f)
-    print(f"Saved node weights → {weights_path}")
+    print(f"Saved node weights → {weights_path}"
+          f"  ({len(node_ids)} internal + {len(ext_nodes)} external nodes)")
 
 # ── 5. Build map ───────────────────────────────────────────────────────────────
 

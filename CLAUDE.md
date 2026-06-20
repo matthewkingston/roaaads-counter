@@ -13,9 +13,11 @@ committing. This file is the authoritative record of model state.
 ## Pipeline (run in this order)
 
 ```
-python3 simulation/build_network.py          # build road network from OSM
-python3 simulation/build_demographics.py     # node weights + map scaffold
-python3 simulation/build_paths.py            # probit stochastic paths (N_PASSES=25, CV=0.25; ~30-60 min)
+python3 simulation/build_census_zones.py     # classify NI census areas → data/census_zones.json (one-off; needs SDZ/DEA boundary files)
+python3 simulation/build_network.py          # build road network from OSM (RADIUS_M=5000m)
+python3 simulation/build_demographics.py     # node weights + boundary detection + external weights + map scaffold
+python3 simulation/build_external_links.py   # OSRM queries → external↔boundary links + through-route allowlist (needs local OSRM)
+python3 simulation/build_paths.py            # probit stochastic paths incl. external nodes (N_PASSES=25, CV=0.25; ~30-60 min)
 
 python3 analysis/parse_official_hourly.py    # parse ODS hourly counts → data/official_hourly.json (one-off)
 python3 analysis/ingest_counts.py            # process walking count CSVs → counts_processed.json
@@ -23,8 +25,8 @@ python3 analysis/aggregate_counts.py         # combine per-session AADT → link
 
 python3 analysis/derive_component_profiles.py              # regenerate hourly_fractions.csv school column (re-run when NTS files change)
 
-python3 analysis/tune_assignment.py                        # Stage 1: tune gravity params (9 params; ~40-50s after probit cache rebuild)
-python3 analysis/tune_assignment.py --full                 # Stage 2: + external zones (31 params, ~70s after probit cache rebuild)
+python3 analysis/tune_assignment.py                        # tune gravity params (~11 params; external zones fixed from census)
+python3 analysis/tune_assignment.py --full                 # equivalent to --gravity (no external zone params to tune)
 python3 analysis/tune_assignment.py --fast                 # looser tolerances + fewer alt-min iters (~2× faster, minimal precision loss)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 
@@ -45,45 +47,54 @@ than restart.
 
 | File | Role |
 |------|------|
-| `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, assigns external zone weights, builds map. `--map-only` skips demographic recomputation and rebuilds only the HTML. `--zones-only` patches boundary node weights without rebuilding. **Population distribution:** building centroids snapped to road edges; DZs with <3 buildings fall back to road-length weighting. **Business demand:** workplace population × POI count (school/college/university excluded from this layer), augmented with OSM car park polygon area (public: area/25, private: area/50 equivalent persons). **School demand:** separate `node_school_demand` layer from OSM school POIs (amenity=school/secondary_school/college/university). Enrollment (pupils) is the control total per POI: OSM `capacity` tag used where present, otherwise type-based fallback (school→300, secondary_school→900, college→2000, university→3000; DE NI 2023/24 averages). Units are pupils, so W_SCHOOL is interpretable as a trip-generation ratio relative to residential population. No DZ distribution — each school's enrollment is assigned directly to its snapped road node(s). **Flow map layers:** reads `newtownards_flows.json` and adds: (1) combined AADT layer (shown by default, blue→yellow→red, tooltip includes res/biz/school breakdown); (2) residential layer (teal, off by default); (3) business-adjacent layer (amber→red, off by default); (4) school layer (violet→purple, off by default). Component layers only appear if `flows_res`/`flows_biz`/`flows_school` keys exist. Map also includes parking (blue/red) and POI layers. **Adding a new external zone:** add an entry to `_EXT_GEO` and to `tuner_config.json` cities. |
-| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Re-run if road network changes, `HIGHWAY_COST_FACTOR` values change, or `N_PASSES`/`PROBIT_CV` change. Edge costs are travel time × a road-class multiplier (trunk/primary: ×0.67, residential/unclassified/living_street: ×1.2, others: ×1.0). Also reads `tuner_config.json` to filter external→external OD pairs. **Probit stochastic loading:** runs `N_PASSES=25` Dijkstra passes with log-normal edge-cost noise (CV=0.25), accumulates fractional link-assignment weights (`link_weight` per entry = fraction of passes using that link for that OD pair). `od_dist` is the mean path distance across passes. Build time ~30–60 min. |
-| `simulation/model.py` | **Shared constants and functions:** `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel; `return_components=True` with `w_school` provided returns `(flow_res, flow_biz, flow_school)` tuple, without `w_school` returns `(flow_res, flow_biz)`), `site_flow()`, `compute_chi2()`, `print_chi2_table()`. `gravity_assign()` accepts optional `link_weight` array (probit fractional weights). `compute_chi2()` dispatches to three-component mode when `link_flow_school_dict` provided (N_eff = N − 3·N_slots); two-component when only `link_flow_biz_dict` provided; legacy single-flow otherwise. |
-| `simulation/build_assignment.py` | Gravity model assignment. Requires `simulation/newtownards_paths.npz`. Three-component mode activated when K_sch > 0 and W_SCHOOL are in `tuned_params.json` and `node_school_demand` is in `node_weights.json`. Saves `flows_res`, `flows_biz`, `flows_school` in `newtownards_flows.json`. Falls back to two-component (K_res/K_biz only) or legacy single-K for old param files. |
+| `simulation/build_census_zones.py` | **NEW.** Classifies all of NI into a three-level hierarchy (DEA → SDZ → DZ) centred on CENTRE. DEAs intersecting `SDZ_ZONE_RADIUS` (10 km) are broken into constituent SDZs; SDZs intersecting `CORE_RADIUS` (3 km) contribute their DZs to the core area. Population-weighted centroids are computed for each external (DEA/SDZ) node from DZ-level census population. Outputs `data/census_zones.json` containing: core area polygon (union of core DZs, in WGS84), list of external nodes with integer IDs (1-based sequential), census area codes, centroid lat/lon/UTM, population, and workplace_pop. Requires `simulation/sdz2021/SDZ2021.geojson` and `simulation/dea2021/DEA2021.geojson` (download from NISRA/OpenDataNI). School and business demand for external nodes are **TBD** — currently `business_demand = workplace_pop` and `school_demand = 0`. |
+| `simulation/build_external_links.py` | **NEW.** Queries a local OSRM instance (NI extract, car profile, `http://localhost:5000`) to derive all external zone connectivity. **X→B links:** for each (external node, boundary node) ordered pair, keeps the link only if that boundary node is the first boundary node encountered in the OSRM route (i.e., it is the natural entry point into the core). **B→X links:** symmetric check — keeps B→X only if the first node after B is outside the core (B opens directly onto the external network). **Boundary→boundary exterior shortcuts:** for each ordered boundary pair, if the route exits the core first, adds a directed shortcut with duration summed from OSRM annotations up to the first boundary node re-encountered. **Through-route allowlist:** for each ordered external-external pair, checks if any OSRM route node is a boundary node; if so adds to `allowed_through_pairs`. Outputs `data/external_links.json`. ~28,000 OSRM queries; under a minute on a local instance. |
+| `simulation/build_demographics.py` | Downloads NISRA population, allocates to nodes, detects boundary nodes, adds external node weights, builds map. `--map-only` skips demographic recomputation. `--zones-only` re-reads `data/census_zones.json` and patches only the external node entries in `node_weights.json`. **Boundary node detection:** loads core polygon from `census_zones.json`, identifies internal nodes (within core polygon), then boundary nodes = internal nodes with at least one edge going outside. Writes `boundary_node_ids` to `node_weights.json` (replaces the previous hand-specified list). **External node weights:** reads external node list from `census_zones.json` and writes population/workplace_pop to `node_weights.json`. **Population distribution:** building centroids snapped to road edges; DZs with <3 buildings fall back to road-length weighting. **Business demand:** workplace population × POI count (school/college/university excluded), augmented with OSM car park polygon area (public: area/25, private: area/50 equivalent persons). **School demand:** separate `node_school_demand` layer from OSM school POIs. Enrollment fallbacks: school→300, secondary_school→900, college→2000, university→3000 pupils. **Flow map layers:** combined AADT (default), residential (teal), business (amber→red), school (violet→purple). |
+| `simulation/build_paths.py` | Precomputes all-pairs shortest paths; result cached in `newtownards_paths.npz`. Now covers both internal road nodes and external census-area nodes. **Graph augmentation:** loads external nodes and edges from `data/external_links.json`; adds them to the routing graph before Dijkstra. External edges (X↔B, boundary shortcuts) are included in the adjacency matrix but NOT in `link_list` — they contribute to path distance but not to flow accumulation. **Probit loading:** road edges perturbed with log-normal noise (CV=0.25, N_PASSES=25); external edges are fixed (no noise) so boundary node selection varies across passes via distance competition. **OD pair filter:** external→external pairs only allowed if in `allowed_through_pairs` (from `external_links.json`). No offscreen leg calculation. Re-run if road network, external links, `HIGHWAY_COST_FACTOR`, `N_PASSES`, or `PROBIT_CV` change. Build time ~30–60 min. |
+| `simulation/model.py` | **Shared constants and functions:** `COUNT_SITES`, `EXCLUDE_LINKS`, file-path constants, `gravity_assign()` (rational kernel; `return_components=True` with `w_school` provided returns `(flow_res, flow_biz, flow_school)` tuple), `site_flow()`, `compute_chi2()`, `print_chi2_table()`. `gravity_assign()` accepts optional `link_weight` array (probit fractional weights). `compute_chi2()` dispatches to three-component mode when `link_flow_school_dict` provided (N_eff = N − 3·N_slots); two-component when only `link_flow_biz_dict` provided; legacy single-flow otherwise. |
+| `simulation/build_assignment.py` | Gravity model assignment. Requires `simulation/newtownards_paths.npz`. Three-component mode activated when K_sch > 0 and W_SCHOOL are in `tuned_params.json` and `node_school_demand` is in `node_weights.json`. Saves `flows_res`, `flows_biz`, `flows_school` in `newtownards_flows.json`. Falls back to two-component (K_res/K_biz only) or legacy single-K for old param files. External node weights come from `node_weights.json` directly (no override from tuned params). |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Reference values for L2 regularization, city→node groupings, `through_route_pairs` whitelist, gravity param regularization, and temporal coupling. `lambda` regularises external zones; `gravity_lambda` + `gravity_ref` regularise P/ALPHA/BETA/W_BIZ/P_biz/ALPHA_biz; `gamma_coupling_scale` controls the per-slot aggregate coupling (γ = scale/std_f²); `phi_biz_prior` + `phi_biz_std` set the Gaussian prior on the business flow fraction (see Model Design). |
+| `simulation/tuner_config.json` | **Tracked in git.** Gravity param regularization and temporal coupling priors. `gravity_lambda` + `gravity_ref` regularise P/ALPHA/BETA/W_BIZ/P_biz/ALPHA_biz; `gamma_coupling_scale` controls the per-slot aggregate coupling (γ = scale/std_f²); `phi_biz_prior`/`phi_biz_std` and `phi_school_prior`/`phi_school_std` set Gaussian priors on business and school flow fractions. **Removed:** `cities` block (replaced by `census_zones.json`) and `through_route_pairs` whitelist (replaced by OSRM-derived `external_links.json`). `lambda` is retained but no longer used (external zone params are not tuned). |
 | `analysis/parse_official_hourly.py` | Parses sheets 444/507/508 from the 2023 NI ODS traffic count file → `data/official_hourly.json`. Run once (or when the ODS file changes). Weekday sigma = max(between-day std, 10% relative, √count); weekend sigma = max(√count, 15% relative). The √count floor prevents unrealistically tight sigmas at overnight low-count hours. |
-| `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. Loads manual link overrides from `data/manual_link_overrides.json` (use `analysis/manual_assign_link.py` to add entries). After every new link assignment (manual or auto), validates that each non-null count direction maps to a real directed edge in G; raises `ValueError` if not, preventing counts from silently hitting a zero-flow phantom edge. Edges without geometry (virtual stub nodes such as Dundonald 10000) are skipped during snap candidate construction. |
-| `analysis/manual_assign_link.py` | CLI tool to manually assign a session to a specific directed link, bypassing GPS snap. Usage: `python3 analysis/manual_assign_link.py <session_id> <from_node> <to_node>` where `from_node→to_node` is the observer's walking direction ("with"). Validates both nodes exist and checks count-edge consistency: a non-null count must map to a real directed edge (mirrors `ingest_counts.py` rule). Handles one-way roads correctly — the observer may walk with or against traffic; only the direction carrying non-null counts must have a real edge. Writes to `data/manual_link_overrides.json` and patches `counts_processed.json` directly. Idempotent: re-running overwrites the previous assignment; re-running `ingest_counts.py` afterwards is safe (skips already-snapped sessions) but not required. After correcting an assignment, re-run `aggregate_counts.py` then `tune_assignment.py`. |
-| `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry now carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s` so the tuner can work in count space. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component model:** gravity flows split into residential (pop→pop, `flow_res`), business-adjacent (pb+bb, `flow_biz`), and school (pop→school, `flow_school`) components. Stage 1 tunes 9 gravity params (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school); `--full` adds 14 city pop/wp + 6 dampings (31 params total). Uses 216 official hourly obs + 343 walking obs. **Alternating minimisation (5 blocks, up to 10 iters):** K-step (1D); phi_biz-step (1D, Gaussian prior from `phi_biz_prior`/`phi_biz_std` in config); phi_sch-step (1D, Gaussian prior from `phi_school_prior`/`phi_school_std`); f_res/f_biz/f_school steps (per-slot analytical via bincount) + aggregate coupling γ·(f_res+f_biz+f_school−f_agg)² per slot. School component disabled gracefully if `node_school_demand` absent from weights. **Performance estimate with probit cache:** ~40–50 s stage 1, ~70 s stage 2. `--fast` mode caps alt-min at 5 iters. |
-| `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` (summary, chi² tables, gravity params with K_res/K_biz/K_sch/phi_biz/phi_sch, external zones, slot fractions table showing f_res/f_biz/f_school with pulls) and `reports/slot_pulls_{id}.png` (two or three side-by-side heatmaps: 24 h × 3 day-types per component). History `slot_prior` entries carry 5 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz, mean_f_school]`. Old entries with 4 values handled gracefully. |
-| `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. Writes all keys from `params` dict (K_res, K_biz, slot_fracs_res, slot_fracs_biz, external zone params etc.); clears stale `slot_fracs` legacy key. |
-| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. External zone params are preserved. |
+| `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. Loads manual link overrides from `data/manual_link_overrides.json`. After every new link assignment, validates each non-null count direction against the directed graph; raises `ValueError` if the edge doesn't exist. |
+| `analysis/manual_assign_link.py` | CLI tool to manually assign a session to a specific directed link, bypassing GPS snap. Usage: `python3 analysis/manual_assign_link.py <session_id> <from_node> <to_node>`. Validates both nodes exist and checks count-edge consistency. Writes to `data/manual_link_overrides.json` and patches `counts_processed.json` directly. After correcting an assignment, re-run `aggregate_counts.py` then `tune_assignment.py`. |
+| `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s`. Output: `data/link_aadt.json`. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component model:** gravity flows split into residential (`flow_res`), business-adjacent (`flow_biz`), and school (`flow_school`) components. Tunes 9 gravity params (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school). `--full` is now equivalent to `--gravity` — external zone values are fixed from census data and are not tuned. **Alternating minimisation (5 blocks, up to 10 iters):** K-step (1D); phi_biz-step; phi_sch-step; f_res/f_biz/f_school steps (per-slot analytical) + aggregate coupling γ per slot. All OD pairs (including external-involved) use a single unified bin-matrix path; no internal/external split. **Performance estimate:** ~40–50 s per run. `--fast` mode caps alt-min at 5 iters. |
+| `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` and `reports/slot_pulls_{id}.png`. History `slot_prior` entries carry 5 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz, mean_f_school]`. Old entries with 4 values handled gracefully. Note: report still attempts to print external city delta table — will be a no-op for new-format runs. |
+| `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. New-format param dicts no longer contain external zone keys. |
+| `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
-| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile. Includes `mean_fraction_res`, `mean_fraction_biz`, and `mean_fraction_school` columns: temporal profile priors for the three-component model. **Derived from NTS** via `analysis/derive_component_profiles.py`. Constraint: res + biz + school = agg for all 168 rows. **Summation convention:** rows sum to 7.0 (AADT normalisation). Re-run `derive_component_profiles.py` whenever NTS files change; do not edit aggregate columns by hand. |
-| `analysis/derive_component_profiles.py` | Derives `mean_fraction_res`, `mean_fraction_biz`, and `mean_fraction_school` from DfT NTS data (2023–2024 rolling average). **Purpose classification:** biz = commuting + employer's business + shopping; school = education×⅕ + escort education; res = remainder. Education ÷5: the standalone child trip has far lower car generation; escort education is the adult drop-off car trip, kept at full weight. **Weekdays (NTS0502a):** per-hour shares computed for each of the three components. **Weekends (NTS0504b):** flat school_share and biz_share per Saturday/Sunday, with "Just walk" removed and education ÷5 applied; temporal shape from aggregate profile. Constraint: res + biz + school = agg exactly. Re-run whenever NTS files or purpose classification change. |
+| `analysis/hourly_fractions.csv` | **Tracked in git.** NI-average hourly fraction profile. Includes `mean_fraction_res`, `mean_fraction_biz`, and `mean_fraction_school` columns. **Derived from NTS** via `analysis/derive_component_profiles.py`. Constraint: res + biz + school = agg for all 168 rows. Rows sum to 7.0 (AADT normalisation). Re-run `derive_component_profiles.py` whenever NTS files change. |
+| `analysis/derive_component_profiles.py` | Derives `mean_fraction_res`, `mean_fraction_biz`, and `mean_fraction_school` from DfT NTS data (2023–2024 rolling average). Purpose classification: biz = commuting + employer's business + shopping; school = education×⅕ + escort education; res = remainder. Re-run whenever NTS files or purpose classification change. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
 `simulation/newtownards_map.html`, `simulation/tuned_params.json` — all regenerated by the pipeline.
-`simulation/node_weights.json` keys: `node_population`, `node_business_demand`, `node_school_demand`, `node_parking_equiv`, `node_effective_utm`, `boundary_node_ids`.
+`simulation/node_weights.json` keys: `node_population`, `node_business_demand`, `node_school_demand`, `node_parking_equiv`, `boundary_node_ids` (auto-detected from core polygon). External node entries (integer IDs 1, 2, …) are included alongside internal OSM node IDs. `node_effective_utm` is removed.
 `simulation/newtownards_flows.json` — combined flows plus optional `flows_res`/`flows_biz`/`flows_school` keys when three-component params active.
 `reports/` — generated by `report_tune.py` and `tune_assignment.py`; not tracked.
 
 ### Tracked generated outputs
 `data/counts_processed.json`, `data/link_aadt.json`, `data/official_hourly.json`,
 `simulation/tuning_history.jsonl` — committed so history is preserved.
+`data/census_zones.json` — committed; output of `build_census_zones.py`. Contains core polygon, external node list with IDs/codes/centroids/census demand. Re-run `build_census_zones.py` only if NISRA boundary files or census data change.
+`data/external_links.json` — committed; output of `build_external_links.py`. Contains OSRM-derived X↔B links, boundary shortcuts, and through-route allowlist. Re-run `build_external_links.py` when boundary nodes change or OSRM data is updated.
 `data/manual_link_overrides.json` — committed so manual assignments survive a wipe of `counts_processed.json`.
 `simulation/tuner_config.json` — committed as source config (gitignore exception).
 `analysis/hourly_fractions.csv` — committed as source data (single authoritative version).
 
 ### Large reference data (gitignored, kept locally only)
-`data/*.ods`, `data/*.xlsx` — too large to commit; keep a local copy for reference.
+`data/*.ods`, `data/*.xlsx`, boundary GeoJSON files — too large to commit; keep local copies.
 Currently present:
-- `data/2023-northern-ireland-traffic-count-data-in-ods-format.ods` — used by `parse_official_hourly.py` to extract hourly counts for sites 444/507/508; annual AADT values in `model.py` `COUNT_SITES` are no longer used by the tuner but retained for `build_assignment.py`.
-- `data/nts0502.ods` — DfT NTS Table NTS0502a, "Trip start time by trip purpose (Mon–Fri): England, 2002 onwards". Used by `derive_component_profiles.py` for weekday hourly business shares. Download from GOV.UK NTS data tables (NTS05 Trips).
-- `data/nts0504.ods` — DfT NTS Table NTS0504b, "Average trips by day of the week and purpose: England, 2002 onwards". Used by `derive_component_profiles.py` for Saturday/Sunday business shares. Same download page.
-- `data/census-2021-apwp001.xlsx` — census workplace population data.
+- `data/2023-northern-ireland-traffic-count-data-in-ods-format.ods` — used by `parse_official_hourly.py`.
+- `data/nts0502.ods` — DfT NTS Table NTS0502a, weekday trip start times. Used by `derive_component_profiles.py`.
+- `data/nts0504.ods` — DfT NTS Table NTS0504b, average trips by day/purpose. Used by `derive_component_profiles.py`.
+- `data/census-2021-apwp001.xlsx` — DZ-level workplace population. Used by `build_demographics.py` (internal nodes) and `build_census_zones.py` (external nodes).
+
+Boundary files needed by `build_census_zones.py` (download from NISRA / OpenDataNI):
+- `simulation/dz2021/DZ2021.geojson` — DZ polygon boundaries (already present as .qmd stub).
+- `simulation/sdz2021/SDZ2021.geojson` — SDZ polygon boundaries (**not yet downloaded**).
+- `simulation/dea2021/DEA2021.geojson` — DEA polygon boundaries (**not yet downloaded**).
 
 ---
 
@@ -101,8 +112,7 @@ ALPHA controls the right-side tail decay; BETA controls the left-side approach t
 
 Node weight: `w = population + W_BIZ × business_demand`
 
-Distances are least-time shortest paths (seconds), with an off-network leg added
-for boundary nodes using their real-world centroid position.
+Distances are least-time shortest paths (seconds). For external→internal OD pairs, the path traverses an OSRM-derived external edge (X→B, fixed weight) then the internal road network (B→J). Dijkstra selects the optimal boundary entry node for each destination.
 
 ### Stochastic route choice (probit loading)
 The paths cache stores fractional link-assignment weights computed from `N_PASSES=25`
@@ -115,23 +125,23 @@ This replaces the previous k=2/k=3 global-penalisation scheme, which was ineffec
 in a dense network (global penalisation of all k=1-used links preserves relative ordering
 and produces identical alternative paths for most OD pairs). THETA is no longer tuned.
 
-### External zones
-15 boundary nodes grouped into 8 cities in `tuner_config.json`. Each city shares
-one pop and one wp value; individual nodes scale by a fixed damping ratio.
-Nodes with damping=1.0 are fixed; nodes with damping<1.0 are tunable (but
-L2-penalised toward the config reference values).
+### External zones (big-world network)
+NI is represented as a three-level hierarchy centred on Newtownards (CENTRE):
+
+- **Core area** (DZ level): union of all DZs whose parent SDZ intersects `CORE_RADIUS` (3 km). Boundary is irregular (follows census polygon edges, not a circle).
+- **SDZ external nodes**: SDZs within `SDZ_ZONE_RADIUS` (10 km) that are not in the core — one centroid node per SDZ.
+- **DEA external nodes**: DEAs entirely outside `SDZ_ZONE_RADIUS` — one centroid node per DEA.
+
+Once a DEA is broken into SDZs, all its constituent SDZs become nodes (even those beyond `SDZ_ZONE_RADIUS`). External node integer IDs are sequential (1, 2, …), well below any OSM node ID. Node identifiers in census area code form (e.g. `N09000001`) are stored in `census_zones.json` for traceability.
+
+**Demand:** population and workplace_pop from Census 2021 (DZ-level data aggregated to SDZ/DEA). Business demand for external nodes is currently set equal to workplace_pop (TBD refinement). School demand = 0 for external nodes (TBD).
+
+**Connectivity:** boundary nodes are all internal nodes with at least one road edge crossing the core polygon boundary. OSRM-derived directed edges connect each external node to its valid boundary nodes; the gravity model path distance for any external→internal pair is the OSRM leg plus the internal shortest path, computed automatically by Dijkstra on the augmented graph.
+
+**No tuning of external zone values.** Pop/wp come directly from census data and are not adjusted by the optimizer. This replaces the previous hand-crafted city configs, ref_pop/ref_wp values, and damping factors.
 
 ### Through routes
-External→external OD pairs are included for a whitelisted set of city pairs
-stored in `tuner_config.json` under `through_route_pairs`. All other
-boundary→boundary pairs are excluded. The whitelist captures trips that genuinely
-traverse Newtownards (e.g. Comber↔Donaghadee via A22→A48) while excluding trips
-that use an out-of-network bypass (e.g. Belfast↔Bangor via the A2 coast road).
-Changing the whitelist requires rebuilding the paths cache (`build_paths.py`).
-
-Current whitelist: Comber↔Donaghadee, Comber↔LowerArds, Comber↔Millisle,
-Comber↔Bangor, Bangor↔LowerArds, Belfast↔LowerArds, Dundonald↔LowerArds,
-Dundonald↔Donaghadee, Dundonald↔Millisle.
+External→external OD pairs are allowed only for pairs whose OSRM route passes through at least one boundary node (i.e. genuinely transits the core area). This allowlist is auto-generated by `build_external_links.py` and stored in `data/external_links.json`. Changing the allowlist requires re-running `build_external_links.py` and `build_paths.py` (the paths cache must be rebuilt).
 
 ### Three-component flow decomposition
 The gravity OD flows are split into three spatial components at each tuner evaluation:
@@ -223,34 +233,31 @@ New sessions added 2026-06-18 (7 sessions): Saratoga Avenue (333↔335), Glenfor
 | 2026-06-19 | gravity | 559 | 9 | 1.3292 | three-component model (school added); phi_biz=27%, phi_sch=1.2%; school at ref |
 | 2026-06-19 | full | 559 | 31 | **1.3146** | three-component full tune; phi_biz=25.6%, phi_sch=1.4%; school params at ref |
 
-**Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-19 three-component model: N_eff = 559 − 3×72 = 343 (one extra df per slot for f_school).
+**Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-19 three-component model: N_eff = 559 − 3×72 = 343 (one extra df per slot for f_school). **Runs from the big-world architecture are not directly comparable to earlier runs** — external zone representation has fundamentally changed (census-derived vs hand-crafted; many more external nodes; OSRM-based connectivity vs offscreen Euclidean leg).
 
-Current best full-tune: chi²/N = **1.3146** (559 obs, N_eff=343; three-component with probit cache, run f09a003e).
+Last pre-big-world best: chi²/N = **1.3146** (559 obs, N_eff=343; three-component with probit cache, run f09a003e).
 K_res=1.23e-04, K_biz=4.31e-05, K_sch=2.40e-06. phi_biz=25.6%, phi_sch=1.4%.
 W_BIZ=3.82, P=117.6s, ALPHA=4.02, BETA=7.67. P_biz=83.4s, ALPHA_biz=3.66.
-W_SCHOOL=1.00, P_school=600s, ALPHA_school=2.00 (at ref — school params not driven by data).
-mean|z|=0.80  |z|>2: 40  |z|>3: 12.
+W_SCHOOL=1.00, P_school=600s, ALPHA_school=2.00 (at ref).
 
-**Confirmed working:**
-- Three-component model runs end-to-end; display bug fixed (K scaling in walking display).
-- School temporal prior correct: weekday h08=40.1% school, h15=34.5%; weekends ~0.5%.
-- External zone tuning improved: Belfast wp now +20.7% (was +891% before ref update); Bangor wp −43.8%.
+**First big-world tune:** not yet run — requires SDZ/DEA boundary files and local OSRM instance.
 
-**Outstanding concerns:**
-- **phi_sch=1.4%** — school component contributes very little. School params sit at gravity_ref because walking count sessions don't cover h08/h15 school-peak hours. The school kernel (P/ALPHA) is unidentifiable without school-peak observations.
+**Outstanding concerns (carry-forward):**
+- **phi_sch=1.4%** — school component unidentifiable without school-peak count sessions.
 - Structural outliers: `22→12 Regent Street` (z=+4.03), `23→295 Frances Street` (z=+3.94), `296→297 Nursery Road` (z=−3.70), `139→137 Portaferry Road` (z=−3.70).
 - `73→70` Mill Street severe underprediction (z=−3.30; obs 26,377 vs model 2,682).
 - `719→325` / `325→719` Messines Road persistent (z=−3.33/−2.53).
 - Hardford Link persistent (z=−3.25/−3.19/−2.73).
+- Business demand units mismatch: external nodes use census workplace_pop, internal nodes use OSM POI proxy. TBD whether `W_BIZ` needs separate scaling for external vs internal demand.
 
 ### Paths cache note
-The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever
-`through_route_pairs` changes, the road network changes, or `N_PASSES`/`PROBIT_CV` change.
+The paths cache (`newtownards_paths.npz`) must be rebuilt with `build_paths.py` whenever:
+- The road network changes (`newtownards_consolidated.graphml`)
+- External links change (`data/external_links.json` — re-run `build_external_links.py` first)
+- `HIGHWAY_COST_FACTOR` values change
+- `N_PASSES` or `PROBIT_CV` change
 
-**Current cache format** (probit): contains `link_weight` (float32, per entry), `od_dist`
-(mean across passes), `probit_n_passes`, `probit_cv`. No `pair_idx_2/3` keys —
-`_has_stoch = False`, THETA not tuned. Rebuild with `build_paths.py` if the road network
-or `through_route_pairs` changes.
+**Current cache format** (probit): `node_ids` covers road nodes + external nodes (small integer IDs); `link_u`/`link_v` are road-link endpoints only (external edges are not in `link_list`); `link_weight` (float32, fraction of passes using that link for each OD pair); `od_dist` (mean path distance across passes including external legs); `probit_n_passes`, `probit_cv`. No `pair_idx_2/3` keys — `_has_stoch = False`, THETA not tuned.
 
 ### Known model behaviour
 - **Two-component K_biz/W_BIZ degeneracy:** Without the phi prior, the optimizer exploits
@@ -265,12 +272,9 @@ or `through_route_pairs` changes.
   overall magnitude of unnormalised gravity flows (shifts by many orders of magnitude as
   ALPHA/P/BETA change). K_res and K_biz are derived from K × (1−phi) and K × phi respectively.
   K is not interpretable in isolation; chi²/N is reliable.
-- After a structural model change (e.g. adding through routes or new count data), a gravity-only
-  stage 1 run will show inflated chi²/N. A full `--full` re-tune is needed to restore fit quality.
-- **Dundonald virtual node (added 2026-06-17):** Node 10000 is a degree-1 stub connected
-  only to node 97. With probit loading, its `link_weight` values will be 1.0 on the forced
-  stub edge for every pass (no route diversity possible for a degree-1 node). Route diversity
-  for Dundonald OD pairs is zero, which is topologically correct.
+- After a structural model change (e.g. new count data or external link regeneration), a fresh tune is needed to restore fit quality.
+- **External node probit loading:** external→boundary edges have fixed weight (no noise). Route diversity for external-internal OD pairs comes entirely from the internal B→J portion. If two boundary nodes have similar total path distances to a destination, probit may distribute traffic across both entry points — this is the intended behaviour.
+- **Dundonald virtual node (10000) is removed** in the big-world system. Dundonald is now represented by an SDZ or DEA external centroid node with a proper census-derived population.
 - **Manual link overrides:** Use `analysis/manual_assign_link.py <session_id> <from_node> <to_node>` to assign a session to a specific directed link, bypassing GPS snap. Use when the observer stood on a parallel carriageway and the snap would land on the wrong physical road. The override is stored in `data/manual_link_overrides.json` and takes effect even if `counts_processed.json` is wiped and rebuilt. After assignment (manual or auto), `ingest_counts.py` validates each non-null count direction against the directed graph and raises `ValueError` if the edge doesn't exist.
 - **Snap direction bug (fixed 2026-06-15):** `ingest_counts.py` previously stored canonical
   `(min(u,v), max(u,v))` — fixed to store actual directed `(u, v)`. Only session `f56b2ce4`
@@ -291,29 +295,26 @@ or `through_route_pairs` changes.
   entry point for that street). No change to `build_paths.py`, `model.py`, or the paths
   cache. Running `build_demographics.py` now prints "Added N ghost dead-end edges to
   STRtree (absorbed termini)".
-- **`tuned_params.json` structure:** contains `K_res`, `K_biz`, `K_sch`, `W_SCHOOL`, `P_school`, `ALPHA_school`, `slot_fracs_res`, `slot_fracs_biz`, `slot_fracs_school` (dicts keyed `"dt,h"`); does **not** contain a `slot_fracs` key (legacy). Old param files without school keys fall back to two-component or legacy mode in `build_assignment.py`.
+- **`tuned_params.json` structure:** contains `K_res`, `K_biz`, `K_sch`, `W_SCHOOL`, `P_school`, `ALPHA_school`, `slot_fracs_res`, `slot_fracs_biz`, `slot_fracs_school` (dicts keyed `"dt,h"`); does **not** contain a `slot_fracs` key (legacy) or `external_node_pop/biz/city_pop/wp/dampings` keys (removed). Old param files without school keys fall back to two-component or legacy mode in `build_assignment.py`.
 
 ---
 
-## External Zone Reference Values (`tuner_config.json`)
+## External Zone Configuration
 
-**These values must not be changed without explicit user approval.** After a full tuning run,
-updating them is something to *consider and discuss*, not an automatic step — the refs anchor
-L2 regularization and changing them shifts the penalty basin for all future runs.
+External zone values are now fully data-driven from Census 2021 (via `data/census_zones.json`) and OSRM routing (via `data/external_links.json`). There are no hand-crafted reference values, dampings, or city groupings to maintain.
 
-Last updated: 2026-06-19 (run 8a0fe24b, chi²/N=1.3742, 559 obs).
-- gravity_lambda raised 0.05→0.5, gravity_ref P updated 300→600s (TSNI average journey ≈10 min) to prevent P drifting to unrealistic sub-minute values.
+**Gravity param refs** (`tuner_config.json` `gravity_ref`): still anchored for L2 regularization. Last updated 2026-06-19 — `gravity_ref P = 600s`, `gravity_lambda P = 2.0`. These must not be changed without explicit approval.
 
-| City | Nodes | ref_pop | ref_wp | Tunable dampings |
-|------|-------|---------|--------|-----------------|
-| Donaghadee | 47 | 386,202 | 11,093 | — |
-| Comber | 65, 617, 618, 620 | 71,927 | 2,208 | 617 (×0.29), 618 (×0.23), 620 (×0.36) |
-| LowerArds | 92 | 136,840 | 5,850 | — |
-| Belfast | 97, 119 | 517,496 | 1,822,862 | 119 (×0.39) |
-| Dundonald | 10000 | 7,370 | 6,820 | — |
-| Bangor | 98, 731 | 150,387 | 6,862 | 98 (×0.44) |
-| Holywood | 99 | 3,785 | 1,204 | — |
-| Millisle | 748, 749 | 2,525 | 496 | 749 (×0.46) |
+**To update external zone coverage** (e.g. after a NISRA boundary update):
+1. Re-run `build_census_zones.py` (updates `data/census_zones.json`)
+2. Re-run `build_demographics.py` (updates `node_weights.json`)
+3. Re-run `build_external_links.py` (updates `data/external_links.json`)
+4. Re-run `build_paths.py` (rebuilds paths cache with new external nodes)
+5. Re-tune
+
+**Outstanding TBDs for external nodes:**
+- School demand: currently 0 for all external nodes. Should use census school-age population or similar.
+- Business demand: currently set equal to workplace_pop. Units differ from internal nodes (which use OSM POI proxy). A separate `W_BIZ_ext` or normalisation may be needed.
 
 ---
 
