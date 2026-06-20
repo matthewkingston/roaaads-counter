@@ -98,7 +98,7 @@ if os.path.exists(TUNED_PARAMS):
 
 print(f"Loading paths cache ({PATHS_CACHE}) …")
 t0    = time.time()
-cache = np.load(PATHS_CACHE)
+cache = np.load(PATHS_CACHE, allow_pickle=True)
 
 node_ids_arr = cache["node_ids"]
 od_src       = cache["od_src"]

@@ -433,15 +433,15 @@ print(f"  {n_pairs:,} OD pairs  {n_entries:,} entries  mean {mean_lpp:.1f} links
 print("Saving cache …")
 np.savez_compressed(
     PATHS_CACHE,
-    node_ids        = np.array(all_node_ids, dtype=object),
+    node_ids        = np.array(all_node_ids, dtype=np.int64),
     od_src          = np.array(od_src_list,  dtype=np.int32),
     od_dst          = np.array(od_dst_list,  dtype=np.int32),
     od_dist         = od_dist_out,
     pair_idx        = pair_idx_arr,
     link_idx        = link_idx_arr,
     link_weight     = link_weight_arr,
-    link_u          = np.array([u for u, v in link_list], dtype=np.int32),
-    link_v          = np.array([v for u, v in link_list], dtype=np.int32),
+    link_u          = np.array([u for u, v in link_list], dtype=np.int64),
+    link_v          = np.array([v for u, v in link_list], dtype=np.int64),
     probit_n_passes = np.int32(N_PASSES),
     probit_cv       = np.float32(PROBIT_CV),
 )

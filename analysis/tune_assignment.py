@@ -108,7 +108,7 @@ if not os.path.exists(PATHS_CACHE):
     raise SystemExit(1)
 
 print("Loading paths cache …")
-cache        = np.load(PATHS_CACHE)
+cache        = np.load(PATHS_CACHE, allow_pickle=True)
 node_ids_arr = cache["node_ids"]
 od_src       = cache["od_src"]
 od_dst       = cache["od_dst"]
