@@ -301,9 +301,10 @@ print(f"  {len(boundary_boundary_links)} boundary→boundary exterior shortcuts"
 n_ext = len(external_nodes)
 print(f"\nStep 4: External→external through-route check ({n_ext*(n_ext-1):,} queries) …")
 
-allowed_through_pairs = []   # [ext_id1, ext_id2]
+allowed_through_pairs = {}   # {src_id: [dst_id, ...]}
 
 for xi, ext1 in enumerate(external_nodes):
+    dsts = []
     for xj, ext2 in enumerate(external_nodes):
         if xi == xj:
             continue
@@ -314,15 +315,18 @@ for xi, ext1 in enumerate(external_nodes):
             continue
         node_seq, total_dur, ann_durs, snaps = result
 
-        # Does route pass through any boundary node?
-        hits_core = any(nid in boundary_node_ids for nid in node_seq)
-        if hits_core:
-            allowed_through_pairs.append([ext1["id"], ext2["id"]])
+        if any(nid in boundary_node_ids for nid in node_seq):
+            dsts.append(ext2["id"])
+
+    if dsts:
+        allowed_through_pairs[ext1["id"]] = dsts
 
     if (xi + 1) % 10 == 0:
-        print(f"  {xi+1}/{n_ext} external nodes  ({len(allowed_through_pairs)} through pairs so far)")
+        n_pairs = sum(len(v) for v in allowed_through_pairs.values())
+        print(f"  {xi+1}/{n_ext} external nodes  ({n_pairs} through pairs so far)")
 
-print(f"  {len(allowed_through_pairs)} allowed through-route pairs")
+n_through = sum(len(v) for v in allowed_through_pairs.values())
+print(f"  {n_through} allowed through-route pairs ({len(allowed_through_pairs)} sources)")
 
 # ── Write output ────────────────────────────────────────────────────────────────
 
@@ -333,7 +337,7 @@ output = {
     "ext_boundary_links":     ext_boundary_links,
     "bnd_external_links":     bnd_external_links,
     "boundary_boundary_links": boundary_boundary_links,
-    "allowed_through_pairs":  allowed_through_pairs,
+    "allowed_through_pairs":  {str(k): v for k, v in allowed_through_pairs.items()},
     "boundary_node_ids":      sorted(boundary_node_ids),
 }
 
