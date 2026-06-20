@@ -830,6 +830,27 @@ for node_id, (nlat, nlon, dist, deg) in interior_nodes_map.items():
     ).add_to(interior_fg)
 interior_fg.add_to(m)
 
+# 5d-pre. Core area DZ boundaries — actual DZs in the core polygon from census_zones.json,
+# not the old 3km-clipped set.  Useful for seeing exactly which DZs were pulled into core.
+if _census_zones is not None:
+    from shapely.geometry import Polygon as _CorePoly
+    _core_poly_wgs_map = _CorePoly(_census_zones["core_polygon"])
+    _dz_all_wgs = gpd.read_file(DZ_BOUNDARY_FILE).to_crs("EPSG:4326")
+    _dz_core_map = _dz_all_wgs[_dz_all_wgs.geometry.intersects(_core_poly_wgs_map)].copy()
+    core_dz_fg = folium.FeatureGroup(
+        name=f"Core area DZs — from census_zones.json ({len(_dz_core_map)})", show=False)
+    for _, _row in _dz_core_map.iterrows():
+        folium.GeoJson(
+            _row.geometry.__geo_interface__,
+            style_function=lambda f: {
+                "fillColor": "#ff6600", "color": "#cc4400",
+                "weight": 2, "fillOpacity": 0.12,
+            },
+            tooltip=folium.Tooltip(
+                f"<b>{_row.get('DZ2021_nm','')}</b><br>{_row.get('DZ2021_cd','')}"),
+        ).add_to(core_dz_fg)
+    core_dz_fg.add_to(m)
+
 # 5d. DZ choropleth (estimated population in clipped area)
 # Convert clipped DZs back to WGS84 for Leaflet rendering
 dz_plot = dz_final.to_crs("EPSG:4326")
