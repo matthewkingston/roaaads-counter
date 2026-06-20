@@ -273,23 +273,24 @@ for b1 in boundary_nodes:
         if len(node_seq) < 2:
             continue
 
-        # Check if first node after B1 is outside the internal network
-        first_next = node_seq[1]
-        if first_next in internal_node_ids:
-            # Route goes through the core — no external shortcut needed
+        # Only keep if the route exits core first (first node after B1 is external)
+        if node_seq[1] in internal_node_ids:
             continue
 
-        # Route exits core first — find the first boundary node hit (may not be B2)
+        # Symmetric with X→B: keep only if B2 is the first boundary node hit.
+        # If an intermediate B_mid is hit first, discard — B1→B_mid will be
+        # found and kept when querying the (B1, B_mid) pair directly.
         first_b_idx = _first_boundary_in_sequence(node_seq, boundary_node_ids)
         if first_b_idx is None:
             continue
 
-        b_mid_nid = node_seq[first_b_idx]
-        seg_dur = _duration_up_to_index(ann_durs, first_b_idx)
+        if node_seq[first_b_idx] != b2["id"]:
+            continue
 
+        seg_dur = _duration_up_to_index(ann_durs, first_b_idx)
         boundary_boundary_links.append({
             "from":       b1["id"],
-            "to":         b_mid_nid,
+            "to":         b2["id"],
             "duration_s": round(seg_dur, 2),
         })
 
