@@ -66,11 +66,14 @@ print(f"  {n_road} road nodes  {G.number_of_edges()} edges")
 # the consolidated graph uses renumbered IDs, so we need this to add external edges.
 _osm_to_cons = {}
 for _cid, _cdata in G.nodes(data=True):
-    _osmids = _cdata.get("osmid", _cid)
-    if not isinstance(_osmids, list):
-        _osmids = [_osmids]
-    for _oid in _osmids:
-        _osm_to_cons[int(_oid)] = _cid
+    _osmids = _cdata.get("osmid_original")
+    if _osmids is None:
+        continue
+    if isinstance(_osmids, list):
+        for _oid in _osmids:
+            _osm_to_cons[int(_oid)] = _cid
+    else:
+        _osm_to_cons[int(_osmids)] = _cid
 
 # ── Load external links ────────────────────────────────────────────────────────
 
