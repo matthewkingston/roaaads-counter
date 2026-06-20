@@ -217,6 +217,12 @@ for row_i, col_i, cost_i in zip(rows, cols, data_road):
     if edge_cost[row_i, col_i] == 0.0 or cost_i < edge_cost[row_i, col_i]:
         edge_cost[row_i, col_i] = float(cost_i)
 
+# External edges also need costs in edge_cost so probit path tracing
+# accumulates the correct duration for boundary→external legs.
+for (ei, ej), d in _ext_edge_min.items():
+    if edge_cost[ei, ej] == 0.0:
+        edge_cost[ei, ej] = float(d)
+
 # ── k=1 all-pairs Dijkstra ─────────────────────────────────────────────────────
 
 print("Running k=1 Dijkstra …")
