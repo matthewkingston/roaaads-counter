@@ -1117,10 +1117,10 @@ print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 
 tuned = {
     "kernel":    "rational",
-    "K":         round(K, 6),      # K_res + K_biz + K_sch (backward compat)
-    "K_res":     round(K_res, 6),
-    "K_biz":     round(K_biz, 6),
-    "K_sch":     round(K_sch, 6),
+    "K":         float(K),         # K_res + K_biz + K_sch (backward compat); full precision
+    "K_res":     float(K_res),     # K spans many orders of magnitude — round(x,6) zeroes sub-µ values
+    "K_biz":     float(K_biz),
+    "K_sch":     float(K_sch),
     "W_BIZ":     round(W_BIZ, 6),
     "P":         round(P, 4),
     "ALPHA":     round(ALPHA, 6),
@@ -1194,10 +1194,10 @@ except Exception as _e:
 
 params = {
     "kernel":    "rational",
-    "K":         round(K, 6),
-    "K_res":     round(K_res, 6),
-    "K_biz":     round(K_biz, 6),
-    "K_sch":     round(K_sch, 6),
+    "K":         float(K),
+    "K_res":     float(K_res),
+    "K_biz":     float(K_biz),
+    "K_sch":     float(K_sch),
     "W_BIZ":     round(W_BIZ, 6),
     "P":         round(P, 4),
     "ALPHA":     round(ALPHA, 6),
