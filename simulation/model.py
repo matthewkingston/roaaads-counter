@@ -16,7 +16,7 @@ import numpy as np
 # The tuner and compute_chi2() use per-hour observations from OFFICIAL_HOURLY instead.
 
 COUNT_SITES = [
-    {"label": "site 507, A21 Bangor Road",     "node": None, "links": [(538692601,549139252),(549139252,538692601)], "observed": 21_202},
+    {"label": "site 507, A21 Bangor Road",     "node": None, "links": [(538692601,550205936),(550205936,538692601)], "observed": 21_202},
     {"label": "site 508, A48 Donaghadee Road", "node": 136173611, "links": None, "observed": 10_792},
     {"label": "site 444, A20 Portaferry Road", "node": 449111329, "links": None, "observed":  7_282},
 ]
