@@ -99,43 +99,70 @@ INJECTION = textwrap.dedent(f"""\
 """)
 
 # ── Find injection point ───────────────────────────────────────────────────────
-# We want to inject after all maxspeed capping and after forward_rate is first
-# computed.  Look for the LAST occurrence of "result.forward_rate" in the file
-# (this is where the rate is set from speed, post-capping), and insert
-# immediately after that line.
+# We want to inject at the end of the way-processing function, after all speed
+# and rate computation is done.  Strategy (tried in order):
+#
+# 1. After WayHandlers.run() inside process_way: modern profiles delegate all
+#    speed/maxspeed/rate work to lib/way_handlers.lua via this call, so
+#    injecting after it is always safe.
+# 2. After the last result.forward_rate assignment inside process_way/
+#    way_function: for profiles that set the rate inline.
+# 3. Last resort: just before the final 'return' in the file.
 
 lines = base_lua.splitlines(keepends=True)
-last_rate_idx = None
+inject_idx = None
+strategy   = None
+
+# Strategy 1: WayHandlers.run() inside process_way
+in_way_fn = False
 for i, line in enumerate(lines):
-    if "result.forward_rate" in line and "=" in line:
-        last_rate_idx = i
+    stripped = line.strip()
+    if "function process_way" in stripped or "function way_function" in stripped:
+        in_way_fn = True
+    if in_way_fn and "WayHandlers.run(" in stripped:
+        inject_idx = i
+        strategy = "after-WayHandlers.run"
+        # don't break — keep scanning so we use the LAST occurrence if needed
 
-if last_rate_idx is None:
-    print("WARNING: could not find 'result.forward_rate' in car.lua.")
-    print("         Attempting to inject before the last 'return' instead.")
-    # Fallback: find the last return statement
+if inject_idx is None:
+    # Strategy 2: last result.forward_rate inside a function body
+    in_way_fn = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if "function process_way" in stripped or "function way_function" in stripped:
+            in_way_fn = True
+        if not in_way_fn:
+            continue
+        if stripped.startswith("end") and stripped in ("end", "end\n"):
+            in_way_fn = False   # exited function — reset
+        if "result.forward_rate" in line and "=" in line:
+            inject_idx = i
+            strategy = "after-forward_rate-in-function"
+
+if inject_idx is None:
+    # Strategy 3: just before the last return
+    print("WARNING: could not find a safe injection point inside way function.")
+    print("         Falling back to just before the last 'return'.")
     for i in range(len(lines) - 1, -1, -1):
-        stripped = lines[i].strip()
-        if stripped.startswith("return"):
-            last_rate_idx = i - 1
+        if lines[i].strip().startswith("return"):
+            inject_idx = i - 1
+            strategy = "before-last-return"
             break
-    if last_rate_idx is None:
-        print("ERROR: No suitable injection point found in car.lua.")
-        print("       Please inspect the file manually.")
-        sys.exit(1)
-    strategy = "before-return"
-else:
-    strategy = "after-forward_rate"
 
-print(f"  Injection strategy: {strategy} (after line {last_rate_idx + 1}: "
-      f"{lines[last_rate_idx].rstrip()!r})")
+if inject_idx is None:
+    print("ERROR: No suitable injection point found in car.lua.")
+    print("       Please inspect the file manually.")
+    sys.exit(1)
+
+print(f"  Injection strategy: {strategy} (after line {inject_idx + 1}: "
+      f"{lines[inject_idx].rstrip()!r})")
 
 # ── Inject and write ───────────────────────────────────────────────────────────
 
 patched_lines = (
-    lines[:last_rate_idx + 1]
+    lines[:inject_idx + 1]
     + [INJECTION]
-    + lines[last_rate_idx + 1:]
+    + lines[inject_idx + 1:]
 )
 patched_lua = "".join(patched_lines)
 
@@ -172,8 +199,8 @@ print()
 
 # ── Show the injected block in context ────────────────────────────────────────
 
-ctx_start = max(0, last_rate_idx - 2)
-ctx_end   = min(len(patched_lines), last_rate_idx + len(INJECTION.splitlines()) + 6)
+ctx_start = max(0, inject_idx - 2)
+ctx_end   = min(len(patched_lines), inject_idx + len(INJECTION.splitlines()) + 6)
 print("─" * 70)
 print("Injected block in context (inspect before re-processing OSRM):")
 print("─" * 70)
