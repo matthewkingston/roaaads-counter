@@ -190,6 +190,26 @@ chi²/N includes coupling penalty terms; pure data-fit chi²/N is lower.
 
 `build_assignment.py` uses the two-component `compute_chi2()` when K_res/K_biz are present in tuned_params.json. This gives a **data-only** chi²/N (pure sum of squared z-scores) — it excludes the f-prior penalties `(f_r−mfr)²/std_f²` and the aggregate coupling penalty that the tuner includes in its chi²/N. Expect the build_assignment chi²/N to be somewhat lower than the tuner's; the two are directionally comparable but not numerically equal. The legacy Woodbury path is used only for old single-K param files.
 
+**Reading "modelled flow" across reports.** The three reporting surfaces print *different
+projections* of the same tuned model — they are not directly comparable line-for-line:
+- `build_assignment.py` "Official count sites" block and the `"flows"` values in
+  `newtownards_flows.json` → **directed daily AADT** = `K_res·flow_res + K_biz·flow_biz + K_sch·flow_school`.
+  This is the canonical modelled link flow. Node-based sites (508/444) sum every directed link at the node.
+- `newtownards_map.html` combined layer → the same AADT but **summed over both directions** of each
+  edge (`flow(u,v)+flow(v,u)`), i.e. a two-way total (~2× a single directed link).
+- The tuner / `report_tune.py` fit table → **per-observation, count-space**: official rows are
+  *vehicles/hour* in one (day_type, hour) slot (≈ AADT × hourly fraction), walking rows are
+  reconstructed to combined AADT. Correct for goodness-of-fit; not a table of link AADTs.
+- Walking "Model" column convention (display only, chi²/N unaffected): both `compute_chi2()`
+  (`model.py`) and the tuner fit table show **combined directed AADT** for walking links. (Fixed
+  2026-06-21: `model.py` previously divided `pred` by `f_eff` only, omitting the `Th` session-duration
+  factor, so it showed AADT×Th; the tuner used a K-weighted reconstruction. Both now use `m_r+m_b+m_s`.)
+- Fit-table street names come from the consolidated GraphML edge `name` attribute. `tune_assignment.py`
+  resolves the GraphML data-key id dynamically from the `<key>` header (fixed 2026-06-21: it had
+  hardcoded `d14`, which is unstable across network regenerations and had become `oneway`).
+  `report_tune.py` echoes the labels the tuner stored in history, so names appear only after a fresh
+  tune run regenerates `tuning_history.jsonl`.
+
 ---
 
 ## Count Data

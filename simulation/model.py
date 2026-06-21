@@ -320,7 +320,7 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 if f_eff > 0 and Th > 0:
                     obs_disp = neff / (Th * f_eff)
                     sig_disp = math.sqrt(neff) / (Th * f_eff)
-                    mod_disp = pred / f_eff
+                    mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b)
                 else:
                     obs_disp = sig_disp = mod_disp = 0.0
                 rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))
@@ -407,7 +407,7 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
                 if f_eff > 0 and Th > 0:
                     obs_disp = neff / (Th * f_eff)
                     sig_disp = math.sqrt(neff) / (Th * f_eff)
-                    mod_disp = pred / f_eff
+                    mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b + m_s)
                 else:
                     obs_disp = sig_disp = mod_disp = 0.0
                 rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))

@@ -190,13 +190,24 @@ if os.path.exists(CONS_GRAPH):
         _root = _tree.getroot()
         _nsmap = {"g": _root.tag.split("}")[0].lstrip("{")} if "}" in _root.tag else {"g": ""}
         _pfx = "{" + _nsmap["g"] + "}" if _nsmap["g"] else ""
-        for _edge in _root.iter(f"{_pfx}edge"):
-            _u = int(_edge.get("source"))
-            _v = int(_edge.get("target"))
-            for _data in _edge:
-                if _data.get("key") == "d14" and _data.text:
-                    link_name[(_u, _v)] = _data.text
-                    break
+        # Resolve the data-key id for the edge "name" attribute.  GraphML dN key
+        # ids are assigned in attribute-appearance order and are NOT stable across
+        # network regenerations, so look the id up from the <key> header rather
+        # than hardcoding it (a hardcoded "d14" silently became "oneway").
+        _name_key = next(
+            (_k.get("id") for _k in _root.iter(f"{_pfx}key")
+             if _k.get("for") == "edge" and _k.get("attr.name") == "name"),
+            None)
+        if _name_key is None:
+            print("Warning: no edge 'name' attribute in GraphML — labels omit street names")
+        else:
+            for _edge in _root.iter(f"{_pfx}edge"):
+                _u = int(_edge.get("source"))
+                _v = int(_edge.get("target"))
+                for _data in _edge:
+                    if _data.get("key") == _name_key and _data.text:
+                        link_name[(_u, _v)] = _data.text
+                        break
     except Exception as _e:
         print(f"Warning: could not load street names ({_e})")
 
@@ -1034,10 +1045,9 @@ for i, (kind, target, links, _obs, _sig, Ts) in enumerate(observations):
             raw_wtd = m_r_i * f_r + m_b_i * f_b + m_s_i * f_s
             denom   = m_r_i + m_b_i + m_s_i
             f_eff   = raw_wtd / denom if denom > 0 else (f_r + f_b + f_s) / 3
-            K_hour  = K_res * m_r_i * f_r + K_biz * m_b_i * f_b + K_sch * m_s_i * f_s
             obs_eff[i] = n_eff_i / (Th * f_eff)
             sig_eff[i] = math.sqrt(n_eff_i) / (Th * f_eff)
-            mod_eff[i] = K_hour / f_eff if f_eff > 0 else 0.0
+            mod_eff[i] = K_res * m_r_i + K_biz * m_b_i + K_sch * m_s_i   # combined AADT
         else:
             obs_eff[i] = n_eff_i / max(Th, 1e-9)
             sig_eff[i] = math.sqrt(n_eff_i) / max(Th, 1e-9)
