@@ -145,6 +145,29 @@ with open(OUTPUT_LUA, "w") as f:
 
 out_abs = os.path.abspath(OUTPUT_LUA)
 print(f"\nWrote {out_abs}  ({len(patched_lines)} lines)")
+
+# ── Copy lib/ from Docker alongside the profile ───────────────────────────────
+# car.lua uses require("lib/...") — the lib/ directory must sit next to the
+# profile file when osrm-extract runs.
+
+lib_src = os.path.dirname(found_path) + "/lib"   # e.g. /opt/lib
+lib_dst = os.path.join(os.path.abspath(OSRM_DATA_DIR), "lib")
+print(f"\nCopying {lib_src} → {lib_dst} …")
+copy_result = subprocess.run(
+    ["docker", "run", "--rm",
+     "-v", f"{os.path.abspath(OSRM_DATA_DIR)}:/data",
+     OSRM_IMAGE,
+     "sh", "-c", f"cp -r {lib_src} /data/lib"],
+    capture_output=True, text=True,
+)
+if copy_result.returncode == 0:
+    print("  lib/ copied.")
+else:
+    print(f"  WARNING: could not copy lib/ automatically "
+          f"(rc={copy_result.returncode}).")
+    print(f"  Run manually before osrm-extract:")
+    print(f"    docker run --rm -v \"$(pwd):/data\" {OSRM_IMAGE} "
+          f"sh -c \"cp -r {lib_src} /data/lib\"")
 print()
 
 # ── Show the injected block in context ────────────────────────────────────────
