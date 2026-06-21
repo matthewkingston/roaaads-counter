@@ -854,10 +854,15 @@ def objective(log_params, log_ref=None):
     # Gaussian chi-squared for official hourly obs (_gauss_w_arr zeroes walking obs).
     _resid    = _pred - obs_rhs_arr
     chi2_data = float((_gauss_w_arr * _resid) @ _resid)
-    # Poisson deviance 2*(pred - n*log(pred)) for slotted walking obs.
-    _pred_w = np.maximum(_pred[_walk_slotted], 1e-30)
-    _pois_dev = 2.0 * (_pred_w - np.where(_walk_sl_n > 0,
-                                           _walk_sl_n * np.log(_pred_w), 0.0))
+    # Poisson deviance 2*(n*log(n/pred) + pred - n) for slotted walking obs.
+    # Always ≥ 0; minimum 0 at pred=n.  The "raw" form 2*(pred-n*log(pred)) omits
+    # the saturated term 2*(n*log(n)-n) and goes negative for n > e ≈ 2.718.
+    _pred_w   = np.maximum(_pred[_walk_slotted], 1e-30)
+    _pos_n    = np.maximum(_walk_sl_n, 1e-300)
+    _pois_dev = 2.0 * np.where(
+        _walk_sl_n > 0,
+        _walk_sl_n * np.log(_pos_n / _pred_w) + (_pred_w - _walk_sl_n),
+        _pred_w)
     chi2 = chi2_data + float(_pois_dev.sum()) + chi2_pen
 
     if np.any(log_grav_lam > 0):
@@ -1004,8 +1009,11 @@ _pred = (K_res * m_res * obs_Th * _obs_f_r
 _resid    = _pred - obs_rhs_arr
 chi2_data = float((_gauss_w_arr * _resid) @ _resid)
 _pred_w   = np.maximum(_pred[_walk_slotted], 1e-30)
-_pois_dev = 2.0 * (_pred_w - np.where(_walk_sl_n > 0,
-                                       _walk_sl_n * np.log(_pred_w), 0.0))
+_pos_n    = np.maximum(_walk_sl_n, 1e-300)
+_pois_dev = 2.0 * np.where(
+    _walk_sl_n > 0,
+    _walk_sl_n * np.log(_pos_n / _pred_w) + (_pred_w - _walk_sl_n),
+    _pred_w)
 chi2 = chi2_data + float(_pois_dev.sum()) + chi2_pen
 chi2_per_n = chi2 / n_obs
 

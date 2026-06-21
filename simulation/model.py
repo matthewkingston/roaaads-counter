@@ -310,7 +310,7 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 n_actual  = neff - 0.5
                 pred_safe = max(pred, 1e-30)
                 if n_actual > 0:
-                    chi2 += 2.0 * (pred_safe - n_actual * math.log(pred_safe))
+                    chi2 += 2.0 * (pred_safe - n_actual + n_actual * math.log(n_actual / pred_safe))
                 else:
                     chi2 += 2.0 * pred_safe
                 n_slots_seen.add(sk)
@@ -398,7 +398,7 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
                 n_actual  = neff - 0.5
                 pred_safe = max(pred, 1e-30)
                 if n_actual > 0:
-                    chi2 += 2.0 * (pred_safe - n_actual * math.log(pred_safe))
+                    chi2 += 2.0 * (pred_safe - n_actual + n_actual * math.log(n_actual / pred_safe))
                 else:
                     chi2 += 2.0 * pred_safe
                 n_slots_seen.add(sk)
