@@ -22,8 +22,8 @@ Run this once after any change to:
   - N_PASSES or PROBIT_CV
 """
 
-import array as _array_mod
 import json, math, time, os
+from multiprocessing import Pool
 import numpy as np
 import osmnx as ox
 import pyproj
@@ -40,6 +40,125 @@ PATHS_CACHE       = "simulation/newtownards_paths.npz"
 N_PASSES          = 25       # stochastic Dijkstra passes for probit loading
 PROBIT_CV         = 0.25     # log-normal noise CV applied to road edge costs
 RANDOM_SEED       = 42
+MAX_HOPS          = 120      # path-trace hop limit per OD pair per pass
+N_WORKERS         = 1        # parallel worker processes (increase if RAM allows)
+
+# ── Module-level globals shared with worker processes (fork-inherited) ─────────
+# Set in main body before Pool creation; workers read them as copy-on-write.
+_g_all_data_arr = None
+_g_all_rows_arr = None
+_g_all_cols_arr = None
+_g_n            = None
+_g_PROBIT_CV    = None
+_g_N_PASSES     = None
+_g_src_groups   = None   # {src_i: {'pks': list, 'pks_np': np.int32, 'dsts': list}}
+_g_edge_to_link = None
+_g_edge_cost    = None
+_g_od_k1_flat   = None
+_g_od_k1_off    = None
+_g_od_k1_dist   = None
+_g_n_pairs      = None
+_g_N_links      = None
+
+
+def _run_pass(args):
+    """Worker: one stochastic probit pass. Reads module globals (fork-inherited)."""
+    pass_idx, seed = args
+    t_pass = time.time()
+
+    rng    = np.random.default_rng(seed)
+    eps    = rng.normal(0.0, _g_PROBIT_CV, size=len(_g_all_data_arr))
+    data_p = _g_all_data_arr * np.exp(eps)
+    adj_p  = csr_matrix((data_p, (_g_all_rows_arr, _g_all_cols_arr)), shape=(_g_n, _g_n))
+    _, pred_p = dijkstra(adj_p, directed=True, return_predecessors=True)
+    del data_p, adj_p
+
+    dist_accum_pass   = np.zeros(_g_n_pairs, dtype=np.float64)
+    n_fallbacks_pass  = 0
+    n_hop_limit_pass  = 0
+    pass_pairs_chunks = []
+    pass_links_chunks = []
+
+    for src_i, grp in _g_src_groups.items():
+        pair_ks    = grp['pks']
+        pair_ks_np = grp['pks_np']   # int32 numpy array, same values as pair_ks
+        dsts       = grp['dsts']
+        n_s        = len(pair_ks)
+
+        cur    = np.array(dsts, dtype=np.int32)
+        done   = np.zeros(n_s, dtype=bool)
+        fallbk = np.zeros(n_s, dtype=bool)
+        pc     = np.zeros(n_s, dtype=np.float64)
+
+        for _ in range(MAX_HOPS):
+            at_src = ~done & (cur == src_i)
+            done  |= at_src
+            if done.all():
+                break
+
+            active = ~done
+            prev   = pred_p[src_i, cur]
+
+            dead    = active & (prev < 0)
+            fallbk |= dead
+            done   |= dead
+
+            active_ok = active & ~dead
+            if not active_ok.any():
+                break
+
+            aok      = np.where(active_ok)[0]
+            prev_aok = prev[aok]
+            cur_aok  = cur[aok]
+            li_aok   = _g_edge_to_link[prev_aok, cur_aok]
+            cost_aok = _g_edge_cost[prev_aok, cur_aok]
+
+            # Vectorised cost accumulation
+            np.add.at(pc, aok, cost_aok.astype(np.float64))
+
+            # Vectorised road-link hit collection
+            road_mask = li_aok >= 0
+            if road_mask.any():
+                valid_aok = aok[road_mask]
+                pass_pairs_chunks.append(pair_ks_np[valid_aok])
+                pass_links_chunks.append(li_aok[road_mask])
+
+            cur[active_ok] = prev[active_ok]
+        else:
+            # for-loop exhausted all MAX_HOPS without done.all() — limit reached
+            n_hop_limit_pass += 1
+
+        # Vectorised distance accumulation for non-fallback pairs
+        non_fb = ~fallbk
+        if non_fb.any():
+            np.add.at(dist_accum_pass, pair_ks_np[non_fb], pc[non_fb])
+
+        # Fallback: substitute k=1 path for pairs that lost their predecessor
+        fb_indices = np.where(fallbk)[0]
+        for m in fb_indices:
+            pk = int(pair_ks_np[m])
+            n_fallbacks_pass += 1
+            dist_accum_pass[pk] += _g_od_k1_dist[pk]
+            _s, _e = int(_g_od_k1_off[pk]), int(_g_od_k1_off[pk + 1])
+            if _e > _s:
+                pass_pairs_chunks.append(np.full(_e - _s, pk, dtype=np.int32))
+                pass_links_chunks.append(_g_od_k1_flat[_s:_e])
+
+    del pred_p
+
+    if pass_pairs_chunks:
+        pp = np.concatenate(pass_pairs_chunks)
+        pl = np.concatenate(pass_links_chunks)
+    else:
+        pp = np.empty(0, dtype=np.int32)
+        pl = np.empty(0, dtype=np.int32)
+
+    elapsed = time.time() - t_pass
+    suffix  = f", {n_hop_limit_pass} hop-limit hit" if n_hop_limit_pass else ""
+    print(f"  Pass {pass_idx + 1}/{_g_N_PASSES} done in {elapsed:.1f}s"
+          f"  ({n_fallbacks_pass:,} fallbacks{suffix})", flush=True)
+    return pp, pl, dist_accum_pass, n_fallbacks_pass
+
 
 # ── Load graph ────────────────────────────────────────────────────────────────
 
@@ -75,12 +194,12 @@ print("Loading external links …")
 with open(EXTERNAL_LINKS) as f:
     ext_data = json.load(f)
 
-ext_boundary_links     = ext_data["ext_boundary_links"]      # X→B
-bnd_external_links     = ext_data["bnd_external_links"]      # B→X
-boundary_boundary_links = ext_data["boundary_boundary_links"] # B1→B2 exterior
-allowed_through_pairs  = {k: set(v) for k, v in ext_data["allowed_through_pairs"].items()}
+ext_boundary_links      = ext_data["ext_boundary_links"]
+bnd_external_links      = ext_data["bnd_external_links"]
+boundary_boundary_links = ext_data["boundary_boundary_links"]
+allowed_through_pairs   = {k: set(v) for k, v in ext_data["allowed_through_pairs"].items()}
 _EMPTY_SET = frozenset()
-boundary_node_ids      = set(ext_data["boundary_node_ids"])
+boundary_node_ids = set(ext_data["boundary_node_ids"])
 
 print(f"  {len(ext_boundary_links)} X→B links")
 print(f"  {len(bnd_external_links)} B→X links")
@@ -143,12 +262,8 @@ N_links = len(link_list)
 print(f"  {N_links} road links")
 
 # External edges (X→B, B→X, boundary→boundary exterior shortcuts)
-# These are NOT added to link_list (they don't appear in flow output),
-# but ARE included in the adjacency matrix for routing.
-# Deduplicate by (i, j) keeping minimum duration: if two OSM boundary nodes
-# B1 and B2 were consolidated into the same node C, both X→B1 and X→B2
-# translate to X→C, and csr_matrix would otherwise sum their durations.
-_ext_edge_min = {}   # (i, j) → min duration_s
+# Deduplicate by (i, j) keeping minimum duration.
+_ext_edge_min = {}
 
 for lnk in ext_boundary_links:
     xi = node_to_idx.get(lnk["from_ext"])
@@ -274,8 +389,7 @@ for src_i, src_nid in enumerate(all_node_ids):
 n_pairs = len(od_src_list)
 print(f"  {n_pairs:,} OD pairs  in {time.time()-t0:.1f}s")
 
-# Compact od_k1_links (Python list-of-lists, ~700 MB for 1M pairs) into a flat
-# numpy int32 ragged array (~80 MB) before memory-intensive pass phase.
+# Compact od_k1_links into a flat numpy int32 ragged array.
 _k1_lengths = np.array([len(p) for p in od_k1_links], dtype=np.int32)
 od_k1_off   = np.zeros(n_pairs + 1, dtype=np.int32)
 np.cumsum(_k1_lengths, out=od_k1_off[1:])
@@ -295,115 +409,68 @@ for k, (si, di) in enumerate(zip(od_src_list, od_dst_list)):
     src_groups[si]['pks'].append(k)
     src_groups[si]['dsts'].append(di)
 
-# ── Stochastic probit passes ───────────────────────────────────────────────────
-# All edges (road and external) perturbed with log-normal noise each pass.
-# External edges carry noise too so boundary node selection varies stochastically
-# for external→internal OD pairs with similarly-weighted entry options.
+# Pre-compute numpy int32 pair-index arrays for vectorised path tracing.
+for grp in src_groups.values():
+    grp['pks_np'] = np.array(grp['pks'], dtype=np.int32)
 
-print(f"\nRunning {N_PASSES} stochastic probit passes (CV={PROBIT_CV}, seed={RANDOM_SEED}) …")
-t0  = time.time()
-rng = np.random.default_rng(seed=RANDOM_SEED)
+# ── Set worker globals ─────────────────────────────────────────────────────────
+# These must be set before Pool creation so fork-spawned workers inherit them
+# via copy-on-write — no large-array pickling required.
 
-all_data_arr = np.array(all_data, dtype=np.float64)
-all_rows_arr = np.array(all_rows, dtype=np.int32)
-all_cols_arr = np.array(all_cols, dtype=np.int32)
+_g_all_data_arr = np.array(all_data, dtype=np.float64)
+_g_all_rows_arr = np.array(all_rows, dtype=np.int32)
+_g_all_cols_arr = np.array(all_cols, dtype=np.int32)
+_g_n            = n
+_g_PROBIT_CV    = PROBIT_CV
+_g_N_PASSES     = N_PASSES
+_g_src_groups   = src_groups
+_g_edge_to_link = edge_to_link
+_g_edge_cost    = edge_cost
+_g_od_k1_flat   = od_k1_flat
+_g_od_k1_off    = od_k1_off
+_g_od_k1_dist   = np.array(od_k1_dist, dtype=np.float64)
+_g_n_pairs      = n_pairs
+_g_N_links      = N_links
 
-# Use a running scipy CSR matrix instead of a Python dict to accumulate hits.
-# Python dict with ~20M entries costs ~2.4 GB; CSR costs ~160 MB.
-hit_sparse  = csr_matrix((n_pairs, N_links), dtype=np.float32)
-dist_accum  = np.zeros(n_pairs, dtype=np.float64)
-n_fallbacks = 0
+# ── Stochastic probit passes (parallel) ───────────────────────────────────────
 
-for pass_idx in range(N_PASSES):
-    t_pass = time.time()
+n_workers = min(N_WORKERS, N_PASSES)
+print(f"\nRunning {N_PASSES} stochastic probit passes "
+      f"(CV={PROBIT_CV}, seed={RANDOM_SEED}, workers={n_workers}) …")
+t0    = time.time()
+rng   = np.random.default_rng(seed=RANDOM_SEED)
+seeds = rng.integers(0, 2**31, size=N_PASSES)
+tasks = list(zip(range(N_PASSES), seeds.tolist()))
 
-    eps    = rng.normal(0.0, PROBIT_CV, size=len(all_data_arr))
-    data_p = all_data_arr * np.exp(eps)
-    adj_p  = csr_matrix((data_p, (all_rows_arr, all_cols_arr)), shape=(n, n))
-    _, pred_p = dijkstra(adj_p, directed=True, return_predecessors=True)
-    del data_p, adj_p
+with Pool(processes=n_workers) as pool:
+    results = pool.map(_run_pass, tasks)
 
-    # Per-pass hit buffers: array.array stores C ints (4 bytes each) vs
-    # Python list-of-ints (~28 bytes each), keeping peak memory low.
-    pass_pairs = _array_mod.array('i')
-    pass_links = _array_mod.array('i')
-
-    for src_i, grp in src_groups.items():
-        pair_ks = grp['pks']
-        dsts    = grp['dsts']
-        n_s     = len(pair_ks)
-
-        cur    = np.array(dsts, dtype=np.int32)
-        done   = np.zeros(n_s, dtype=bool)
-        fallbk = np.zeros(n_s, dtype=bool)
-        pc     = np.zeros(n_s, dtype=np.float64)
-
-        for _ in range(400):   # extra headroom for longer external paths
-            at_src = ~done & (cur == src_i)
-            done  |= at_src
-            if done.all():
-                break
-
-            active = ~done
-            prev   = pred_p[src_i, cur]
-
-            dead    = active & (prev < 0)
-            fallbk |= dead
-            done   |= dead
-
-            active_ok = active & ~dead
-            if not active_ok.any():
-                break
-
-            aok      = np.where(active_ok)[0]
-            prev_aok = prev[aok]
-            cur_aok  = cur[aok]
-            li_aok   = edge_to_link[prev_aok, cur_aok]
-            cost_aok = edge_cost[prev_aok, cur_aok]
-
-            for j in range(len(aok)):
-                m  = aok[j]
-                li = int(li_aok[j])
-                pc[m] += float(cost_aok[j])
-                if li >= 0:
-                    pass_pairs.append(pair_ks[m])
-                    pass_links.append(li)
-
-            cur[active_ok] = prev[active_ok]
-
-        for m in range(n_s):
-            pk = pair_ks[m]
-            if fallbk[m]:
-                n_fallbacks += 1
-                dist_accum[pk] += od_k1_dist[pk]
-                _s, _e = od_k1_off[pk], od_k1_off[pk + 1]
-                for li in od_k1_flat[_s:_e]:
-                    pass_pairs.append(pk)
-                    pass_links.append(int(li))
-            else:
-                dist_accum[pk] += pc[m]
-
-    del pred_p
-
-    # Accumulate this pass's hits into the running sparse matrix.
-    _n_h = len(pass_pairs)
-    _m   = coo_matrix(
-        (np.ones(_n_h, dtype=np.float32),
-         (np.array(pass_pairs, dtype=np.int32),
-          np.array(pass_links,  dtype=np.int32))),
-        shape=(n_pairs, N_links),
-    ).tocsr()
-    hit_sparse = hit_sparse + _m
-    del pass_pairs, pass_links, _m
-
-    print(f"  Pass {pass_idx + 1}/{N_PASSES} done in {time.time() - t_pass:.1f}s")
-
+n_fallbacks = sum(r[3] for r in results)
 print(f"  All passes done in {time.time()-t0:.1f}s  ({n_fallbacks:,} pair-pass fallbacks)")
+
+# ── Accumulate results ─────────────────────────────────────────────────────────
+
+print("Accumulating pass results …")
+dist_accum = np.zeros(n_pairs, dtype=np.float64)
+for _, _, dist_pass, _ in results:
+    dist_accum += dist_pass
+
+all_pp = np.concatenate([r[0] for r in results])
+all_pl = np.concatenate([r[1] for r in results])
+del results
 
 # ── Build output arrays ────────────────────────────────────────────────────────
 
 print("Building output arrays …")
 od_dist_out = (dist_accum / N_PASSES).astype(np.float32)
+
+# Build hit count matrix from all passes in one shot (avoids 25 intermediate
+# sparse-matrix additions from the old serial approach).
+hit_sparse = coo_matrix(
+    (np.ones(len(all_pp), dtype=np.float32), (all_pp, all_pl)),
+    shape=(n_pairs, N_links),
+).tocsr()
+del all_pp, all_pl
 
 _coo         = hit_sparse.tocoo()
 pair_idx_arr = _coo.row.astype(np.int32)
