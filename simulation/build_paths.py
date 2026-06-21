@@ -30,6 +30,8 @@ import pyproj
 from scipy.sparse import csr_matrix, coo_matrix
 from scipy.sparse.csgraph import dijkstra
 
+from routing_config import HIGHWAY_COST_FACTOR
+
 CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
 WEIGHTS_FILE      = "simulation/node_weights.json"
 CENSUS_ZONES_FILE = "data/census_zones.json"
@@ -38,19 +40,6 @@ PATHS_CACHE       = "simulation/newtownards_paths.npz"
 N_PASSES          = 25       # stochastic Dijkstra passes for probit loading
 PROBIT_CV         = 0.25     # log-normal noise CV applied to road edge costs
 RANDOM_SEED       = 42
-
-HIGHWAY_COST_FACTOR = {
-    "trunk":         0.67,
-    "trunk_link":    0.67,
-    "primary":       0.67,
-    "primary_link":  0.67,
-    "secondary":     1.0,
-    "tertiary":      1.0,
-    "tertiary_link": 1.0,
-    "residential":   1.2,
-    "unclassified":  1.2,
-    "living_street": 1.2,
-}
 
 # ── Load graph ────────────────────────────────────────────────────────────────
 
