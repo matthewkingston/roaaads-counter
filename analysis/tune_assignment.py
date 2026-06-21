@@ -20,11 +20,8 @@ Both types are in count space, unified in _slot_data with per-obs weights and rh
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
-Stage 1 (--gravity, default): tune W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school (9 params).
-Stage 2 (--full): also tune city-level pop/wp and sub-1 dampings (31 params)
-  with L2 regularisation relative to simulation/tuner_config.json references.
-
-Node 180 (pop=50, wp=0) is excluded from stage 2 — too small to tune.
+Tunes W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school (9 params).
+External zone values are fixed from census data and are not tuned.
 
 Results:
   simulation/tuned_params.json   best params from this run (read by build_assignment.py)
@@ -33,10 +30,8 @@ Results:
 
 Usage:
   python3 analysis/tune_assignment.py
-  python3 analysis/tune_assignment.py --full
   python3 analysis/tune_assignment.py --note "added-june-counts"
   python3 analysis/tune_assignment.py --fast          # looser tolerances, ~2× faster
-  python3 analysis/tune_assignment.py --full --fast
 """
 
 import csv, json, math, os, secrets, subprocess, sys, time, xml.etree.ElementTree as ET
@@ -60,15 +55,12 @@ OFFICIAL_HOURLY   = "data/official_hourly.json"
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
-stage = "gravity"
 note  = None
 fast  = False
 argv  = sys.argv[1:]
 i = 0
 while i < len(argv):
-    if argv[i] == "--full":
-        stage = "full"
-    elif argv[i] == "--fast":
+    if argv[i] == "--fast":
         fast = True
     elif argv[i] == "--note" and i + 1 < len(argv):
         i += 1
@@ -84,7 +76,7 @@ try:
 except Exception:
     git_hash = "unknown"
 
-print(f"Run ID: {run_id}  stage: {stage}  git: {git_hash}" +
+print(f"Run ID: {run_id}  git: {git_hash}" +
       ("  FAST" if fast else "") +
       (f"  note: {note}" if note else ""))
 
@@ -180,7 +172,7 @@ node_pop_full    = {_pnid(k): v for k, v in wdata["node_population"].items()}
 node_biz_full    = {_pnid(k): v for k, v in wdata["node_business_demand"].items()}
 node_school_full = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
 
-# Precomputed base weight arrays (used in stage 1 and as fallback in stage 2)
+# Precomputed base weight arrays (from census + OSM demand; external zones fixed)
 base_w_pop    = np.array([node_pop_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_biz    = np.array([node_biz_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_school = np.array([node_school_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
@@ -570,14 +562,10 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
     # just before the matmul, restoring SGEMV speed. On extreme steps the
     # cast saturates to ±inf rather than NaN, giving large finite chi².
 
-    # A3: gravity stage weight products are constant (precomputed at startup).
-    if stage == "gravity":
-        pp_od, pb_od, bb_od = _pp_od_s1, _pb_od_s1, _bb_od_s1
-    else:
-        pp_od = w_pop[od_src] * w_pop[od_dst]
-        pb_od = (w_pop[od_src] * w_biz[od_dst]
-                 + w_biz[od_src] * w_pop[od_dst])
-        bb_od = w_biz[od_src] * w_biz[od_dst]
+    pp_od = w_pop[od_src] * w_pop[od_dst]
+    pb_od = (w_pop[od_src] * w_biz[od_dst]
+             + w_biz[od_src] * w_pop[od_dst])
+    bb_od = w_biz[od_src] * w_biz[od_dst]
 
     # A2: hoist biz_base above path loop (identical across all 3 paths).
     biz_base = W_BIZ * pb_od + W_BIZ**2 * bb_od
@@ -828,7 +816,6 @@ def objective(log_params, log_ref=None):
     else:
         W_SCHOOL = P_school = ALPHA_school = 1.0
 
-    # External node weights are fixed (census data) — no per-stage override needed.
     w_pop = base_w_pop
     w_biz = base_w_biz
 
@@ -931,22 +918,19 @@ if _has_school:
 
 log_ref = None
 
-# Both gravity and full stages tune only gravity params (external zones are fixed).
 if _has_stoch:
     _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]"
 elif _has_school:
     _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school]"
 else:
     _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
-_stage_label = "Full" if stage == "full" else "Gravity"
-print(f"{_stage_label} stage: {len(log_p0)} params{_grav_note}")
+print(f"Gravity: {len(log_p0)} params{_grav_note}")
 
 # ── Run optimization ──────────────────────────────────────────────────────────
 
-_tol = ({"gravity": 5e-5, "full": 5e-4} if fast
-        else {"gravity": 1e-5, "full": 1e-4})
+_tol = 5e-5 if fast else 1e-5
 print(f"\nRunning Powell's method (λ={lam}"
-      + (f"  fast: ftol/xtol={_tol[stage]:.0e}" if fast else "") + ") …")
+      + (f"  fast: ftol/xtol={_tol:.0e}" if fast else "") + ") …")
 print(f"  {'eval':>4s}  χ²/N(curr)  χ²/N(best)  elapsed")
 
 # Evaluate initial point
@@ -956,7 +940,7 @@ result = scipy.optimize.minimize(
     lambda p: objective(p, log_ref),
     log_p0,
     method="powell",
-    options={"maxiter": 5000, "ftol": _tol[stage], "xtol": _tol[stage]},
+    options={"maxiter": 5000, "ftol": _tol, "xtol": _tol},
 )
 
 # Use best params seen (Powell may backtrack at convergence)
@@ -1139,7 +1123,7 @@ tuned = {
     "n_obs":      n_obs,
     "n_slots":    n_slots,
     "n_eff":      n_eff,
-    "stage":      stage,
+    "stage":      "gravity",
 }
 
 with open(TUNED_PARAMS, "w") as f:
@@ -1176,7 +1160,7 @@ try:
     ax.set_ylabel("K_c · kernel(d; P_c, ALPHA_c, BETA)")
     ax.set_title(
         f"Gravity kernels (rational)  BETA={BETA:.3f}\n"
-        f"stage={stage}  χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
+        f"χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
     )
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -1217,7 +1201,7 @@ history_entry = {
     "id":        run_id,
     "git_hash":  git_hash,
     "timestamp": datetime.now(timezone.utc).isoformat(),
-    "stage":     stage,
+    "stage":     "gravity",
     "n_evals":   eval_count[0],
     "n_obs":     n_obs,
     "n_slots":   n_slots,
