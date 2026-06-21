@@ -128,7 +128,7 @@ if "--zones-only" in sys.argv:
         w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) * _ext_biz_scale
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = 0.0
-        print(f"  Node {nid:4d}  {ext['level']} {ext['code']}  "
+        print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
               f"biz={w['node_business_demand'][str(nid)]:>10,.1f}")
     with open(weights_path, "w") as f:
