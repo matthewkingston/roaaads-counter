@@ -11,7 +11,7 @@ Run from the repo root:
 Then re-preprocess OSRM (commands printed at end of script).
 """
 
-import subprocess, sys, os, textwrap
+import subprocess, sys, os
 
 OSRM_IMAGE     = "osrm/osrm-backend"
 OSRM_DATA_DIR  = os.path.join(os.path.dirname(__file__),
@@ -76,27 +76,27 @@ def _lua_table(factors: dict) -> str:
 
 lua_table = _lua_table(HIGHWAY_COST_FACTOR)
 
-INJECTION = textwrap.dedent(f"""\
-
-  -- === Road-class biasing (simulation/routing_config.py HIGHWAY_COST_FACTOR) ===
-  -- Applied after maxspeed capping; dividing forward_speed by a factor < 1
-  -- (trunk, primary) shortens the reported duration and lowers routing cost,
-  -- matching the internal Dijkstra biasing in simulation/build_paths.py.
-  do
-    local _pref = ({lua_table})[way:get_value_by_key("highway") or ""] or 1.0
-    if _pref ~= 1.0 then
-      if (result.forward_speed  or 0) > 0 then
-        result.forward_speed  = result.forward_speed  / _pref
-        result.forward_rate   = result.forward_speed  / 3.6
-      end
-      if (result.backward_speed or 0) > 0 then
-        result.backward_speed = result.backward_speed / _pref
-        result.backward_rate  = result.backward_speed / 3.6
-      end
-    end
-  end
-  -- ============================================================================
-""")
+INJECTION = (
+"\n"
+"  -- === Road-class biasing (simulation/routing_config.py HIGHWAY_COST_FACTOR) ===\n"
+"  -- Applied after maxspeed capping; dividing forward_speed by a factor < 1\n"
+"  -- (trunk, primary) shortens the reported duration and lowers routing cost,\n"
+"  -- matching the internal Dijkstra biasing in simulation/build_paths.py.\n"
+f"  do\n"
+f"    local _pref = ({lua_table})[way:get_value_by_key(\"highway\") or \"\"] or 1.0\n"
+"    if _pref ~= 1.0 then\n"
+"      if (result.forward_speed  or 0) > 0 then\n"
+"        result.forward_speed  = result.forward_speed  / _pref\n"
+"        result.forward_rate   = result.forward_speed  / 3.6\n"
+"      end\n"
+"      if (result.backward_speed or 0) > 0 then\n"
+"        result.backward_speed = result.backward_speed / _pref\n"
+"        result.backward_rate  = result.backward_speed / 3.6\n"
+"      end\n"
+"    end\n"
+"  end\n"
+"  -- ============================================================================\n"
+)
 
 # ── Find injection point ───────────────────────────────────────────────────────
 # We want to inject at the end of the way-processing function, after all speed
