@@ -432,7 +432,9 @@ _g_od_k1_dist   = np.array(od_k1_dist, dtype=np.float64)
 _g_n_pairs      = n_pairs
 _g_N_links      = N_links
 
-# ── Stochastic probit passes (parallel) ───────────────────────────────────────
+# ── Stochastic probit passes ───────────────────────────────────────────────────
+# Results are accumulated incrementally so only one pass worth of pair/link
+# arrays (~200 MB) is held in memory at a time, regardless of N_WORKERS.
 
 n_workers = min(N_WORKERS, N_PASSES)
 print(f"\nRunning {N_PASSES} stochastic probit passes "
@@ -442,35 +444,41 @@ rng   = np.random.default_rng(seed=RANDOM_SEED)
 seeds = rng.integers(0, 2**31, size=N_PASSES)
 tasks = list(zip(range(N_PASSES), seeds.tolist()))
 
-with Pool(processes=n_workers) as pool:
-    results = pool.map(_run_pass, tasks)
+dist_accum  = np.zeros(n_pairs, dtype=np.float64)
+hit_sparse  = csr_matrix((n_pairs, N_links), dtype=np.float32)
+n_fallbacks = 0
 
-n_fallbacks = sum(r[3] for r in results)
-print(f"  All passes done in {time.time()-t0:.1f}s  ({n_fallbacks:,} pair-pass fallbacks)")
-
-# ── Accumulate results ─────────────────────────────────────────────────────────
-
-print("Accumulating pass results …")
-dist_accum = np.zeros(n_pairs, dtype=np.float64)
-for _, _, dist_pass, _ in results:
+def _accumulate(pp, pl, dist_pass, nf):
+    global dist_accum, hit_sparse, n_fallbacks
     dist_accum += dist_pass
+    n_fallbacks += nf
+    if len(pp):
+        _m = coo_matrix(
+            (np.ones(len(pp), dtype=np.float32), (pp, pl)),
+            shape=(n_pairs, N_links),
+        ).tocsr()
+        hit_sparse = hit_sparse + _m
 
-all_pp = np.concatenate([r[0] for r in results])
-all_pl = np.concatenate([r[1] for r in results])
-del results
+if n_workers == 1:
+    # Serial path: call worker directly, no subprocess or IPC overhead.
+    for task in tasks:
+        pp, pl, dist_pass, nf = _run_pass(task)
+        _accumulate(pp, pl, dist_pass, nf)
+        del pp, pl, dist_pass
+else:
+    # Parallel path: imap streams results back one at a time so only one
+    # pass result is held in memory while the next batch is in flight.
+    with Pool(processes=n_workers) as pool:
+        for pp, pl, dist_pass, nf in pool.imap(_run_pass, tasks):
+            _accumulate(pp, pl, dist_pass, nf)
+            del pp, pl, dist_pass
+
+print(f"  All passes done in {time.time()-t0:.1f}s  ({n_fallbacks:,} pair-pass fallbacks)")
 
 # ── Build output arrays ────────────────────────────────────────────────────────
 
 print("Building output arrays …")
 od_dist_out = (dist_accum / N_PASSES).astype(np.float32)
-
-# Build hit count matrix from all passes in one shot (avoids 25 intermediate
-# sparse-matrix additions from the old serial approach).
-hit_sparse = coo_matrix(
-    (np.ones(len(all_pp), dtype=np.float32), (all_pp, all_pl)),
-    shape=(n_pairs, N_links),
-).tocsr()
-del all_pp, all_pl
 
 _coo         = hit_sparse.tocoo()
 pair_idx_arr = _coo.row.astype(np.int32)
