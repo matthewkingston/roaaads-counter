@@ -1,5 +1,5 @@
 {
-  "lambda": 1.0,
+  "lambda": 40,
   "gamma_coupling_scale": 1.0,
   "ext_biz_scale": 1.67,
   "phi_biz_prior": 0.44,
@@ -16,7 +16,7 @@
     "THETA":      0.5,
     "W_SCHOOL":   1.0,
     "P_school":   2.0,
-    "ALPHA_school": 0.5
+    "ALPHA_school": 0.01
   },
   "gravity_ref": {
     "W_BIZ":      1.0,
