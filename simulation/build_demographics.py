@@ -102,6 +102,12 @@ if os.path.exists(CENSUS_ZONES_FILE):
     with open(CENSUS_ZONES_FILE) as _f:
         _census_zones = json.load(_f)
 
+TUNER_CONFIG_FILE = "simulation/tuner_config.json"
+_ext_biz_scale = 1.0
+if os.path.exists(TUNER_CONFIG_FILE):
+    with open(TUNER_CONFIG_FILE) as _f:
+        _ext_biz_scale = json.load(_f).get("ext_biz_scale", 1.0)
+
 # ── Fast path: --zones-only ────────────────────────────────────────────────────
 # Patches only boundary node entries in node_weights.json. Skips all internal
 # population processing and map building. Use after editing ref_pop/ref_wp/dampings
@@ -114,16 +120,17 @@ if "--zones-only" in sys.argv:
     weights_path = f"{OUT_DIR}/node_weights.json"
     with open(weights_path) as f:
         w = json.load(f)
-    print("Updating external zone weights from census data …")
+    print(f"Updating external zone weights from census data (ext_biz_scale={_ext_biz_scale:.4f}) …")
     ext_nodes = _census_zones["external_nodes"]
     for ext in ext_nodes:
         nid = ext["id"]
         w["node_population"][str(nid)]      = float(ext["population"])
-        w["node_business_demand"][str(nid)] = float(ext["workplace_pop"])
+        w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) * _ext_biz_scale
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = 0.0
         print(f"  Node {nid:4d}  {ext['level']} {ext['code']}  "
-              f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}")
+              f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
+              f"biz={w['node_business_demand'][str(nid)]:>10,.1f}")
     with open(weights_path, "w") as f:
         json.dump(w, f)
     print(f"Saved {len(ext_nodes)} external nodes → {weights_path}")
@@ -690,11 +697,12 @@ else:
     # ── Add external node weights from census data ────────────────────────────
     if _census_zones is not None:
         ext_nodes = _census_zones["external_nodes"]
-        print(f"Adding {len(ext_nodes)} external node weights from census data …")
+        print(f"Adding {len(ext_nodes)} external node weights from census data "
+              f"(ext_biz_scale={_ext_biz_scale:.4f}) …")
         for ext in ext_nodes:
             nid = ext["id"]
             node_population[nid]      = float(ext["population"])
-            node_business_demand[nid] = float(ext["workplace_pop"])
+            node_business_demand[nid] = float(ext["workplace_pop"]) * _ext_biz_scale
             node_school_demand[nid]   = 0.0   # TBD
     else:
         ext_nodes = []
