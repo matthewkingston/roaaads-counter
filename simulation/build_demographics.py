@@ -24,8 +24,14 @@ import pyproj
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 CENTRE    = (54.5933779, -5.6960935)
-RADIUS_M  = 3000
 OUT_DIR   = "simulation"
+
+# OSM download radius and DZ selection are bounded by the core polygon
+# (data/census_zones.json), not a fixed circle.  NETWORK_MARGIN_M matches
+# build_network.py so the download covers the whole core polygon + margin.
+# RADIUS_M is derived from census data below, once _census_zones is loaded.
+NETWORK_MARGIN_M = 1000
+RADIUS_M = None  # set from census_zones.json (see below)
 
 POPULATION_API = (
     "https://ws-data.nisra.gov.uk/public/api.restful/"
@@ -102,6 +108,10 @@ if os.path.exists(CENSUS_ZONES_FILE):
     with open(CENSUS_ZONES_FILE) as _f:
         _census_zones = json.load(_f)
 
+# Size the OSM download to cover the whole core polygon (matches build_network.py).
+if _census_zones is not None:
+    RADIUS_M = round(_census_zones["max_core_vertex_dist_m"]) + NETWORK_MARGIN_M
+
 TUNER_CONFIG_FILE = "simulation/tuner_config.json"
 _ext_biz_scale = 1.0
 if os.path.exists(TUNER_CONFIG_FILE):
@@ -171,6 +181,10 @@ if "--map-only" in sys.argv:
     print(f"  {len(dz_final)} Data Zones · {len(node_ids)} nodes")
 
 else:
+    if _census_zones is None:
+        print(f"ERROR: {CENSUS_ZONES_FILE} not found. Run build_census_zones.py first.")
+        sys.exit(1)
+
     # ── 1. Download population data ────────────────────────────────────────────
 
     if os.path.exists(POPULATION_CACHE):
@@ -200,9 +214,14 @@ else:
     dz = gpd.read_file(DZ_BOUNDARY_FILE)  # EPSG:4326
     dz = dz.merge(pop_df[["DZ2021_cd", "population"]], on="DZ2021_cd", how="left")
 
-    # ── 3. Clip to study circle & estimate population ──────────────────────────
+    # ── 3. Select core-polygon DZs & estimate population ───────────────────────
+    # Model the whole core polygon (data/census_zones.json), not a 3 km circle.
+    # The core polygon is the union of whole core DZs, so each core DZ lies
+    # entirely inside it; select by centroid-within and keep full DZ geometry and
+    # full population (no area clipping).  area_pct is held at 1.0 so downstream
+    # consumers (workplace scaling, choropleth tooltip) keep working unchanged.
 
-    print("Clipping Data Zones to study circle …")
+    print("Selecting Data Zones within the core polygon …")
 
     transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
     transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
@@ -210,23 +229,20 @@ else:
     # Work in UTM throughout for accurate area calculations
     dz_utm = dz.to_crs("EPSG:32630")
     centre_utm_x, centre_utm_y = transformer_to_utm.transform(CENTRE[1], CENTRE[0])
-    study_circle = Point(centre_utm_x, centre_utm_y).buffer(RADIUS_M)
 
-    dz_intersect = dz_utm[dz_utm.geometry.intersects(study_circle)].copy()
+    from shapely.geometry import Polygon as _Polygon
+    from shapely.ops import transform as _shp_transform
+    core_poly_wgs = _Polygon(_census_zones["core_polygon"])
+    core_poly_utm = _shp_transform(transformer_to_utm.transform, core_poly_wgs)
+
+    dz_intersect = dz_utm[dz_utm.geometry.centroid.within(core_poly_utm)].copy()
     dz_intersect["area_original_m2"] = dz_intersect.geometry.area
+    # No clipping: full DZ geometry and population are inside the core polygon.
+    dz_intersect["area_clipped_m2"] = dz_intersect["area_original_m2"]
+    dz_intersect["area_pct"] = 1.0
+    dz_intersect["pop_estimated"] = dz_intersect["population"].round().astype("Int64")
 
-    # Hard clip to circle
-    dz_intersect = dz_intersect.copy()
-    dz_intersect["geometry"] = dz_intersect.geometry.intersection(study_circle)
-    dz_intersect["area_clipped_m2"] = dz_intersect.geometry.area
-    dz_intersect["area_pct"] = dz_intersect["area_clipped_m2"] / dz_intersect["area_original_m2"]
-
-    # Population scaled by area fraction (constant density assumption)
-    dz_intersect["pop_estimated"] = (
-        dz_intersect["population"] * dz_intersect["area_pct"]
-    ).round().astype("Int64")
-
-    print(f"  {len(dz_intersect)} DZs intersect circle before node filter")
+    print(f"  {len(dz_intersect)} core DZs before node filter")
 
     # ── 4. Filter to DZs with road nodes inside ───────────────────────────────
 
@@ -237,7 +253,7 @@ else:
     node_ids = list(G_cons.nodes())
     node_coords_utm = [(G_cons.nodes[n]["x"], G_cons.nodes[n]["y"]) for n in node_ids]
 
-    # Spatial join: which clipped DZs contain at least one junction node?
+    # Spatial join: which core DZs contain at least one junction node?
     node_gdf = gpd.GeoDataFrame(
         {"node_id": node_ids},
         geometry=[Point(x, y) for x, y in node_coords_utm],
@@ -248,10 +264,10 @@ else:
 
     dz_final = dz_intersect[dz_intersect["DZ2021_cd"].isin(dzs_with_nodes)].copy()
     n_dropped = len(dz_intersect) - len(dz_final)
-    print(f"  Dropped {n_dropped} DZs with no road nodes inside clipped area")
+    print(f"  Dropped {n_dropped} core DZs with no road nodes inside")
     print(f"  Kept {len(dz_final)} DZs, estimated pop: {dz_final['pop_estimated'].sum():,}")
 
-    # Save clipped DZs (convert back to WGS84 for GeoJSON)
+    # Save core DZs (convert back to WGS84 for GeoJSON)
     dz_final.to_crs("EPSG:4326").to_file(f"{OUT_DIR}/newtownards_demographics.geojson", driver="GeoJSON")
 
     # ── Road-length-weighted population per node ───────────────────────────────
@@ -511,7 +527,9 @@ else:
     # Normalise all geometries to points (polygon/linestring features → centroid)
     pois_utm = pois_raw.to_crs("EPSG:32630").copy()
     pois_utm["geometry"] = pois_utm.geometry.centroid
-    print(f"  {len(pois_utm)} POIs after filtering")
+    # Keep only POIs inside the core polygon (the download circle overshoots it).
+    pois_utm = pois_utm[pois_utm.geometry.within(core_poly_utm)].copy()
+    print(f"  {len(pois_utm)} POIs after filtering (within core polygon)")
 
     # Snap each POI centroid to nearest road edge; split weight (1-t)/t between endpoints
     node_poi_weight = {}
@@ -580,6 +598,8 @@ else:
     _park_utm = _park_utm[_park_utm.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     _park_utm["area_m2"] = _park_utm.geometry.area
     _park_utm["centroid_geom"] = _park_utm.geometry.centroid
+    # Keep only car parks whose centroid is inside the core polygon.
+    _park_utm = _park_utm[_park_utm["centroid_geom"].within(core_poly_utm)].copy()
     _park_utm["is_private"] = (
         _park_utm["access"].isin(["private"]) if "access" in _park_utm.columns
         else pd.Series(False, index=_park_utm.index)
@@ -659,8 +679,8 @@ else:
 
     # ── Auto-detect boundary nodes from core polygon ──────────────────────────
     # Uses the raw (pre-consolidation) graph for OSM node IDs (OSRM-compatible).
-    # RADIUS_M = max_core_vertex_dist + 200 m, so boundary nodes' immediate
-    # external neighbours are present in the raw graph for the edge check.
+    # build_network.py downloads the raw graph to core_max_vertex + ~1 km margin,
+    # so boundary nodes' immediate external neighbours are present for the edge check.
     if _census_zones is not None:
         from shapely.geometry import Polygon as _Polygon
         _G_raw_bd = ox.load_graphml(f"{OUT_DIR}/newtownards_network.graphml")

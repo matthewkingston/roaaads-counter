@@ -1,7 +1,7 @@
 {
   "lambda": 40,
   "gamma_coupling_scale": 1.0,
-  "ext_biz_scale": 1.67,
+  "ext_biz_scale": 1.702,
   "phi_biz_prior": 0.44,
   "phi_biz_std":   0.10,
   "phi_school_prior": 0.10,
