@@ -31,6 +31,7 @@ from scipy.sparse import csr_matrix, coo_matrix
 from scipy.sparse.csgraph import dijkstra
 
 from routing_config import HIGHWAY_COST_FACTOR
+from model import paths_cache_signature
 
 # Routing graph + weights are the dead-end-reduced artifacts from reduce_deadends.py
 # (run after build_demographics.py, before this script). See CLAUDE.md "Dead-end reduction".
@@ -503,6 +504,9 @@ print(f"  {n_pairs:,} OD pairs  {n_entries:,} entries  mean {mean_lpp:.1f} links
 # ── Save ──────────────────────────────────────────────────────────────────────
 
 print("Saving cache …")
+# Stamp a signature of the inputs (graph, external links, cost factors) so
+# tune_assignment.py / build_assignment.py can detect a stale cache loudly.
+_sig = paths_cache_signature()
 np.savez_compressed(
     PATHS_CACHE,
     node_ids        = np.array(all_node_ids, dtype=object),
@@ -516,6 +520,9 @@ np.savez_compressed(
     link_v          = np.array([v for u, v in link_list], dtype=np.int64),
     probit_n_passes = np.int32(N_PASSES),
     probit_cv       = np.float32(PROBIT_CV),
+    src_graph_sha1    = np.array(_sig["src_graph_sha1"]),
+    src_extlinks_sha1 = np.array(_sig["src_extlinks_sha1"]),
+    src_cost_factor   = np.array(_sig["src_cost_factor"]),
 )
 size_mb = os.path.getsize(PATHS_CACHE) / 1e6
 print(f"Saved: {PATHS_CACHE}  ({size_mb:.1f} MB)")

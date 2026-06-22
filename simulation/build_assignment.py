@@ -17,7 +17,8 @@ import numpy as np
 import osmnx as ox
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
-                   gravity_assign, site_flow, compute_chi2, print_chi2_table)
+                   gravity_assign, site_flow, compute_chi2, print_chi2_table,
+                   assert_paths_cache_fresh)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,7 @@ if os.path.exists(TUNED_PARAMS):
 print(f"Loading paths cache ({PATHS_CACHE}) …")
 t0    = time.time()
 cache = np.load(PATHS_CACHE, allow_pickle=True)
+assert_paths_cache_fresh(cache)
 
 node_ids_arr = cache["node_ids"]
 od_src       = cache["od_src"]

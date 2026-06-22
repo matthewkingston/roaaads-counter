@@ -43,12 +43,59 @@ EXCLUDE_LINKS = {
 PATHS_CACHE     = "simulation/newtownards_paths.npz"
 WEIGHTS_FILE    = "simulation/node_weights_reduced.json"
 ROUTING_GRAPH   = "simulation/newtownards_reduced.graphml"
+EXTERNAL_LINKS  = "data/external_links.json"
 TUNER_CONFIG    = "simulation/tuner_config.json"
 TUNED_PARAMS    = "simulation/tuned_params.json"
 LINK_AADT       = "data/link_aadt.json"
 OFFICIAL_HOURLY = "data/official_hourly.json"
 
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
+
+# ── Paths-cache freshness guard ─────────────────────────────────────────────────
+# build_paths.py stamps a signature of its inputs (routing graph, external links,
+# HIGHWAY_COST_FACTOR) into the .npz. tune_assignment.py and build_assignment.py
+# re-check it at load time and fail loudly if the cache is stale, rather than
+# silently assigning/tuning against an out-of-date cache (a recurring footgun —
+# see CLAUDE.md "Paths cache note").
+
+def _file_sha1(path):
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def paths_cache_signature():
+    """Signature of the inputs build_paths.py consumes. Stamped into the npz at
+    build time and re-checked at load time. Returns a dict of {field: str}."""
+    from routing_config import HIGHWAY_COST_FACTOR
+    return {
+        "src_graph_sha1":    _file_sha1(ROUTING_GRAPH),
+        "src_extlinks_sha1": _file_sha1(EXTERNAL_LINKS),
+        "src_cost_factor":   json.dumps(HIGHWAY_COST_FACTOR, sort_keys=True),
+    }
+
+def assert_paths_cache_fresh(cache):
+    """Raise SystemExit if the loaded paths cache was built from different inputs
+    than the current pipeline state. `cache` is the np.load(...) handle."""
+    label = {
+        "src_graph_sha1":    "routing graph (newtownards_reduced.graphml)",
+        "src_extlinks_sha1": "external links (data/external_links.json)",
+        "src_cost_factor":   "HIGHWAY_COST_FACTOR (simulation/routing_config.py)",
+    }
+    sig = paths_cache_signature()
+    stale = []
+    for key, current in sig.items():
+        stored = cache[key].item() if key in cache else None
+        if stored != current:
+            stale.append(label.get(key, key))
+    if stale:
+        msg = ["Paths cache is STALE — it was built from different inputs than the "
+               "current pipeline state:"]
+        msg += [f"  - {s} changed since the cache was built" for s in stale]
+        msg.append("Re-run: python3 simulation/build_paths.py")
+        raise SystemExit("\n".join(msg))
 
 # ── Gravity kernel ────────────────────────────────────────────────────────────
 

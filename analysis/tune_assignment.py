@@ -43,7 +43,7 @@ import scipy.optimize
 sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
-                   print_chi2_table)
+                   print_chi2_table, assert_paths_cache_fresh)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -101,6 +101,7 @@ if not os.path.exists(PATHS_CACHE):
 
 print("Loading paths cache …")
 cache        = np.load(PATHS_CACHE, allow_pickle=True)
+assert_paths_cache_fresh(cache)
 node_ids_arr = cache["node_ids"]
 od_src       = cache["od_src"]
 od_dst       = cache["od_dst"]
