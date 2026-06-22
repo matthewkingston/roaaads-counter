@@ -33,10 +33,8 @@ from shapely.geometry import Point, mapping
 from shapely.ops import unary_union
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-
-CENTRE          = (54.5933779, -5.6960935)   # (lat, lon) of Newtownards town centre
-CORE_RADIUS     = 3000     # metres — SDZs intersecting this circle → DZs become core
-SDZ_ZONE_RADIUS = 10000    # metres — DEAs intersecting this circle → broken into SDZs
+# CENTRE / CORE_RADIUS / SDZ_ZONE_RADIUS live in zones_config.py (single source).
+from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
 
 DZ_BOUNDARY_FILE  = "simulation/dz2021/DZ2021.geojson"
 SDZ_BOUNDARY_FILE = "simulation/sdz2021/SDZ2021.geojson"

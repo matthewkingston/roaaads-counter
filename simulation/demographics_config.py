@@ -7,7 +7,9 @@ centre, file paths, OSM tag handling, and map styling without drifting apart.
 """
 
 # ── Study area ──────────────────────────────────────────────────────────────────
-CENTRE  = (54.5933779, -5.6960935)
+# CENTRE lives in zones_config.py (single source); re-exported here so the
+# demographics/map scripts can keep importing it from demographics_config.
+from zones_config import CENTRE  # noqa: F401  (re-exported)
 OUT_DIR = "simulation"
 
 # OSM download radius and DZ selection are bounded by the core polygon

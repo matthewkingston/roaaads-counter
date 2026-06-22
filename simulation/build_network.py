@@ -14,9 +14,10 @@ import json, os
 import osmnx as ox
 import geopandas as gpd
 
-# Newtownards town centre — CORE_RADIUS is defined in build_census_zones.py and
-# written to census_zones.json; read from there to avoid duplication.
-CENTRE               = (54.5933779, -5.6960935)
+# Newtownards town centre — CENTRE lives in zones_config.py (single source).
+# CORE_RADIUS is also defined there and is written to census_zones.json by
+# build_census_zones.py; the network extent is read from that polygon below.
+from zones_config import CENTRE
 NETWORK_MARGIN_M     = 1000  # metres beyond core polygon max vertex distance
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
 OUT_DIR   = "simulation"
