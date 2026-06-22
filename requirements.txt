@@ -8,7 +8,8 @@ scipy==1.10.1
 pandas==2.0.3
 
 # --- Geospatial / network ---
-osmnx==1.9.4          # OSM road-network download + graph consolidation
+osmnx==1.9.4          # graph consolidation + routing helpers
+pyrosm==0.6.1         # read local OSM .osm.pbf → graph (build_network.py)
 networkx==3.1         # graph algorithms (Dijkstra, articulation points)
 geopandas==0.13.2     # census boundary / GeoJSON handling
 shapely==2.0.7        # geometry (core polygon, point-in-polygon)

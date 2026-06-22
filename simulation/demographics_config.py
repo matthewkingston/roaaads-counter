@@ -13,9 +13,21 @@ from zones_config import CENTRE  # noqa: F401  (re-exported)
 OUT_DIR = "simulation"
 
 # OSM download radius and DZ selection are bounded by the core polygon
-# (data/census_zones.json), not a fixed circle. NETWORK_MARGIN_M matches
-# build_network.py so a download circle sized to the polygon covers it + margin.
+# (data/census_zones.json), not a fixed circle. NETWORK_MARGIN_M sizes the OSM
+# POI/building/parking download circle around the core polygon. (The road
+# network's own extent is governed by BOUNDARY_BBOX_MARGIN_M below, not this.)
 NETWORK_MARGIN_M = 1000
+
+# ── Road-network source (build_network.py) ───────────────────────────────────────
+# build_network.py reads the road graph from the local NI .osm.pbf — the same
+# snapshot OSRM is built from (see build_osrm_profile.py / build_external_links.py).
+# Sharing one OSM snapshot keeps boundary/internal node IDs consistent with OSRM's
+# route node IDs. The graph is read for a bounding box of the core polygon buffered
+# by BOUNDARY_BBOX_MARGIN_M, which supersedes the old 1 km Overpass download margin
+# (it only needs to reach boundary nodes' external neighbours; 5 km is generous).
+PBF_PATH = ("/home/matthew/Documents/CodingFun/osrm/"
+            "ireland-and-northern-ireland-latest.osm.pbf")
+BOUNDARY_BBOX_MARGIN_M = 5000
 
 # ── File paths ──────────────────────────────────────────────────────────────────
 POPULATION_API = (

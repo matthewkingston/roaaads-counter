@@ -10,32 +10,60 @@ Outputs (in the same directory):
   newtownards_consolidated.graphml — junction-consolidated graph (projected CRS)
 """
 
-import json, os
+import json, os, sys
 import osmnx as ox
 import geopandas as gpd
+import pyproj
+from shapely.geometry import Polygon as _Poly, Point as _Pt
+from shapely.ops import transform as _shp_transform
+from pyrosm import OSM
 
 # Newtownards town centre — CENTRE lives in zones_config.py (single source).
 # CORE_RADIUS is also defined there and is written to census_zones.json by
 # build_census_zones.py; the network extent is read from that polygon below.
 from zones_config import CENTRE
-NETWORK_MARGIN_M     = 1000  # metres beyond core polygon max vertex distance
+# PBF source + bbox margin live in demographics_config (single source for the
+# OSM snapshot path, shared conceptually with the OSRM build).
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+from demographics_config import PBF_PATH, BOUNDARY_BBOX_MARGIN_M
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
 OUT_DIR   = "simulation"
 
 CENSUS_ZONES_FILE = "data/census_zones.json"
+
+# ── 1. Read road network from the local NI pbf ──────────────────────────────────
+# Source the graph from the same .osm.pbf OSRM is built from (one OSM snapshot →
+# boundary/internal node IDs match OSRM route node IDs). The read is bounded by the
+# core polygon buffered by BOUNDARY_BBOX_MARGIN_M, which supersedes the old Overpass
+# `dist` circle margin (the buffer only needs to reach boundary nodes' external
+# neighbours; 5 km is generous). The consolidated routing graph is still clipped to
+# the core polygon in step 3, so only the raw graph's extent grows.
+
+_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
+_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+
 if os.path.exists(CENSUS_ZONES_FILE):
-    _cz      = json.load(open(CENSUS_ZONES_FILE))
-    _max_dist = _cz["max_core_vertex_dist_m"]
-    RADIUS_M = round(_max_dist) + NETWORK_MARGIN_M
-    print(f"RADIUS_M = {RADIUS_M}m  (core max vertex {_max_dist:.0f}m + {NETWORK_MARGIN_M}m margin)")
+    _cz = json.load(open(CENSUS_ZONES_FILE))
+    _core_utm = _shp_transform(_to_utm.transform, _Poly(_cz["core_polygon"]))
+    _bbox_utm = _core_utm.buffer(BOUNDARY_BBOX_MARGIN_M)
+    print(f"Reading drive network from pbf: core polygon + {BOUNDARY_BBOX_MARGIN_M}m "
+          f"(bbox ≈ {_bbox_utm.area / 1e6:.0f} km²) …")
 else:
-    RADIUS_M = 5000
-    print(f"RADIUS_M = {RADIUS_M}m  (fallback — run build_census_zones.py first)")
+    # Fallback when census_zones.json is absent: a circle around CENTRE.
+    _cx, _cy = _to_utm.transform(CENTRE[1], CENTRE[0])   # always_xy → (lon, lat)
+    _bbox_utm = _Pt(_cx, _cy).buffer(5000 + BOUNDARY_BBOX_MARGIN_M)
+    print(f"No {CENSUS_ZONES_FILE} — falling back to a "
+          f"{5000 + BOUNDARY_BBOX_MARGIN_M}m circle around CENTRE "
+          f"(run build_census_zones.py first).")
 
-# ── 1. Download ────────────────────────────────────────────────────────────────
+_bbox_wgs = _shp_transform(_to_wgs.transform, _bbox_utm)
 
-print(f"Downloading drive network within {RADIUS_M}m of Newtownards town centre …")
-G = ox.graph_from_point(CENTRE, dist=RADIUS_M, network_type="drive", retain_all=False)
+osm = OSM(PBF_PATH, bounding_box=_bbox_wgs)
+nodes, edges = osm.get_network(network_type="driving", nodes=True,
+                               extra_attributes=["bridge", "tunnel", "lanes"])
+G = osm.to_graph(nodes, edges, graph_type="networkx", retain_all=False)
+if "crs" not in G.graph:
+    G.graph["crs"] = "epsg:4326"
 print(f"  {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
 # ── 2. Save raw graph ──────────────────────────────────────────────────────────
@@ -122,7 +150,8 @@ print(f"\nNetwork summary:")
 print(f"  Total length:  {total_km:.1f} km")
 print(f"  Mean link:     {links_out['length'].mean():.0f} m")
 print(f"  Median link:   {links_out['length'].median():.0f} m")
-print(f"  Centre:        {CENTRE[0]:.6f}, {CENTRE[1]:.6f}  radius: {RADIUS_M}m")
+print(f"  Centre:        {CENTRE[0]:.6f}, {CENTRE[1]:.6f}  "
+      f"bbox margin: {BOUNDARY_BBOX_MARGIN_M}m (from pbf)")
 
 print(f"\nLink breakdown by highway type:")
 for htype, count in links_out["highway"].value_counts().items():
