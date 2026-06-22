@@ -1,0 +1,42 @@
+# Newtownards Traffic Model — Python dependencies
+# Pinned to the versions in the known-good local environment (Python 3.8.10).
+# Install with:  python3 -m pip install -r requirements.txt
+
+# --- Core scientific stack ---
+numpy==1.24.4
+scipy==1.10.1
+pandas==2.0.3
+
+# --- Geospatial / network ---
+osmnx==1.9.4          # OSM road-network download + graph consolidation
+networkx==3.1         # graph algorithms (Dijkstra, articulation points)
+geopandas==0.13.2     # census boundary / GeoJSON handling
+shapely==2.0.7        # geometry (core polygon, point-in-polygon)
+pyproj==3.5.0         # WGS84 <-> UTM coordinate transforms
+
+# --- Output / reporting ---
+folium==0.18.0        # interactive map HTML (build_map.py)
+matplotlib==3.7.5     # tuning plots (report_tune.py, tune_assignment.py)
+
+# --- Spreadsheet readers (pandas engines) ---
+odfpy                 # read .ods files (official hourly counts, NTS tables) via engine="odf"
+openpyxl==3.1.5       # read .xlsx files (census workplace population)
+
+# --- Misc ---
+pytz==2026.2          # timezone handling (ingest_counts.py)
+
+# ---------------------------------------------------------------------------
+# Non-Python / external dependencies (not installable via pip):
+#
+#   * Docker            — runs the OSRM backend and generates the OSRM car
+#                         profile (simulation/build_osrm_profile.py).
+#   * OSRM backend      — local instance at http://localhost:5000, built from
+#                         an NI extract with the biased car_roaaads.lua profile.
+#                         Required by simulation/build_external_links.py.
+#
+# Large reference data files (gitignored, download separately — see CLAUDE.md):
+#   * data/2023-northern-ireland-traffic-count-data-in-ods-format.ods
+#   * data/nts0502.ods, data/nts0504.ods   (DfT NTS tables)
+#   * data/census-2021-apwp001.xlsx        (NISRA workplace population)
+#   * simulation/dz2021|sdz2021|dea2021/*.geojson  (NISRA/OpenDataNI boundaries)
+# ---------------------------------------------------------------------------

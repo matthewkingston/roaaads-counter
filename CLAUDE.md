@@ -8,6 +8,12 @@ running the scripts in order regenerates all outputs from raw data.
 ingest, model change, or reference value update, edit the relevant sections before
 committing. This file is the authoritative record of model state.
 
+**Dependencies:** Python package requirements are pinned in `requirements.txt`
+(`python3 -m pip install -r requirements.txt`). It also documents the non-pip
+dependencies (Docker + local OSRM backend) and the gitignored reference-data
+downloads. **Agents: keep `requirements.txt` current** — add a pinned entry
+whenever a new third-party import is introduced, and remove ones no longer used.
+
 ---
 
 ## Pipeline (run in this order)
