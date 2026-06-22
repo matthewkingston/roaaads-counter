@@ -1,7 +1,12 @@
 """
-Download the Newtownards road network from OSM and produce Level-1 segments:
-one directed link per road between adjacent intersection nodes, with complex
-junctions (roundabouts, staggered crossings) consolidated into single nodes.
+Build the Newtownards road network from the local NI .osm.pbf (the same snapshot
+OSRM is built from) and produce Level-1 segments: one directed link per road
+between adjacent intersection nodes, with complex junctions (roundabouts,
+staggered crossings) consolidated into single nodes.
+
+A small drivable-highway extract is streamed out of the pbf with osmium-tool
+(Docker) before osmnx reads it, so the full ~400 MB island file is never parsed
+in process. Requires Docker (image auto-built from simulation/osmium.Dockerfile).
 
 Outputs (in the same directory):
   newtownards_nodes.geojson        — raw intersection nodes
@@ -10,13 +15,12 @@ Outputs (in the same directory):
   newtownards_consolidated.graphml — junction-consolidated graph (projected CRS)
 """
 
-import json, os, sys
+import json, os, sys, subprocess
 import osmnx as ox
 import geopandas as gpd
 import pyproj
 from shapely.geometry import Polygon as _Poly, Point as _Pt
 from shapely.ops import transform as _shp_transform
-from pyrosm import OSM
 
 # Newtownards town centre — CENTRE lives in zones_config.py (single source).
 # CORE_RADIUS is also defined there and is written to census_zones.json by
@@ -31,13 +35,33 @@ OUT_DIR   = "simulation"
 
 CENSUS_ZONES_FILE = "data/census_zones.json"
 
-# ── 1. Read road network from the local NI pbf ──────────────────────────────────
+# osmium-tool Docker image used to stream a small extract out of the full NI pbf
+# (the 400 MB whole-Ireland file OOMs an in-process parse on modest RAM). Built
+# from simulation/osmium.Dockerfile; auto-built here on first run if absent.
+OSMIUM_IMAGE = "osmium-roaaads"
+OSMIUM_DOCKERFILE = os.path.join(os.path.dirname(__file__), "osmium.Dockerfile")
+# Drivable highway values kept by the extract — the positive form of osmnx's
+# "drive" network filter (which excludes footway/cycleway/path/service/track/…).
+DRIVE_HIGHWAYS = ("motorway,motorway_link,trunk,trunk_link,primary,primary_link,"
+                  "secondary,secondary_link,tertiary,tertiary_link,unclassified,"
+                  "residential,living_street,road")
+_BBOX_PBF   = os.path.join(OUT_DIR, "_pbf_bbox_extract.osm.pbf")   # intermediate
+_DRIVE_OSM  = os.path.join(OUT_DIR, "_pbf_drive_extract.osm")      # intermediate (XML)
+
+# ── 1. Extract the road network from the local NI pbf ────────────────────────────
 # Source the graph from the same .osm.pbf OSRM is built from (one OSM snapshot →
-# boundary/internal node IDs match OSRM route node IDs). The read is bounded by the
-# core polygon buffered by BOUNDARY_BBOX_MARGIN_M, which supersedes the old Overpass
-# `dist` circle margin (the buffer only needs to reach boundary nodes' external
-# neighbours; 5 km is generous). The consolidated routing graph is still clipped to
-# the core polygon in step 3, so only the raw graph's extent grows.
+# boundary/internal node IDs match OSRM route node IDs). The extract is bounded by
+# the core polygon buffered by BOUNDARY_BBOX_MARGIN_M, which supersedes the old
+# Overpass `dist` circle margin (the buffer only needs to reach boundary nodes'
+# external neighbours; 5 km is generous). The consolidated routing graph is still
+# clipped to the core polygon in step 3, so only the raw graph's extent grows.
+#
+# Two-step osmium pipeline (streaming, ~30 MB RAM — the whole pbf is never loaded
+# in process), then osmnx's native XML reader builds the graph exactly as the old
+# graph_from_point("drive") path did:
+#   osmium extract --bbox    → bbox.osm.pbf   (geographic clip of the snapshot)
+#   osmium tags-filter w/highway=<drive set> → drive.osm  (drivable highways + nodes)
+#   ox.graph_from_xml(drive.osm)             → simplified MultiDiGraph
 
 _to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
 _to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
@@ -46,7 +70,7 @@ if os.path.exists(CENSUS_ZONES_FILE):
     _cz = json.load(open(CENSUS_ZONES_FILE))
     _core_utm = _shp_transform(_to_utm.transform, _Poly(_cz["core_polygon"]))
     _bbox_utm = _core_utm.buffer(BOUNDARY_BBOX_MARGIN_M)
-    print(f"Reading drive network from pbf: core polygon + {BOUNDARY_BBOX_MARGIN_M}m "
+    print(f"Extracting drive network from pbf: core polygon + {BOUNDARY_BBOX_MARGIN_M}m "
           f"(bbox ≈ {_bbox_utm.area / 1e6:.0f} km²) …")
 else:
     # Fallback when census_zones.json is absent: a circle around CENTRE.
@@ -56,14 +80,49 @@ else:
           f"{5000 + BOUNDARY_BBOX_MARGIN_M}m circle around CENTRE "
           f"(run build_census_zones.py first).")
 
-_bbox_wgs = _shp_transform(_to_wgs.transform, _bbox_utm)
+_minx, _miny, _maxx, _maxy = _shp_transform(_to_wgs.transform, _bbox_utm).bounds
 
-osm = OSM(PBF_PATH, bounding_box=_bbox_wgs)
-nodes, edges = osm.get_network(network_type="driving", nodes=True,
-                               extra_attributes=["bridge", "tunnel", "lanes"])
-G = osm.to_graph(nodes, edges, graph_type="networkx", retain_all=False)
-if "crs" not in G.graph:
-    G.graph["crs"] = "epsg:4326"
+
+def _docker_image_exists(image):
+    return subprocess.run(["docker", "image", "inspect", image],
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0
+
+
+if not _docker_image_exists(OSMIUM_IMAGE):
+    print(f"  Building {OSMIUM_IMAGE} image (one-off) from {OSMIUM_DOCKERFILE} …")
+    subprocess.run(["docker", "build", "-f", OSMIUM_DOCKERFILE,
+                    "-t", OSMIUM_IMAGE, os.path.dirname(OSMIUM_DOCKERFILE)],
+                   check=True)
+
+_pbf_dir  = os.path.abspath(os.path.dirname(PBF_PATH))
+_pbf_name = os.path.basename(PBF_PATH)
+_out_abs  = os.path.abspath(OUT_DIR)
+_uidgid   = f"{os.getuid()}:{os.getgid()}"
+_docker_pre = ["docker", "run", "--rm", "--user", _uidgid,
+               "-v", f"{_pbf_dir}:/pbf:ro", "-v", f"{_out_abs}:/out",
+               OSMIUM_IMAGE]
+
+print(f"  osmium extract --bbox {_minx:.5f},{_miny:.5f},{_maxx:.5f},{_maxy:.5f} …")
+subprocess.run(_docker_pre + [
+    "extract", "--bbox", f"{_minx},{_miny},{_maxx},{_maxy}",
+    "--strategy", "smart", "--overwrite",
+    "-o", f"/out/{os.path.basename(_BBOX_PBF)}", f"/pbf/{_pbf_name}"], check=True)
+
+print(f"  osmium tags-filter w/highway=<drive set> …")
+subprocess.run(_docker_pre + [
+    "tags-filter", "--overwrite",
+    "-o", f"/out/{os.path.basename(_DRIVE_OSM)}",
+    f"/out/{os.path.basename(_BBOX_PBF)}", f"w/highway={DRIVE_HIGHWAYS}"], check=True)
+
+G = ox.graph_from_xml(_DRIVE_OSM, simplify=True, retain_all=False)
+# graph_from_xml does not populate the `street_count` node attribute that the
+# Overpass download path adds. consolidate_intersections relies on it to identify
+# true intersections; without it the graph badly under-merges (≈1416 vs ≈1002
+# core nodes). Add it here so consolidation matches the previous pipeline.
+import networkx as nx
+nx.set_node_attributes(G, values=ox.stats.count_streets_per_node(G),
+                       name="street_count")
 print(f"  {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
 
 # ── 2. Save raw graph ──────────────────────────────────────────────────────────

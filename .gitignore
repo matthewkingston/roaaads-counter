@@ -6,6 +6,8 @@ simulation/*.html
 simulation/*.graphml
 simulation/*.geojson
 simulation/*.json
+simulation/*.osm
+simulation/*.osm.pbf
 !simulation/tuner_config.json
 simulation/dz2021/DZ2021.geojson
 

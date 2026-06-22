@@ -8,8 +8,7 @@ scipy==1.10.1
 pandas==2.0.3
 
 # --- Geospatial / network ---
-osmnx==1.9.4          # graph consolidation + routing helpers
-pyrosm==0.6.1         # read local OSM .osm.pbf → graph (build_network.py)
+osmnx==1.9.4          # graph build (graph_from_xml) + consolidation + routing helpers
 networkx==3.1         # graph algorithms (Dijkstra, articulation points)
 geopandas==0.13.2     # census boundary / GeoJSON handling
 shapely==2.0.7        # geometry (core polygon, point-in-polygon)
@@ -30,10 +29,16 @@ pytz==2026.2          # timezone handling (ingest_counts.py)
 # Non-Python / external dependencies (not installable via pip):
 #
 #   * Docker            — runs the OSRM backend and generates the OSRM car
-#                         profile (simulation/build_osrm_profile.py).
+#                         profile (simulation/build_osrm_profile.py); also runs
+#                         osmium-tool (image auto-built from
+#                         simulation/osmium.Dockerfile) to stream the road-network
+#                         extract out of the NI .osm.pbf in build_network.py.
 #   * OSRM backend      — local instance at http://localhost:5000, built from
 #                         an NI extract with the biased car_roaaads.lua profile.
 #                         Required by simulation/build_external_links.py.
+#   * NI .osm.pbf       — ireland-and-northern-ireland-latest.osm.pbf (Geofabrik),
+#                         the OSM snapshot OSRM is built from; build_network.py
+#                         reads it via osmium (path in demographics_config.PBF_PATH).
 #
 # Large reference data files (gitignored, download separately — see CLAUDE.md):
 #   * data/2023-northern-ireland-traffic-count-data-in-ods-format.ods
