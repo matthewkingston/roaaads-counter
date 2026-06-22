@@ -54,6 +54,10 @@ SOUTH_BELFAST = (54.5620, -5.9500)
 
 GOOGLE_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
+# Drop /match results below this confidence — they produce garbage durations
+# (one feasibility OD came back at conf 7.6e-5 with a bogus matched time).
+CONF_MIN = 0.5
+
 
 # ── Geometry helpers ────────────────────────────────────────────────────────────
 
@@ -293,12 +297,11 @@ def main():
         print("\nNo Google calls made. Re-run without --dry-run to execute.")
         return
 
+    # Key is only needed for a live (cache-miss) call. Fully-cached re-runs (e.g.
+    # re-analysing alternatives) make zero API calls and need no key.
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
-    if not api_key:
-        print("ERROR: GOOGLE_MAPS_API_KEY not set in environment.")
-        sys.exit(1)
 
-    rows = []
+    rows = []          # one record per Google route (best + alternatives)
     n_api_calls = 0
     for label, lat1, lon1, lat2, lon2 in ods:
         ck = os.path.join(CACHE_DIR, cache_key(lat1, lon1, lat2, lon2, args.traffic))
@@ -307,6 +310,10 @@ def main():
                 gdata = json.load(f)
             cached = True
         else:
+            if not api_key:
+                print(f"  {label}: not cached and GOOGLE_MAPS_API_KEY not set — "
+                      f"skipping (no live call made).")
+                continue
             try:
                 gdata = google_routes(api_key, lat1, lon1, lat2, lon2, args.traffic)
             except urllib.error.HTTPError as e:
@@ -326,77 +333,84 @@ def main():
             print(f"  {label}: no Google route ({gdata})")
             continue
 
-        # Best route = first; alternatives = rest
-        best = groutes[0]
-        gdur = parse_google_duration(best["duration"])
-        gdist = best.get("distanceMeters", 0)
-        poly = best["polyline"]["encodedPolyline"]
-        gcoords = decode_polyline(poly)
-        gsamp = downsample_by_distance(gcoords)
-
-        # OSRM time along Google's chosen geometry
-        m = osrm_match(args.osrm_url, gsamp)
-        # OSRM's own chosen route
+        # OSRM's own chosen route (once per OD) — basis for route-overlap / TEends.
         r = osrm_route(args.osrm_url, lat1, lon1, lat2, lon2)
-
         if r is None:
             print(f"  {label}: OSRM /route failed")
             continue
         osrm_route_dur, osrm_route_dist, route_nodes = r
 
-        if m is None:
-            match_dur, match_nodes, conf, n_m = None, [], 0.0, 0
-        else:
-            match_dur, match_nodes, conf, n_m = m
+        # Match EVERY Google route (best + alternatives) — each is a free
+        # (geometry, duration) timing-calibration pair at no extra API cost.
+        for j, route in enumerate(groutes):
+            gdur = parse_google_duration(route["duration"])
+            gdist = route.get("distanceMeters", 0)
+            gcoords = decode_polyline(route["polyline"]["encodedPolyline"])
+            gsamp = downsample_by_distance(gcoords)
 
-        overlap = None
-        if match_nodes:
-            sm, sr = set(match_nodes), set(route_nodes)
-            overlap = len(sm & sr) / len(sm)
+            m = osrm_match(args.osrm_url, gsamp)
+            if m is None:
+                match_dur, match_nodes, conf, n_m = None, [], 0.0, 0
+            else:
+                match_dur, match_nodes, conf, n_m = m
 
-        te_matched  = (match_dur / gdur) if match_dur else None
-        te_endpoint = osrm_route_dur / gdur
+            te_matched = (match_dur / gdur) if match_dur else None
+            valid = (match_dur is not None) and (conf >= CONF_MIN)
 
-        rows.append({
-            "label": label, "cached": cached,
-            "google_dur": gdur, "google_dist": gdist, "n_alts": len(groutes),
-            "osrm_route_dur": osrm_route_dur, "osrm_route_dist": osrm_route_dist,
-            "osrm_match_dur": match_dur, "match_conf": conf, "n_matchings": n_m,
-            "te_matched": te_matched, "te_endpoint": te_endpoint,
-            "route_overlap": overlap,
-        })
+            # route-overlap & TEends only meaningful for the best route vs OSRM's own route
+            overlap = te_endpoint = None
+            if j == 0:
+                te_endpoint = osrm_route_dur / gdur
+                if match_nodes:
+                    sm, sr = set(match_nodes), set(route_nodes)
+                    overlap = len(sm & sr) / len(sm)
+
+            rows.append({
+                "label": label, "route_idx": j, "is_best": j == 0,
+                "cached": cached, "n_alts": len(groutes),
+                "google_dur": gdur, "google_dist": gdist,
+                "osrm_route_dur": osrm_route_dur if j == 0 else None,
+                "osrm_match_dur": match_dur, "match_conf": conf, "n_matchings": n_m,
+                "te_matched": te_matched, "te_matched_valid": valid,
+                "te_endpoint": te_endpoint, "route_overlap": overlap,
+            })
 
     # ── Report ──────────────────────────────────────────────────────────────
-    print(f"\n{n_api_calls} live Google calls; {len(rows)} OD rows\n")
-    hdr = (f"{'label':28s} {'gGoog':>6s} {'oMatch':>6s} {'oRoute':>6s} "
-           f"{'TEmatch':>7s} {'TEends':>7s} {'overlap':>7s} {'alts':>4s} {'conf':>5s}")
+    n_routes = len(rows)
+    n_valid = sum(1 for r in rows if r["te_matched_valid"])
+    n_ods = len({r["label"] for r in rows})
+    print(f"\n{n_api_calls} live Google calls; {n_routes} Google routes across "
+          f"{n_ods} OD pairs ({n_valid} passed conf>={CONF_MIN})\n")
+    hdr = (f"{'label':22s} {'rt':>2s} {'gGoog':>6s} {'oMatch':>6s} {'oRoute':>6s} "
+           f"{'TEmatch':>7s} {'TEends':>7s} {'overlap':>7s} {'conf':>5s}")
     print(hdr)
     print("-" * len(hdr))
-    def fmt(v, n=1):
-        return "  -  " if v is None else f"{v:.{n}f}"
+    def fmt(v, n=2):
+        return "   -  " if v is None else f"{v:.{n}f}"
     for r in rows:
-        print(f"{r['label']:28s} "
+        flag = "" if r["te_matched_valid"] else " <lowconf>"
+        print(f"{r['label']:22s} {r['route_idx']:2d} "
               f"{r['google_dur']/60:6.1f} "
               f"{(r['osrm_match_dur'] or 0)/60:6.1f} "
-              f"{r['osrm_route_dur']/60:6.1f} "
-              f"{fmt(r['te_matched'],2):>7s} {fmt(r['te_endpoint'],2):>7s} "
-              f"{fmt(r['route_overlap'],2):>7s} {r['n_alts']:4d} {fmt(r['match_conf'],2):>5s}")
-    print("\nColumns: gGoog/oMatch/oRoute = minutes (Google best / OSRM-on-Google-geometry / "
-          "OSRM own route).")
-    print("  TEmatch = oMatch/gGoog (pure time error, geometry controlled; <1 = OSRM too fast).")
-    print("  TEends  = oRoute/gGoog (includes route-choice difference).")
-    print("  overlap = frac of Google's matched OSM nodes OSRM's own route also uses (1=same roads).")
+              f"{(r['osrm_route_dur']/60) if r['osrm_route_dur'] else 0:6.1f} "
+              f"{fmt(r['te_matched']):>7s} {fmt(r['te_endpoint']):>7s} "
+              f"{fmt(r['route_overlap']):>7s} {fmt(r['match_conf']):>5s}{flag}")
+    print("\nrt = Google route index (0=best, 1+=alternative). gGoog/oMatch/oRoute = minutes.")
+    print("  TEmatch = oMatch/gGoog (pure time error per route; <1 = OSRM too fast).")
+    print("  TEends/overlap shown for best route only (vs OSRM's own route).")
+    print(f"  <lowconf> = /match confidence < {CONF_MIN}; excluded from aggregate.")
 
-    # Aggregate
-    tem = [r["te_matched"] for r in rows if r["te_matched"]]
+    # Aggregate over all confidence-valid routes (best + alternatives)
+    tem = sorted(r["te_matched"] for r in rows if r["te_matched_valid"])
     if tem:
-        tem.sort()
-        med = tem[len(tem)//2]
-        print(f"\nMatched-geometry time error (oMatch/gGoog): "
-              f"median {med:.2f}, min {min(tem):.2f}, max {max(tem):.2f}, n={len(tem)}")
+        med = tem[len(tem) // 2]
+        mean = sum(tem) / len(tem)
+        print(f"\nMatched-geometry time error over {len(tem)} valid routes (best+alts): "
+              f"median {med:.2f}, mean {mean:.2f}, min {min(tem):.2f}, max {max(tem):.2f}")
     n_match_fail = sum(1 for r in rows if r["osrm_match_dur"] is None)
-    print(f"OSRM /match failures: {n_match_fail}/{len(rows)} "
-          f"(feasibility check for stage-1 geometry matching)")
+    n_lowconf = n_routes - n_valid - n_match_fail
+    print(f"/match: {n_match_fail} hard failures, {n_lowconf} low-confidence "
+          f"(<{CONF_MIN}) out of {n_routes} routes")
 
     summ = os.path.join(CACHE_DIR, "feasibility_summary.json")
     with open(summ, "w") as f:
