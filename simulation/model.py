@@ -23,12 +23,26 @@ COUNT_SITES = [
 
 # Links present in link_aadt.json but excluded from calibration.
 # Directed: (u, v) excludes only that direction.
-EXCLUDE_LINKS = {(181844513, 181839481)}
+# The Westmount Park / Old Belfast Road links lie inside dead-end regions collapsed by
+# reduce_deadends.py (their endpoints are absorbed into super-nodes and no longer exist in
+# the reduced routing graph), so their observations are discarded from calibration. If the
+# dead-end reduction parameters change, regenerate this set from deadend_broken_obs.json.
+EXCLUDE_LINKS = {
+    (181844513, 181839481),
+    (448393355, 538253737), (538253737, 448393355),   # Westmount Park
+    (538253737, 7085530067), (7085530067, 538253737),  # Westmount Park
+    (540663959, 6620711226), (6620711226, 540663959),  # Old Belfast Road
+}
 
 # ── File paths ────────────────────────────────────────────────────────────────
+# Routing graph + node weights come from reduce_deadends.py (residential dead-ends
+# collapsed). build_demographics.py still writes the full node_weights.json and uses the
+# full consolidated graph; reduce_deadends.py reads those and writes the *_reduced.* files
+# consumed here, by build_paths.py, build_assignment.py and tune_assignment.py.
 
 PATHS_CACHE     = "simulation/newtownards_paths.npz"
-WEIGHTS_FILE    = "simulation/node_weights.json"
+WEIGHTS_FILE    = "simulation/node_weights_reduced.json"
+ROUTING_GRAPH   = "simulation/newtownards_reduced.graphml"
 TUNER_CONFIG    = "simulation/tuner_config.json"
 TUNED_PARAMS    = "simulation/tuned_params.json"
 LINK_AADT       = "data/link_aadt.json"

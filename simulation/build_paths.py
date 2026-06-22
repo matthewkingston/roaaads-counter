@@ -32,8 +32,10 @@ from scipy.sparse.csgraph import dijkstra
 
 from routing_config import HIGHWAY_COST_FACTOR
 
-CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
-WEIGHTS_FILE      = "simulation/node_weights.json"
+# Routing graph + weights are the dead-end-reduced artifacts from reduce_deadends.py
+# (run after build_demographics.py, before this script). See CLAUDE.md "Dead-end reduction".
+CONS_GRAPH        = "simulation/newtownards_reduced.graphml"
+WEIGHTS_FILE      = "simulation/node_weights_reduced.json"
 CENSUS_ZONES_FILE = "data/census_zones.json"
 EXTERNAL_LINKS    = "data/external_links.json"
 PATHS_CACHE       = "simulation/newtownards_paths.npz"

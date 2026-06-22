@@ -28,7 +28,7 @@ ALPHA  = 2.0    # tail decay exponent; flow ~ 1/d^ALPHA for large d
 BETA   = 1.0    # rise exponent; u^BETA approach to peak from origin
 
 OUT_DIR    = "simulation"
-CONS_GRAPH = "simulation/newtownards_consolidated.graphml"
+CONS_GRAPH = "simulation/newtownards_reduced.graphml"  # dead-end-reduced routing graph
 
 # ── Require paths cache ───────────────────────────────────────────────────────
 

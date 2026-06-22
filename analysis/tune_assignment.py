@@ -47,7 +47,7 @@ from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-CONS_GRAPH        = "simulation/newtownards_consolidated.graphml"
+CONS_GRAPH        = "simulation/newtownards_reduced.graphml"  # dead-end-reduced (street names)
 HISTORY_FILE      = "simulation/tuning_history.jsonl"
 CURVE_PNG         = "reports/gravity_model_curve.png"
 HOURLY_FRACS_FILE = "analysis/hourly_fractions.csv"
