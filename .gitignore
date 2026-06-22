@@ -26,3 +26,6 @@ reports/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Cached Google Maps API responses (Google ToS: keep local, never redistribute)
+data/google_cache/
