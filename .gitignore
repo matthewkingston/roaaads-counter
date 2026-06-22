@@ -8,6 +8,7 @@ simulation/*.geojson
 simulation/*.json
 simulation/*.osm
 simulation/*.osm.pbf
+simulation/*.o5m
 !simulation/tuner_config.json
 simulation/dz2021/DZ2021.geojson
 
@@ -21,3 +22,7 @@ data/*.xlsx
 
 # Generated reports (produced by report_tune.py and tune_assignment.py)
 reports/
+
+# Python bytecode
+__pycache__/
+*.pyc

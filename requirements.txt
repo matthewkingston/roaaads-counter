@@ -30,9 +30,10 @@ pytz==2026.2          # timezone handling (ingest_counts.py)
 #
 #   * Docker            — runs the OSRM backend and generates the OSRM car
 #                         profile (simulation/build_osrm_profile.py); also runs
-#                         osmium-tool (image auto-built from
-#                         simulation/osmium.Dockerfile) to stream the road-network
-#                         extract out of the NI .osm.pbf in build_network.py.
+#                         osmctools (osmconvert + osmfilter; image auto-built from
+#                         simulation/osmctools.Dockerfile) to stream the road-network
+#                         extract out of the NI .osm.pbf in build_network.py
+#                         (~0.5 GB RAM; osmium-tool needs several GB and is avoided).
 #   * OSRM backend      — local instance at http://localhost:5000, built from
 #                         an NI extract with the biased car_roaaads.lua profile.
 #                         Required by simulation/build_external_links.py.

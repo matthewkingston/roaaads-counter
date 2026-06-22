@@ -4,9 +4,10 @@ OSRM is built from) and produce Level-1 segments: one directed link per road
 between adjacent intersection nodes, with complex junctions (roundabouts,
 staggered crossings) consolidated into single nodes.
 
-A small drivable-highway extract is streamed out of the pbf with osmium-tool
-(Docker) before osmnx reads it, so the full ~400 MB island file is never parsed
-in process. Requires Docker (image auto-built from simulation/osmium.Dockerfile).
+A small drivable-highway extract is streamed out of the pbf with osmctools
+(osmconvert + osmfilter, via Docker) before osmnx reads it, so the full ~400 MB
+island file is never parsed in process (~0.5 GB peak). Requires Docker (image
+auto-built from simulation/osmctools.Dockerfile).
 
 Outputs (in the same directory):
   newtownards_nodes.geojson        — raw intersection nodes
@@ -35,18 +36,22 @@ OUT_DIR   = "simulation"
 
 CENSUS_ZONES_FILE = "data/census_zones.json"
 
-# osmium-tool Docker image used to stream a small extract out of the full NI pbf
-# (the 400 MB whole-Ireland file OOMs an in-process parse on modest RAM). Built
-# from simulation/osmium.Dockerfile; auto-built here on first run if absent.
-OSMIUM_IMAGE = "osmium-roaaads"
-OSMIUM_DOCKERFILE = os.path.join(os.path.dirname(__file__), "osmium.Dockerfile")
+# osmctools (osmconvert + osmfilter) Docker image used to stream a small extract
+# out of the full NI pbf (the 400 MB whole-Ireland file OOMs an in-process parse on
+# modest RAM). Built from simulation/osmctools.Dockerfile; auto-built on first run.
+# osmctools is used rather than osmium-tool because osmium sizes its referenced-node
+# id-set by OSM's max node id (~12e9), needing ~2-3+ GB regardless of extract area;
+# osmconvert/osmfilter size memory by the node count in the region (~0.5 GB here).
+OSM_TOOLS_IMAGE = "osmctools-roaaads"
+OSM_TOOLS_DOCKERFILE = os.path.join(os.path.dirname(__file__), "osmctools.Dockerfile")
 # Drivable highway values kept by the extract — the positive form of osmnx's
 # "drive" network filter (which excludes footway/cycleway/path/service/track/…).
-DRIVE_HIGHWAYS = ("motorway,motorway_link,trunk,trunk_link,primary,primary_link,"
-                  "secondary,secondary_link,tertiary,tertiary_link,unclassified,"
-                  "residential,living_street,road")
-_BBOX_PBF   = os.path.join(OUT_DIR, "_pbf_bbox_extract.osm.pbf")   # intermediate
-_DRIVE_OSM  = os.path.join(OUT_DIR, "_pbf_drive_extract.osm")      # intermediate (XML)
+DRIVE_HIGHWAYS = ["motorway", "motorway_link", "trunk", "trunk_link",
+                  "primary", "primary_link", "secondary", "secondary_link",
+                  "tertiary", "tertiary_link", "unclassified",
+                  "residential", "living_street", "road"]
+_BBOX_O5M   = os.path.join(OUT_DIR, "_pbf_bbox_extract.o5m")    # intermediate
+_DRIVE_OSM  = os.path.join(OUT_DIR, "_pbf_drive_extract.osm")   # intermediate (XML)
 
 # ── 1. Extract the road network from the local NI pbf ────────────────────────────
 # Source the graph from the same .osm.pbf OSRM is built from (one OSM snapshot →
@@ -56,12 +61,12 @@ _DRIVE_OSM  = os.path.join(OUT_DIR, "_pbf_drive_extract.osm")      # intermediat
 # external neighbours; 5 km is generous). The consolidated routing graph is still
 # clipped to the core polygon in step 3, so only the raw graph's extent grows.
 #
-# Two-step osmium pipeline (streaming, ~30 MB RAM — the whole pbf is never loaded
-# in process), then osmnx's native XML reader builds the graph exactly as the old
-# graph_from_point("drive") path did:
-#   osmium extract --bbox    → bbox.osm.pbf   (geographic clip of the snapshot)
-#   osmium tags-filter w/highway=<drive set> → drive.osm  (drivable highways + nodes)
-#   ox.graph_from_xml(drive.osm)             → simplified MultiDiGraph
+# Two-step osmctools pipeline (streaming, ~0.5 GB RAM — the whole pbf is never
+# loaded in process), then osmnx's native XML reader builds the graph exactly as
+# the old graph_from_point("drive") path did:
+#   osmconvert -b=<bbox> --complete-ways  → bbox.o5m  (geographic clip; ways completed)
+#   osmfilter --keep="highway=<drive set>" → drive.osm  (drivable highways + nodes)
+#   ox.graph_from_xml(drive.osm)          → simplified MultiDiGraph
 
 _to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
 _to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
@@ -89,10 +94,10 @@ def _docker_image_exists(image):
                           stderr=subprocess.DEVNULL).returncode == 0
 
 
-if not _docker_image_exists(OSMIUM_IMAGE):
-    print(f"  Building {OSMIUM_IMAGE} image (one-off) from {OSMIUM_DOCKERFILE} …")
-    subprocess.run(["docker", "build", "-f", OSMIUM_DOCKERFILE,
-                    "-t", OSMIUM_IMAGE, os.path.dirname(OSMIUM_DOCKERFILE)],
+if not _docker_image_exists(OSM_TOOLS_IMAGE):
+    print(f"  Building {OSM_TOOLS_IMAGE} image (one-off) from {OSM_TOOLS_DOCKERFILE} …")
+    subprocess.run(["docker", "build", "-f", OSM_TOOLS_DOCKERFILE,
+                    "-t", OSM_TOOLS_IMAGE, os.path.dirname(OSM_TOOLS_DOCKERFILE)],
                    check=True)
 
 _pbf_dir  = os.path.abspath(os.path.dirname(PBF_PATH))
@@ -101,19 +106,23 @@ _out_abs  = os.path.abspath(OUT_DIR)
 _uidgid   = f"{os.getuid()}:{os.getgid()}"
 _docker_pre = ["docker", "run", "--rm", "--user", _uidgid,
                "-v", f"{_pbf_dir}:/pbf:ro", "-v", f"{_out_abs}:/out",
-               OSMIUM_IMAGE]
+               OSM_TOOLS_IMAGE]
+# osmconvert/osmfilter write temp files next to a `-t=` prefix; point it at the
+# writable /out mount (the container cwd is not writable as a non-root user).
+_bbox_name  = os.path.basename(_BBOX_O5M)
+_drive_name = os.path.basename(_DRIVE_OSM)
 
-print(f"  osmium extract --bbox {_minx:.5f},{_miny:.5f},{_maxx:.5f},{_maxy:.5f} …")
+print(f"  osmconvert -b={_minx:.5f},{_miny:.5f},{_maxx:.5f},{_maxy:.5f} --complete-ways …")
 subprocess.run(_docker_pre + [
-    "extract", "--bbox", f"{_minx},{_miny},{_maxx},{_maxy}",
-    "--strategy", "smart", "--overwrite",
-    "-o", f"/out/{os.path.basename(_BBOX_PBF)}", f"/pbf/{_pbf_name}"], check=True)
+    "osmconvert", f"/pbf/{_pbf_name}",
+    f"-b={_minx},{_miny},{_maxx},{_maxy}", "--complete-ways",
+    "-t=/out/_osmconvert_tmp", f"-o=/out/{_bbox_name}"], check=True)
 
-print(f"  osmium tags-filter w/highway=<drive set> …")
+_keep = "highway=" + " =".join(DRIVE_HIGHWAYS)
+print(f"  osmfilter --keep=\"highway=<drive set>\" …")
 subprocess.run(_docker_pre + [
-    "tags-filter", "--overwrite",
-    "-o", f"/out/{os.path.basename(_DRIVE_OSM)}",
-    f"/out/{os.path.basename(_BBOX_PBF)}", f"w/highway={DRIVE_HIGHWAYS}"], check=True)
+    "osmfilter", f"/out/{_bbox_name}", "-t=/out/_osmfilter_tmp",
+    f"--keep={_keep}", f"-o=/out/{_drive_name}"], check=True)
 
 G = ox.graph_from_xml(_DRIVE_OSM, simplify=True, retain_all=False)
 # graph_from_xml does not populate the `street_count` node attribute that the
