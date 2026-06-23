@@ -31,6 +31,7 @@ import skeleton_model as sm         # noqa: E402
 
 REPO_ROOT = "/home/matthew/Documents/CodingFun/roaaads"
 SKELETONS_FILE = os.path.join(REPO_ROOT, "data", "google_cache", "skeletons.jsonl")
+BASE_SPEEDS_FILE = os.path.join(REPO_ROOT, "data", "google_cache", "base_speeds.json")
 
 
 def _ratio_pctiles(rows):
@@ -53,11 +54,16 @@ def main():
                     help="include invalid routes (low conf / off-coverage)")
     ap.add_argument("--coverage-buckets", type=int, default=20,
                     help="how many top buckets to print in the coverage table")
+    ap.add_argument("--no-empirical", action="store_true",
+                    help="ignore base_speeds.json; use analytical base speeds")
     args = ap.parse_args()
 
     if not os.path.exists(args.skeletons):
         sys.exit(f"ERROR: {args.skeletons} not found — run build_skeleton_index.py first.")
     skels = sm.load_skeletons(args.skeletons)
+
+    n_emp = 0 if args.no_empirical else ps.load_empirical_base_speeds(BASE_SPEEDS_FILE)
+    print(f"Base speeds: {'empirical (%d buckets)' % n_emp if n_emp else 'analytical'}")
 
     if args.legacy_factors:
         spec = sm.legacy_spec_from_highway_cost_factor()

@@ -34,9 +34,11 @@ this never clobbers production routing data.
 """
 
 import argparse
+import collections
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 
@@ -58,6 +60,7 @@ CACHE_DIR = os.path.join(REPO_ROOT, "data", "google_cache")
 RAW_DIR = os.path.join(CACHE_DIR, "raw")
 SKELETONS_FILE = os.path.join(CACHE_DIR, "skeletons.jsonl")
 SIGNALS_FILE = os.path.join(CACHE_DIR, "signal_nodes.json")
+BASE_SPEEDS_FILE = os.path.join(CACHE_DIR, "base_speeds.json")
 MANIFEST_FILE = os.path.join(CACHE_DIR, "od_manifest.json")
 
 OSMCTOOLS_IMAGE = "osmctools-roaaads"     # built by build_network.py
@@ -281,20 +284,112 @@ def build_skeletons(osrm_url):
           f"{n_valid} valid (conf>={CONF_MIN} & coverage in [{COVERAGE_LO},{COVERAGE_HI}])")
 
 
+def estimate_base_speeds(probe_url, speed_url, defactor, sample_n, min_obs):
+    """Measure OSRM's realised factor-free base speed per (class x band) bucket.
+
+    Per segment we need two facts: its bucket (from the probe's bucket-id speed
+    annotation) and OSRM's *realised* speed. The probe carries the bucket, so the
+    realised speed must come from a second instance:
+      * a factor-free STOCK car.lua -> annotation.speed is the base speed directly
+        (--no-defactor), or
+      * the deployed legacy :5000 -> annotation.speed has the class factor baked
+        in; recover the factor-free value as speed * HIGHWAY_COST_FACTOR[class]
+        (--defactor, the default).
+    Base speed is near-deterministic per bucket, so a sample of routes suffices.
+    Segments are paired by OSM edge (node pair), robust to small match
+    differences. Writes {bucket_key: km/h} (median per bucket) to base_speeds.json.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from routing_config import HIGHWAY_COST_FACTOR
+
+    ods = json.load(open(MANIFEST_FILE))["od_pairs"]
+    cached = [o for o in ods if os.path.exists(os.path.join(RAW_DIR, f"{o['od_id']}.json"))]
+    stride = max(1, len(cached) // sample_n)
+    sample = cached[::stride][:sample_n]
+    print(f"Estimating base speeds from {len(sample)} sampled routes")
+    print(f"  probe={probe_url}  speed={speed_url}  defactor={defactor}")
+
+    acc = collections.defaultdict(list)        # bucket_key -> [km/h]
+    n_routes = n_pairs = n_skip = 0
+    for o in sample:
+        raw = json.load(open(os.path.join(RAW_DIR, f"{o['od_id']}.json")))
+        for route in raw.get("routes", [])[:1]:   # best route is plenty for sampling
+            coords = downsample_by_distance(
+                decode_polyline(route["polyline"]["encodedPolyline"]))
+            pdet = osrm_match_detail(probe_url, coords)
+            sdet = osrm_match_detail(speed_url, coords)
+            if pdet is None or sdet is None:
+                n_skip += 1
+                continue
+            # realised speed keyed by OSM edge (node pair)
+            smap = {}
+            sn, ss = sdet["nodes"], sdet["speeds"]
+            for i in range(min(len(sn) - 1, len(ss))):
+                smap[(sn[i], sn[i + 1])] = ss[i]
+            pn, pspd = pdet["nodes"], pdet["speeds"]
+            for i in range(min(len(pn) - 1, len(pspd))):
+                bk = ps.bucket_from_probe_speed(pspd[i] * 3.6)
+                if bk is None:
+                    continue
+                v = smap.get((pn[i], pn[i + 1]))
+                if v is None:
+                    continue
+                v_kmh = v * 3.6
+                if defactor:
+                    v_kmh *= HIGHWAY_COST_FACTOR.get(bk[0], 1.0)
+                if v_kmh <= 0:
+                    continue
+                acc[ps.bucket_key(*bk)].append(v_kmh)
+                n_pairs += 1
+            n_routes += 1
+
+    base = {k: round(statistics.median(v), 2)
+            for k, v in acc.items() if len(v) >= min_obs}
+    with open(BASE_SPEEDS_FILE, "w") as f:
+        json.dump(base, f, indent=2, sort_keys=True)
+    print(f"\nWrote {BASE_SPEEDS_FILE}")
+    print(f"  {n_routes} routes paired, {n_pairs} segment samples, {n_skip} skipped")
+    print(f"  {len(base)} buckets with >= {min_obs} obs "
+          f"({len(acc) - len(base)} buckets too sparse -> analytical fallback)")
+    # quick compare to the analytical estimate for a few high-coverage buckets
+    top = sorted(acc.items(), key=lambda kv: -len(kv[1]))[:8]
+    print("  bucket                 emp km/h  analytic  n")
+    for k, v in top:
+        cls, band = k.split("|", 1)
+        print(f"  {k:22} {statistics.median(v):7.1f}  "
+              f"{ps.base_speed_for(cls, band):7.1f}  {len(v)}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gen-probe", action="store_true",
                     help="generate car_probe.lua + print the probe-build commands")
     ap.add_argument("--signals", action="store_true",
                     help="extract the traffic-signal node-id set from the pbf")
+    ap.add_argument("--base-speeds", action="store_true",
+                    help="measure empirical per-bucket base speeds (dual match)")
     ap.add_argument("--osrm-url", default="http://localhost:5001",
                     help="probe OSRM server (default :5001, separate from deployed :5000)")
+    ap.add_argument("--speed-url", default="http://localhost:5000",
+                    help="real-speed OSRM for --base-speeds (deployed legacy :5000, "
+                         "or a factor-free stock instance with --no-defactor)")
+    ap.add_argument("--no-defactor", dest="defactor", action="store_false",
+                    help="speed-url is already factor-free (stock); skip the "
+                         "HIGHWAY_COST_FACTOR division")
+    ap.add_argument("--sample", type=int, default=400,
+                    help="routes to sample for --base-speeds")
+    ap.add_argument("--min-obs", type=int, default=5,
+                    help="min segment samples to trust a bucket's empirical speed")
+    ap.set_defaults(defactor=True)
     args = ap.parse_args()
 
     if args.gen_probe:
         gen_probe()
     elif args.signals:
         extract_signals()
+    elif args.base_speeds:
+        estimate_base_speeds(args.osrm_url, args.speed_url, args.defactor,
+                             args.sample, args.min_obs)
     else:
         build_skeletons(args.osrm_url)
 

@@ -25,6 +25,7 @@ on the same (class, band) pair this module defines.
 """
 
 import json
+import os
 import re
 
 # ── Road-class axis (full DRIVE_HIGHWAYS classification + fallbacks) ──────────
@@ -141,11 +142,38 @@ def bucket_from_probe_speed(speed_kmh):
     return bucket_from_index(idx)
 
 
+# Empirical base-speed override (km/h per bucket_key), measured from real OSRM
+# by build_skeleton_index.py --base-speeds. When loaded, it replaces the
+# analytical estimate below for any bucket it covers — capturing OSRM's actual
+# realised forward_speed (nsl resolution, surface caps, default_speed, the 0.8
+# reduction, …) which the analytical formula only approximates.
+_EMPIRICAL_BASE = {}
+
+
+def load_empirical_base_speeds(path):
+    """Load a {bucket_key: km/h} override table; absent/None -> analytical only.
+    Returns the number of buckets loaded."""
+    global _EMPIRICAL_BASE
+    if path and os.path.exists(path):
+        with open(path) as f:
+            _EMPIRICAL_BASE = {k: float(v) for k, v in json.load(f).items()}
+    else:
+        _EMPIRICAL_BASE = {}
+    return len(_EMPIRICAL_BASE)
+
+
 def base_speed_for(cls, band):
     """Base speed (km/h) OSRM assigns to a bucket *before* any factor.
 
-    untagged/other -> class base table; a tagged mph band -> mph*1.609*0.8,
-    mirroring OSRM's WayHandlers.maxspeed (which overrides the class base)."""
+    Prefers the measured empirical value when loaded; otherwise the analytical
+    estimate: untagged/other -> class base table; a tagged mph band ->
+    mph*1.609*0.8, mirroring OSRM's WayHandlers.maxspeed (which overrides the
+    class base). The analytical form misses nsl/advisory/source maxspeed and
+    surface caps — hence the empirical override."""
+    if _EMPIRICAL_BASE:
+        v = _EMPIRICAL_BASE.get(bucket_key(cls, band))
+        if v:
+            return v
     if band in ("untagged", "other"):
         return float(STOCK_SPEED_KMH.get(cls, STOCK_SPEED_KMH["other"]))
     return float(band) * MPH_KMH * SPEED_REDUCTION

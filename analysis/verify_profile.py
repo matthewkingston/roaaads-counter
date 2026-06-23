@@ -38,6 +38,7 @@ REPO_ROOT = "/home/matthew/Documents/CodingFun/roaaads"
 CACHE_DIR = os.path.join(REPO_ROOT, "data", "google_cache")
 RAW_DIR = os.path.join(CACHE_DIR, "raw")
 SKELETONS_FILE = os.path.join(CACHE_DIR, "skeletons.jsonl")
+BASE_SPEEDS_FILE = os.path.join(CACHE_DIR, "base_speeds.json")
 
 
 def _median(xs):
@@ -65,6 +66,8 @@ def main():
     else:
         sys.exit("ERROR: pass --spec or --legacy-factors.")
 
+    n_emp = ps.load_empirical_base_speeds(BASE_SPEEDS_FILE)
+    print(f"Base speeds: {'empirical (%d buckets)' % n_emp if n_emp else 'analytical'}")
     skels = [s for s in sm.load_skeletons(args.skeletons) if s.get("valid")]
     by_key = {(s["od_id"], s["route_idx"]): s for s in skels}
 
