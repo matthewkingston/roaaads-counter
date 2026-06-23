@@ -167,6 +167,54 @@ def _turns(maneuvers):
     return turns
 
 
+def _read_jsonl(path):
+    """Load a skeletons jsonl into {(od_id, route_idx): record}, tolerating a
+    partial/corrupt trailing line left by an interrupted run."""
+    recs = {}
+    if not os.path.exists(path):
+        return recs
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                recs[(r["od_id"], r["route_idx"])] = r
+            except (json.JSONDecodeError, KeyError):
+                continue
+    return recs
+
+
+def _consolidate_existing():
+    """Merge any prior skeletons.jsonl + a leftover .tmp into one clean file and
+    return the set of (od_id, route_idx) already done. Salvages progress from an
+    interrupted earlier run — including the old non-resumable .tmp, which the
+    previous code wrote to line-by-line before its final atomic rename."""
+    tmp_old = SKELETONS_FILE + ".tmp"
+    merged = _read_jsonl(SKELETONS_FILE)
+    salvaged = 0
+    if os.path.exists(tmp_old):
+        for key, rec in _read_jsonl(tmp_old).items():
+            if key not in merged:
+                merged[key] = rec
+                salvaged += 1
+    if merged:
+        reb = SKELETONS_FILE + ".rebuild"
+        with open(reb, "w") as f:
+            for rec in merged.values():
+                f.write(json.dumps(rec) + "\n")
+        os.replace(reb, SKELETONS_FILE)
+    if os.path.exists(tmp_old):
+        os.remove(tmp_old)          # consumed; a new resumable run never recreates it
+    if merged:
+        msg = f"Resuming: {len(merged)} routes already done"
+        if salvaged:
+            msg += f" ({salvaged} salvaged from an interrupted .tmp)"
+        print(msg)
+    return set(merged)
+
+
 def build_skeletons(osrm_url):
     if not os.path.exists(MANIFEST_FILE):
         sys.exit(f"ERROR: {MANIFEST_FILE} not found — run build_od_manifest.py first.")
@@ -182,20 +230,24 @@ def build_skeletons(osrm_url):
     cached = [o for o in ods if os.path.exists(os.path.join(RAW_DIR, f"{o['od_id']}.json"))]
     print(f"Map-matching {len(cached)} cached ODs through probe at {osrm_url} …")
 
-    n_routes = n_valid = n_matchfail = 0
-    tmp = SKELETONS_FILE + ".tmp"
-    with open(tmp, "w") as out:
+    # Resumable: skip routes already cached; append each completed route durably
+    # (line-buffered) so a crash/kill loses at most the in-flight route.
+    done = _consolidate_existing()
+    n_new = n_matchfail = 0
+    out = open(SKELETONS_FILE, "a", buffering=1)
+    try:
         for k, o in enumerate(cached):
             raw = json.load(open(os.path.join(RAW_DIR, f"{o['od_id']}.json")))
             for j, route in enumerate(raw.get("routes", [])):
+                if (o["od_id"], j) in done:
+                    continue
                 gdur = float(str(route["duration"]).rstrip("s"))
                 gdist = route.get("distanceMeters", 0) or 0
                 coords = downsample_by_distance(
                     decode_polyline(route["polyline"]["encodedPolyline"]))
                 det = osrm_match_detail(osrm_url, coords)
-                n_routes += 1
                 if det is None:
-                    n_matchfail += 1
+                    n_matchfail += 1          # not recorded -> retried next run
                     continue
                 lbb, unbk = _bucket_lengths(det["speeds"], det["distances"])
                 matched_m = sum(lbb.values()) + unbk
@@ -203,7 +255,6 @@ def build_skeletons(osrm_url):
                 n_sig = sum(1 for nid in det["nodes"] if nid in signals)
                 valid = (det["conf"] >= CONF_MIN and coverage is not None
                          and COVERAGE_LO <= coverage <= COVERAGE_HI)
-                n_valid += valid
                 out.write(json.dumps({
                     "od_id": o["od_id"], "route_idx": j,
                     "leg_type": o["leg_type"], "len_band": o["len_band"],
@@ -216,12 +267,18 @@ def build_skeletons(osrm_url):
                     "n_signals": n_sig,
                     "turns": _turns(det["maneuvers"]),
                 }) + "\n")
+                done.add((o["od_id"], j))
+                n_new += 1
             if (k + 1) % 100 == 0:
-                print(f"  {k + 1}/{len(cached)} ODs")
-    os.replace(tmp, SKELETONS_FILE)
+                print(f"  {k + 1}/{len(cached)} ODs ({n_new} new this run)")
+    finally:
+        out.close()
+
+    final = _read_jsonl(SKELETONS_FILE)
+    n_valid = sum(1 for r in final.values() if r.get("valid"))
     print(f"\nWrote {SKELETONS_FILE}")
-    print(f"  {n_routes} routes, {n_valid} valid (conf>={CONF_MIN} & coverage in "
-          f"[{COVERAGE_LO},{COVERAGE_HI}]), {n_matchfail} match-fail")
+    print(f"  {len(final)} routes total ({n_new} new this run, {n_matchfail} match-fail), "
+          f"{n_valid} valid (conf>={CONF_MIN} & coverage in [{COVERAGE_LO},{COVERAGE_HI}])")
 
 
 def main():

@@ -34,8 +34,18 @@ _UNBUCKETED_BASE_KMH = ps.STOCK_SPEED_KMH["unclassified"]
 
 
 def load_skeletons(path):
+    out = []
     with open(path) as f:
-        return [json.loads(line) for line in f if line.strip()]
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                sys.stderr.write(f"WARNING: skipping malformed line in {path} "
+                                 f"(likely a partial write from an interrupted run)\n")
+    return out
 
 
 def _turn_cost(angle, degree, uturn, turn):
