@@ -117,10 +117,12 @@ def extract_signals():
 
     if not os.path.exists(o5m):
         print("Converting pbf -> o5m (osmconvert, streaming) …")
-        _docker(f"osmconvert /data/{PBF_NAME} -o=/out/ni.o5m")
+        _docker(f"osmconvert /data/{PBF_NAME} -t=/out/_osmconvert_tmp -o=/out/ni.o5m")
     print("Filtering highway=traffic_signals nodes (osmfilter) …")
-    _docker('osmfilter /out/ni.o5m --keep="highway=traffic_signals" '
-            '--ignore-dependencies -o=/out/signals.osm')
+    # -t= points osmfilter's temp files at the writable /out mount; the container
+    # cwd is not writable as a non-root user (matches build_network.py).
+    _docker('osmfilter /out/ni.o5m -t=/out/_osmfilter_tmp '
+            '--keep="highway=traffic_signals" --ignore-dependencies -o=/out/signals.osm')
 
     ids = set()
     node_re = re.compile(r'<node[^>]*\bid="(\d+)"')
