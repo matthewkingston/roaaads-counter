@@ -83,6 +83,13 @@ than restart.
 | `analysis/google_feasibility.py` | **NEW (Google calibration — pilot).** One-shot feasibility experiment: a small hardcoded data-driven OD sample → Google Routes, decode polyline, OSRM `/match` (time error on Google's geometry) vs OSRM `/route` (route-choice divergence). Matches best route + all alternatives; caches raw responses in `data/google_cache/`. `--dry-run` makes no API calls; key only needed on a live cache-miss. Superseded for production sampling by `build_od_manifest.py` + `google_query_routes.py`, kept as the reference pilot. |
 | `analysis/build_od_manifest.py` | **NEW (Google calibration).** Writes the fixed, deterministic (seed 20260622), model-aligned, length-skewed OD sample → `data/google_cache/od_manifest.json`. **Makes NO API/OSRM calls** — reads only `census_zones.json`, `external_links.json`, `node_weights.json`, and the raw graph. Leg types + default quotas (of `--n`, default 1000): X2B 45% (external centroid→boundary entry), X2X 25% (allowlisted through-routes), B2X 15% (boundary→external), INT 15% (internal→internal, for in-town junction realism). Within each leg type, 4 length quartile-bands allocated with a long-skew (`BAND_WEIGHTS` 0.15/0.20/0.30/0.35); X2B/B2X length = model `duration_s`, X2X/INT length = haversine. Road-class×speed-band coverage is **emergent in v1** (not stratified on realised road mix — check after a first batch; possible refinement = pre-route candidates with local OSRM). |
 | `analysis/google_query_routes.py` | **NEW (Google calibration — runner).** Crash-safe, resumable runner over `od_manifest.json`. **Phase A (spendy, resumable):** queries each uncached OD and writes its raw Google response to `data/google_cache/raw/<od_id>.json` **atomically and immediately** (temp+rename), so a crash loses at most the in-flight query; re-running skips cached ODs; `--limit N` caps queries per run to batch spend. **Phase B (free, idempotent):** rebuilds `data/google_cache/results.jsonl` by running OSRM `/match` over all cached raw responses (best + alternatives) + OSRM `/route` per OD — no API calls, re-run any time via `--reprocess-only`. `--dry-run` reports counts/cost with no spend. **Refuses to start Phase A without `GOOGLE_MAPS_API_KEY`, and a live run requires explicit per-run user approval (see Agent Behaviour).** |
+| `simulation/profile_spec.py` | **NEW (profile calibration — single source of truth).** Pure-stdlib definition of a calibrated OSRM time profile: a grid of multiplicative speed **factors** per `(highway_class × speed_band)` bucket (full `DRIVE_HIGHWAYS` classification × NI mph bands `{untagged,20,30,40,50,60,70,other}`) + the four global turn params (`turn_penalty`, `traffic_light_penalty`, `u_turn_penalty`, `turn_bias`). `factor=1.0` = stock-OSRM base speed; `factor>1 ⇒ slower` (OSRM is currently too fast). Holds the bucketisation (`norm_class`/`parse_band`/`bucket_of`/`bucket_index`), the stock base-speed table, `base_speed_for`, and `ProfileSpec` (JSON load/save). **Replaces `routing_config.py`/`HIGHWAY_COST_FACTOR` for the calibration work** (the old module still feeds `build_paths.py`/`build_osrm_profile.py` until a calibrated profile is adopted). Imported by both the stdlib `analysis/` tooling and the simulation-side Lua generators, so the offline model and the emitted Lua key on the *same* buckets. |
+| `simulation/osrm_lua.py` | **NEW (profile calibration).** Shared OSRM car.lua/Docker plumbing: `pull_base_lua`, `copy_lib`, the 3-strategy injection-point `find_injection_point`/`inject` (refactored out of `build_osrm_profile.py`), and the Lua emitters `emit_probe_block` (encodes each way's integer bucket id as its speed) + `emit_factor_block(spec)` (divides speed by the tuned per-bucket factor) + `apply_turn_overrides`. The bucket-index Lua is generated from `profile_spec`'s `CLASSES`/`BANDS`, so probe, compiled profile, and the Python offline model can never disagree about a way's bucket. |
+| `simulation/build_skeleton_index.py` | **NEW (profile calibration — one-time skeleton builder).** Turns the Google cache into the profile-independent `data/google_cache/skeletons.jsonl`. Three phases: `--gen-probe` writes `car_probe.lua` into a **separate** OSRM data dir (`…/osrm/probe`, served on **:5001**, never clobbers deployed :5000) and prints its build commands; `--signals` extracts the `highway=traffic_signals` node-id set from the pbf via the existing `osmctools-roaaads` Docker image → `signal_nodes.json` (no pyosmium/new dep); default phase `/match`es every cached Google route through the probe server (`osrm_match_detail`) and records per route: `length_by_bucket` (segment metres per bucket, from the probe `speed` + `distance` annotations), `turns` (angle+degree+uturn from steps), `n_signals` (matched nodes ∩ signal set), `g_dur`, `conf`, `coverage`, `valid`. |
+| `analysis/skeleton_model.py` | **NEW (profile calibration — fast offline model).** Pure-stdlib `predict_duration(skel, spec)` = `Σ_bucket factor·length·3.6/base_speed` (edge) + OSRM-style turn sigmoid (gated on degree>2 / u-turn, NI left-hand bias) + `n_signals·traffic_light_penalty`. `evaluate(skeletons, spec)` scores against Google with squared-log-ratio loss, **equal weight per valid route** (conf≥0.5 & coverage in-band), and returns per-leg-type / per-(leg×band) diagnostics. `bucket_coverage` (factor identifiability) and `legacy_spec_from_highway_cost_factor` (deployed-profile reference) included. Milliseconds for the whole cache — no OSRM/Docker. |
+| `analysis/eval_profile.py` | **NEW (profile calibration — benchmark entrypoint).** Scores a `ProfileSpec` JSON (default all-1.0 stock; `--spec`; `--legacy-factors`) against `skeletons.jsonl`: aggregate loss, predicted/Google ratio distribution, per-leg-type + per-cell breakdown, per-bucket coverage table, turn-time fraction. No spend. `--legacy-factors` is the faithfulness sanity check (should track the deployed `te_matched`). |
+| `simulation/compile_profile.py` | **NEW (profile calibration — compiler).** `tuned_profile.json` (a `ProfileSpec`) → deployable `car_roaaads.lua`: applies tuned turn params in `setup()`, injects `emit_factor_block`, copies `lib/`, prints the re-extract/partition/customize commands for the deployed :5000 instance. |
+| `analysis/verify_profile.py` | **NEW (profile calibration — fidelity gate).** After the deployed OSRM is rebuilt from a compiled profile, `/match`es a validation subset through real OSRM (:5000) and compares real `match_dur` to `predict_duration(skel, spec)`. **Gate:** per-leg median `predict/real` ∈ [0.98,1.02] **and** p90 |resid| < `--gate-resid` (default 0.05). Exits non-zero on fail — do not trust the fast loop / adopt the profile until it passes. Read-only, no Google calls. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
@@ -95,8 +102,11 @@ than restart.
 `data/google_cache/` — **gitignored** (Google ToS: cached responses kept local, never
 committed/redistributed). Holds `od_manifest.json` (the fixed OD sample), `raw/<od_id>.json`
 (one raw Google response per OD — the resumable cache and re-processing source of truth),
-and `results.jsonl` (derived OSRM-match metrics, rebuilt for free from `raw/`). Survives
-worktree removal (lives in the main checkout); only at risk from `git clean -xfd` or manual `rm`.
+`results.jsonl` (derived OSRM-match metrics, rebuilt for free from `raw/`), `skeletons.jsonl`
+(profile-independent route skeletons from `build_skeleton_index.py` — the fast-benchmark cache),
+and `signal_nodes.json` (traffic-signal node-id set). Survives worktree removal (lives in the
+main checkout); only at risk from `git clean -xfd` or manual `rm`. The probe OSRM instance and
+`simulation/tuned_profile.json` (a candidate `ProfileSpec`, gitignored) are also generated.
 
 ### Tracked generated outputs
 `data/counts_processed.json`, `data/link_aadt.json`, `data/official_hourly.json`,
@@ -412,6 +422,37 @@ idempotent. Time basis is **free-flow** (`TRAFFIC_UNAWARE`) to match the daily-a
 model. Outputs live in the gitignored `data/google_cache/` (see Generated/gitignored outputs).
 Decisions, feasibility numbers, and design rationale are tracked in the agent memory note
 `project_google_routing_calibration`.
+
+**Profile benchmark + compile pipeline (decouples impedance from route preference).**
+The calibrated profile is a grid of per-`(road-class × speed-band)` multiplicative speed
+factors + global turn costs (`simulation/profile_spec.py`). Benchmarking a candidate profile
+must be **fast** (a real OSRM re-extract is ~15-25 min, far too slow per tuning step), so a
+one-time *skeleton* pass decouples map-matching from scoring: each Google route is matched once
+through a **probe profile** that encodes each way's bucket id as its speed, yielding a
+profile-independent skeleton (per-bucket metres + turn features + signal count). A pure-Python
+model then re-scores any profile against the whole cache in milliseconds.
+```
+# One-time skeleton build (probe OSRM is SEPARATE from deployed :5000; uses :5001):
+python3 simulation/build_skeleton_index.py --gen-probe   # write car_probe.lua + build cmds
+#   ... run the printed osrm-extract/partition/customize, serve probe on :5001 ...
+python3 simulation/build_skeleton_index.py --signals     # traffic_signals node set (osmctools)
+python3 simulation/build_skeleton_index.py --osrm-url http://localhost:5001   # → skeletons.jsonl
+
+# Fast offline benchmark (no OSRM/Docker/spend) — score any candidate profile:
+python3 analysis/eval_profile.py                         # stock (all factors 1.0)
+python3 analysis/eval_profile.py --legacy-factors        # faithfulness check vs deployed profile
+python3 analysis/eval_profile.py --spec simulation/tuned_profile.json
+
+# Deploy + fidelity gate (once per accepted profile):
+python3 simulation/compile_profile.py --spec simulation/tuned_profile.json   # → car_roaaads.lua
+#   ... rebuild the DEPLOYED :5000 OSRM with the printed commands ...
+python3 analysis/verify_profile.py --spec simulation/tuned_profile.json      # gate before adopting
+```
+Scoring uses a squared-log-ratio loss, equal weight per valid route (no `1/n_alts`); per-leg
+and per-bucket breakdowns are diagnostics only. The **auto-tuner is not built yet** — the above
+is the manual benchmark + compile/verify pipeline the tuner will drive. The verify gate is the
+contract that lets the fast loop be trusted before any tuned `car_roaaads.lua` is adopted (then
+re-run the downstream chain: `build_external_links → reduce_deadends → build_paths → tune_assignment`).
 
 ---
 

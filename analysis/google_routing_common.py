@@ -120,6 +120,59 @@ def osrm_match(base_url, coords, radius_m=40):
     return total_dur, nodes, conf, len(data["matchings"])
 
 
+def osrm_match_detail(base_url, coords, radius_m=40):
+    """Richer map-match for profile calibration. Same matched geometry as
+    osrm_match() but also returns the per-segment `distance`/`speed` annotations
+    and the per-maneuver turn descriptors parsed from steps. Returns a dict:
+
+        {"duration", "conf", "n_matchings",
+         "nodes":     [osm_node_id, ...]            (len = n_segments + n_legs),
+         "distances": [metres, ...]  per segment,
+         "speeds":    [m/s, ...]     per segment,
+         "maneuvers": [{"angle": signed deg or None, "degree": int,
+                        "type": str, "modifier": str|None}, ...]}
+
+    or None on failure. `angle` is the signed heading change at the turn
+    (0 = straight, +-180 = reverse); `degree` is the junction's road count
+    (len of the maneuver intersection's bearings). depart/arrive are excluded.
+    """
+    pts = ";".join(f"{lon},{lat}" for lat, lon in coords)
+    radii = ";".join(str(radius_m) for _ in coords)
+    path = (f"/match/v1/driving/{pts}"
+            f"?annotations=nodes,duration,distance,speed&overview=false"
+            f"&geometries=geojson&gaps=ignore&tidy=true&steps=true&radiuses={radii}")
+    try:
+        data = osrm_get(base_url, path)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+    if data.get("code") != "Ok" or not data.get("matchings"):
+        return None
+    total_dur = 0.0
+    nodes, dist, spd, confs, maneuvers = [], [], [], [], []
+    for m in data["matchings"]:
+        confs.append(m.get("confidence", 0.0))
+        for leg in m.get("legs", []):
+            ann = leg.get("annotation", {})
+            total_dur += sum(ann.get("duration", []))
+            nodes.extend(ann.get("nodes", []))
+            dist.extend(ann.get("distance", []))
+            spd.extend(ann.get("speed", []))
+            for st in leg.get("steps", []):
+                mv = st.get("maneuver", {})
+                typ = mv.get("type")
+                if typ in ("depart", "arrive"):
+                    continue
+                bb, ba = mv.get("bearing_before"), mv.get("bearing_after")
+                angle = (((ba - bb + 180) % 360) - 180) if (bb is not None and ba is not None) else None
+                inter = st.get("intersections") or [{}]
+                degree = len(inter[0].get("bearings", []) or [])
+                maneuvers.append({"angle": angle, "degree": degree,
+                                  "type": typ, "modifier": mv.get("modifier")})
+    conf = sum(confs) / len(confs) if confs else 0.0
+    return {"duration": total_dur, "conf": conf, "n_matchings": len(data["matchings"]),
+            "nodes": nodes, "distances": dist, "speeds": spd, "maneuvers": maneuvers}
+
+
 # ── Google Routes API ─────────────────────────────────────────────────────────
 
 def google_routes(api_key, lat1, lon1, lat2, lon2, traffic=False, departure_iso=None):
