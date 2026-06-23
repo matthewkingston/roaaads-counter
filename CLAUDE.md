@@ -104,7 +104,9 @@ committed/redistributed). Holds `od_manifest.json` (the fixed OD sample), `raw/<
 (one raw Google response per OD — the resumable cache and re-processing source of truth),
 `results.jsonl` (derived OSRM-match metrics, rebuilt for free from `raw/`), `skeletons.jsonl`
 (profile-independent route skeletons from `build_skeleton_index.py` — the fast-benchmark cache),
-and `signal_nodes.json` (traffic-signal node-id set). Survives worktree removal (lives in the
+`signal_nodes.json` (traffic-signal node-id set), and `base_speeds.json` (empirical realised
+per-`(class×band)` base speeds from `--base-speeds`; auto-loaded by the offline model, overrides
+the analytical estimate). Survives worktree removal (lives in the
 main checkout); only at risk from `git clean -xfd` or manual `rm`. The probe OSRM instance and
 `simulation/tuned_profile.json` (a candidate `ProfileSpec`, gitignored) are also generated.
 
@@ -437,6 +439,12 @@ python3 simulation/build_skeleton_index.py --gen-probe   # write car_probe.lua +
 #   ... run the printed osrm-extract/partition/customize, serve probe on :5001 ...
 python3 simulation/build_skeleton_index.py --signals     # traffic_signals node set (osmctools)
 python3 simulation/build_skeleton_index.py --osrm-url http://localhost:5001   # → skeletons.jsonl
+
+# Empirical base speeds (closes the offline↔real gap): dual match — probe :5001 for the
+# bucket, a real-speed OSRM for OSRM's realised forward_speed — median per bucket. Needs
+# the deployed legacy :5000 up too (recovers factor-free speed via ×HIGHWAY_COST_FACTOR);
+# or point --speed-url at a factor-free stock instance with --no-defactor. → base_speeds.json
+python3 simulation/build_skeleton_index.py --base-speeds  # samples ~800 routes; eval/verify auto-load
 
 # Fast offline benchmark (no OSRM/Docker/spend) — score any candidate profile:
 python3 analysis/eval_profile.py                         # stock (all factors 1.0)

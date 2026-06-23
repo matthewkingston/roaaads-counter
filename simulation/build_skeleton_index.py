@@ -376,8 +376,9 @@ def main():
     ap.add_argument("--no-defactor", dest="defactor", action="store_false",
                     help="speed-url is already factor-free (stock); skip the "
                          "HIGHWAY_COST_FACTOR division")
-    ap.add_argument("--sample", type=int, default=400,
-                    help="routes to sample for --base-speeds")
+    ap.add_argument("--sample", type=int, default=800,
+                    help="routes to sample for --base-speeds (more = tighter "
+                         "medians on thin/untagged buckets)")
     ap.add_argument("--min-obs", type=int, default=5,
                     help="min segment samples to trust a bucket's empirical speed")
     ap.set_defaults(defactor=True)
