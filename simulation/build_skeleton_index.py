@@ -105,10 +105,15 @@ def extract_signals():
     sig_osm = os.path.join(PROBE_DIR, "signals.osm")
     os.makedirs(PROBE_DIR, exist_ok=True)
 
+    uidgid = f"{os.getuid()}:{os.getgid()}"
+
     def _docker(cmd):
-        subprocess.run(["docker", "run", "--rm", "-v", f"{OSRM_ROOT}:/data",
-                        "-v", f"{PROBE_DIR}:/out", OSMCTOOLS_IMAGE, "sh", "-c", cmd],
-                       check=True)
+        # Run as the host user (like build_network.py) so osmconvert/osmfilter
+        # outputs are owned by us and readable back; without --user the container
+        # writes them root-owned mode 600.
+        subprocess.run(["docker", "run", "--rm", "--user", uidgid,
+                        "-v", f"{OSRM_ROOT}:/data", "-v", f"{PROBE_DIR}:/out",
+                        OSMCTOOLS_IMAGE, "sh", "-c", cmd], check=True)
 
     if not os.path.exists(o5m):
         print("Converting pbf -> o5m (osmconvert, streaming) …")
