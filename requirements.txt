@@ -33,7 +33,13 @@ pytz==2026.2          # timezone handling (ingest_counts.py)
 #                         osmctools (osmconvert + osmfilter; image auto-built from
 #                         simulation/osmctools.Dockerfile) to stream the road-network
 #                         extract out of the NI .osm.pbf in build_network.py
-#                         (~0.5 GB RAM; osmium-tool needs several GB and is avoided).
+#                         (~0.5 GB RAM; osmium-tool needs several GB and is avoided),
+#                         and to extract the traffic-signal node set for the
+#                         Google profile calibration (build_skeleton_index.py
+#                         --signals). The Google profile benchmark/compile tooling
+#                         (profile_spec, osrm_lua, build_skeleton_index, skeleton_model,
+#                         eval_profile, compile_profile, verify_profile) adds NO new
+#                         pip dependency — pure stdlib + the existing Docker/OSRM stack.
 #   * OSRM backend      — local instance at http://localhost:5000, built from
 #                         an NI extract with the biased car_roaaads.lua profile.
 #                         Required by simulation/build_external_links.py.
