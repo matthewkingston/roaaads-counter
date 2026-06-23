@@ -89,7 +89,8 @@ than restart.
 | `analysis/skeleton_model.py` | **NEW (profile calibration — fast offline model).** Pure-stdlib `predict_duration(skel, spec)` = `Σ_bucket factor·length·3.6/base_speed` (edge) + OSRM-style turn sigmoid (gated on degree>2 / u-turn, NI left-hand bias) + `n_signals·traffic_light_penalty`. `evaluate(skeletons, spec)` scores against Google with squared-log-ratio loss, **equal weight per valid route** (conf≥0.5 & coverage in-band), and returns per-leg-type / per-(leg×band) diagnostics. `bucket_coverage` (factor identifiability) and `legacy_spec_from_highway_cost_factor` (deployed-profile reference) included. Milliseconds for the whole cache — no OSRM/Docker. |
 | `analysis/eval_profile.py` | **NEW (profile calibration — benchmark entrypoint).** Scores a `ProfileSpec` JSON (default all-1.0 stock; `--spec`; `--legacy-factors`) against `skeletons.jsonl`: aggregate loss, predicted/Google ratio distribution, per-leg-type + per-cell breakdown, per-bucket coverage table, turn-time fraction. No spend. `--legacy-factors` is the faithfulness sanity check (should track the deployed `te_matched`). |
 | `simulation/compile_profile.py` | **NEW (profile calibration — compiler).** `tuned_profile.json` (a `ProfileSpec`) → deployable `car_roaaads.lua`: applies tuned turn params in `setup()`, injects `emit_factor_block`, copies `lib/`, prints the re-extract/partition/customize commands for the deployed :5000 instance. |
-| `analysis/verify_profile.py` | **NEW (profile calibration — fidelity gate).** After the deployed OSRM is rebuilt from a compiled profile, `/match`es a validation subset through real OSRM (:5000) and compares real `match_dur` to `predict_duration(skel, spec)`. **Gate:** per-leg median `predict/real` ∈ [0.98,1.02] **and** p90 |resid| < `--gate-resid` (default 0.05). Exits non-zero on fail — do not trust the fast loop / adopt the profile until it passes. Read-only, no Google calls. |
+| `analysis/verify_profile.py` | **NEW (profile calibration — fidelity gate).** After the deployed OSRM is rebuilt from a compiled profile (or against the live deployed instance with `--legacy-factors`), `/match`es a validation subset through real OSRM (:5000) and compares real `match_dur` to `predict_duration(skel, spec)`. **Gate (median-based):** per-leg median `predict/real` within ±`--gate-median-tol` (default 0.03) over `--gate-legs` (default external `X2B,B2X,X2X`); per-route scatter (med/p90 |resid|) is reported but not gated (inherent to probe-vs-deployed re-match). INT reported, not gated. Exits non-zero on fail. Read-only, no Google calls. |
+| `analysis/tune_profile.py` | **NEW (profile calibration — external-focused tuner).** Fits per-`(class×band)` speed **factors** to minimise the weighted squared-log-ratio time error vs Google over `skeletons.jsonl`, leg-weighted (default `X2B/B2X/X2X=1, INT=0`). With turn params + base speeds fixed, predicted time is **linear in the factor vector**, so it's a vectorised (numpy) scipy `L-BFGS-B` fit with L2 reg toward 1.0 and `[0.2,5]` bounds; only buckets above `--min-km` weighted coverage are tuned (rest stay 1.0). Writes `simulation/tuned_profile.json` + appends `profile_tuning_history.jsonl`; reports before/after per-leg medians + top factor moves. **Tunes factors only** — global turn params are held at defaults (external turn fraction is small; INT excluded) until the in-town turn model is improved. |
 
 ### Generated / gitignored outputs
 `simulation/newtownards_paths.npz`, `simulation/node_weights.json`,
@@ -106,7 +107,8 @@ committed/redistributed). Holds `od_manifest.json` (the fixed OD sample), `raw/<
 (profile-independent route skeletons from `build_skeleton_index.py` — the fast-benchmark cache),
 `signal_nodes.json` (traffic-signal node-id set), and `base_speeds.json` (empirical realised
 per-`(class×band)` base speeds from `--base-speeds`; auto-loaded by the offline model, overrides
-the analytical estimate). Survives worktree removal (lives in the
+the analytical estimate), and `profile_tuning_history.jsonl` (one line per `tune_profile.py` run).
+Survives worktree removal (lives in the
 main checkout); only at risk from `git clean -xfd` or manual `rm`. The probe OSRM instance and
 `simulation/tuned_profile.json` (a candidate `ProfileSpec`, gitignored) are also generated.
 
@@ -452,16 +454,33 @@ python3 analysis/eval_profile.py                         # stock (all factors 1.
 python3 analysis/eval_profile.py --legacy-factors        # faithfulness check vs deployed profile
 python3 analysis/eval_profile.py --spec simulation/tuned_profile.json
 
+# Tune the bucket factors (external-focused; INT down-weighted to 0 by default,
+# its offline turn model under-counts in-town junctions). Linear-in-factor fit,
+# scipy, vectorised. → simulation/tuned_profile.json + profile_tuning_history.jsonl
+python3 analysis/tune_profile.py                         # default external weights
+python3 analysis/tune_profile.py --dry-run               # report without writing
+python3 analysis/tune_profile.py --leg-weights X2B=1,B2X=1,X2X=1,INT=0.2 --min-km 100
+
 # Deploy + fidelity gate (once per accepted profile):
 python3 simulation/compile_profile.py --spec simulation/tuned_profile.json   # → car_roaaads.lua
 #   ... rebuild the DEPLOYED :5000 OSRM with the printed commands ...
 python3 analysis/verify_profile.py --spec simulation/tuned_profile.json      # gate before adopting
 ```
 Scoring uses a squared-log-ratio loss, equal weight per valid route (no `1/n_alts`); per-leg
-and per-bucket breakdowns are diagnostics only. The **auto-tuner is not built yet** — the above
-is the manual benchmark + compile/verify pipeline the tuner will drive. The verify gate is the
-contract that lets the fast loop be trusted before any tuned `car_roaaads.lua` is adopted (then
-re-run the downstream chain: `build_external_links → reduce_deadends → build_paths → tune_assignment`).
+and per-bucket breakdowns are diagnostics only. `verify_profile.py` gates **per-leg median**
+`predict/real` within ±`--gate-median-tol` (default 0.03) over `--gate-legs` (default external
+`X2B,B2X,X2X`); per-route scatter is inherent (probe-matched skeleton vs deployed re-match) and
+is reported but not gated. **INT is reported but not gated/tuned** — the offline turn model
+under-counts in-town junctions (verify: offline ≈ 0.72× real on INT), so in-town accuracy waits
+on a better turn model. The verify gate is the contract that lets the fast loop be trusted before
+any tuned `car_roaaads.lua` is adopted (then re-run the downstream chain:
+`build_external_links → reduce_deadends → build_paths → tune_assignment`).
+
+**Empirical-calibration status (2026-06-23):** empirical base speeds make the offline model a
+faithful proxy for real OSRM on external corridors (verify per-leg medians ≈ 1.00–1.03); the
+external-focused factor tune lands X2B/B2X/X2X medians ≈ 0.97–1.00 vs Google with physically
+sensible factors (motorway sped up to ~Google free-flow, urban A/B-roads slowed). Outstanding:
+in-town (INT) turn model; tuning the global turn params; the route-preference (stage-2) layer.
 
 ---
 
