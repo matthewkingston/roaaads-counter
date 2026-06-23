@@ -69,20 +69,24 @@ def _file_sha1(path):
 def paths_cache_signature():
     """Signature of the inputs build_paths.py consumes. Stamped into the npz at
     build time and re-checked at load time. Returns a dict of {field: str}."""
-    from routing_config import HIGHWAY_COST_FACTOR
+    from routing_config import HIGHWAY_COST_FACTOR, PROBIT_CV, PROBIT_LL_SIGMA
     return {
-        "src_graph_sha1":    _file_sha1(ROUTING_GRAPH),
-        "src_extlinks_sha1": _file_sha1(EXTERNAL_LINKS),
-        "src_cost_factor":   json.dumps(HIGHWAY_COST_FACTOR, sort_keys=True),
+        "src_graph_sha1":      _file_sha1(ROUTING_GRAPH),
+        "src_extlinks_sha1":   _file_sha1(EXTERNAL_LINKS),
+        "src_cost_factor":     json.dumps(HIGHWAY_COST_FACTOR, sort_keys=True),
+        "src_probit_cv":       repr(float(PROBIT_CV)),
+        "src_probit_ll_sigma": repr(float(PROBIT_LL_SIGMA)),
     }
 
 def assert_paths_cache_fresh(cache):
     """Raise SystemExit if the loaded paths cache was built from different inputs
     than the current pipeline state. `cache` is the np.load(...) handle."""
     label = {
-        "src_graph_sha1":    "routing graph (newtownards_reduced.graphml)",
-        "src_extlinks_sha1": "external links (data/external_links.json)",
-        "src_cost_factor":   "HIGHWAY_COST_FACTOR (simulation/routing_config.py)",
+        "src_graph_sha1":      "routing graph (newtownards_reduced.graphml)",
+        "src_extlinks_sha1":   "external links (data/external_links.json)",
+        "src_cost_factor":     "HIGHWAY_COST_FACTOR (simulation/routing_config.py)",
+        "src_probit_cv":       "PROBIT_CV (simulation/routing_config.py)",
+        "src_probit_ll_sigma": "PROBIT_LL_SIGMA (simulation/routing_config.py)",
     }
     sig = paths_cache_signature()
     stale = []
