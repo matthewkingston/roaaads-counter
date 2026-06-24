@@ -59,6 +59,49 @@ STOCK_SPEED_KMH = {
 MPH_BANDS = [20, 30, 40, 50, 60, 70]
 BANDS = ["untagged"] + [str(v) for v in MPH_BANDS] + ["other"]
 
+# ── maxspeed resolution (mirrors OSRM car.lua exactly) ────────────────────────
+# OSRM's WayHandlers.maxspeed consults these keys, first present wins (see
+# lib/way_handlers.lua). We resolve the same way so a segment's band matches the
+# speed OSRM actually assigned it.
+MAXSPEED_KEYS = ("maxspeed:advisory", "maxspeed", "source:maxspeed", "maxspeed:type")
+
+# Symbolic maxspeed values OSRM resolves via profile.maxspeed_table (km/h). Only
+# the entries that occur in GB/IE/NI data are listed; the country-prefixed forms
+# (gb:/uk:) plus the bare highway_type defaults from maxspeed_table_default.
+# Source: /home/matthew/Documents/CodingFun/osrm/car_roaaads.lua.
+_SYMBOLIC_MAXSPEED_KMH = {
+    "gb:nsl_single": (60 * 1609) / 1000, "uk:nsl_single": (60 * 1609) / 1000,
+    "gb:nsl_dual":   (70 * 1609) / 1000, "uk:nsl_dual":   (70 * 1609) / 1000,
+    "gb:motorway":   (70 * 1609) / 1000, "uk:motorway":   (70 * 1609) / 1000,
+    "none": 140,
+}
+# maxspeed_table_default — used by OSRM when the value is "XX:highway_type" and
+# the full string isn't in the table (e.g. "de:urban").
+_MAXSPEED_DEFAULT_KMH = {"urban": 50, "rural": 90, "trunk": 110, "motorway": 130}
+
+
+def osrm_maxspeed_kmh(value):
+    """Resolve a single maxspeed tag string to km/h, mirroring OSRM's
+    WayHandlers.parse_maxspeed + Measure.parse_value_speed. Returns 0.0 when OSRM
+    would fall back to the class base speed (no usable limit)."""
+    if not value:
+        return 0.0
+    s = str(value).strip()
+    m = re.match(r"(\d+)", s)            # OSRM: tonumber(source:match("%d*"))
+    if m:
+        n = float(m.group(1))
+        sl = s.lower()
+        if "mph" in sl or "mp/h" in sl:
+            n *= MPH_KMH
+        return n
+    sl = s.lower()
+    if sl in _SYMBOLIC_MAXSPEED_KMH:
+        return _SYMBOLIC_MAXSPEED_KMH[sl]
+    mm = re.match(r"[a-z][a-z]:([a-z]+)", sl)   # OSRM: string.match(source,"%a%a:(%a+)")
+    if mm:
+        return _MAXSPEED_DEFAULT_KMH.get(mm.group(1), 0.0)
+    return 0.0
+
 N_CLASSES = len(CLASSES)
 N_BANDS = len(BANDS)
 N_BUCKETS = N_CLASSES * N_BANDS
@@ -88,31 +131,48 @@ def norm_class(highway):
     return h if h in CLASSES and h != "other" else "other"
 
 
-def parse_band(maxspeed_raw):
-    """Map a raw OSM maxspeed tag to a band label in BANDS.
-
-    No tag / non-numeric (national speed limit, 'none', 'signals') -> 'untagged'
-    (OSRM uses the class base speed for these). A numeric limit is converted to
-    mph (bare numbers are treated as km/h per OSM convention) and snapped to the
-    nearest standard NI band; anything off-grid -> 'other'.
-    """
-    if not maxspeed_raw:
+def _band_from_kmh(kmh):
+    """km/h posted limit -> band label (snap to nearest NI mph band, else 'other').
+    A non-positive limit means OSRM used the class base speed -> 'untagged'."""
+    if not kmh or kmh <= 0:
         return "untagged"
-    s = str(maxspeed_raw).strip().lower()
-    m = re.search(r"(\d+(?:\.\d+)?)", s)
-    if not m:
-        return "untagged"
-    val = float(m.group(1))
-    mph = val if "mph" in s else val / MPH_KMH
+    mph = kmh / MPH_KMH
     for b in MPH_BANDS:
         if abs(mph - b) <= BAND_SNAP_TOL_MPH:
             return str(b)
     return "other"
 
 
-def bucket_of(highway, maxspeed_raw):
-    """(highway, maxspeed) -> (class_label, band_label)."""
-    return norm_class(highway), parse_band(maxspeed_raw)
+def parse_band(maxspeed_raw):
+    """Map a single OSM maxspeed value to a band label in BANDS.
+
+    Resolves numeric ('30 mph', '50') *and* symbolic ('GB:nsl_single', 'none')
+    values via OSRM's own maxspeed logic (osrm_maxspeed_kmh), then snaps to the
+    nearest standard NI band. No tag / unresolved -> 'untagged' (OSRM uses the
+    class base speed). Off-grid numeric -> 'other'. National-speed-limit roads
+    (nsl_single -> 60, nsl_dual/motorway -> 70) no longer collapse into the
+    'untagged' band, which is the point of the nsl-aware resolution.
+    """
+    return _band_from_kmh(osrm_maxspeed_kmh(maxspeed_raw))
+
+
+def band_from_tags(tags):
+    """Resolve the speed band from a full OSM tag dict, honouring OSRM's key
+    precedence (MAXSPEED_KEYS, first present wins)."""
+    for k in MAXSPEED_KEYS:
+        v = tags.get(k)
+        if v:
+            return parse_band(v)
+    return "untagged"
+
+
+def bucket_of(tags):
+    """Full OSM tag dict -> (class_label, band_label).
+
+    `tags` is the way's complete tag dict (as cached by build_edge_index.py);
+    only `highway` and the maxspeed key set are read here, but the rest is kept
+    in the cache for future model versions."""
+    return norm_class(tags.get("highway")), band_from_tags(tags)
 
 
 def bucket_key(cls, band):

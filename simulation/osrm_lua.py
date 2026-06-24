@@ -126,34 +126,64 @@ def _class_index_table():
     return "{" + pairs + "}"
 
 
+def _lua_table(d):
+    """Lua table literal {["k"]=v, ...} from a {str: number} dict."""
+    return "{" + ", ".join(f'["{k}"]={v}' for k, v in d.items()) + "}"
+
+
 def _bucket_index_lua(indent):
     """Lua that sets local `_bucket` to the integer (class x band) bucket id.
 
-    Mirrors profile_spec.norm_class + parse_band exactly. Assumes `way` is in
-    scope. Emits indices, not labels, so callers can key on integers."""
+    Mirrors profile_spec.norm_class + band_from_tags exactly, including OSRM's
+    maxspeed key precedence (maxspeed:advisory > maxspeed > source:maxspeed >
+    maxspeed:type) and symbolic/national-speed-limit resolution. Assumes `way` is
+    in scope. Emits integer indices, generated from profile_spec constants so the
+    Lua bucket and the Python offline bucket can never drift."""
     pad = " " * indent
     other_ci = ps.CLASSES.index("other")
     nb = ps.N_BANDS
     tol = ps.BAND_SNAP_TOL_MPH
+    other_bi = ps.BANDS.index("other")
+    keys = ", ".join(f'"{k}"' for k in ps.MAXSPEED_KEYS)
+    sym = _lua_table({k: round(v, 4) for k, v in ps._SYMBOLIC_MAXSPEED_KMH.items()})
+    dft = _lua_table(ps._MAXSPEED_DEFAULT_KMH)
     snaps = []
     for k, b in enumerate(ps.MPH_BANDS):          # band index 1..len(MPH_BANDS)
         kw = "if" if k == 0 else "elseif"
-        snaps.append(f"{pad}      {kw} math.abs(_mph-{b})<={tol} then _bi={k + 1}")
-    snaps.append(f"{pad}      else _bi={ps.BANDS.index('other')} end")
+        snaps.append(f"{pad}    {kw} math.abs(_mph-{b})<={tol} then _bi={k + 1}")
+    snaps.append(f"{pad}    else _bi={other_bi} end")
     snap_block = "\n".join(snaps)
     return (
         f"{pad}local _hw = way:get_value_by_key(\"highway\") or \"\"\n"
         f"{pad}local _ci = ({_class_index_table()})[_hw] or {other_ci}\n"
-        f"{pad}local _bi = 0\n"
-        f"{pad}local _ms = way:get_value_by_key(\"maxspeed\")\n"
-        f"{pad}if _ms then\n"
+        f"{pad}-- resolve maxspeed by OSRM key precedence (first non-empty wins)\n"
+        f"{pad}local _ms = nil\n"
+        f"{pad}for _, _k in ipairs({{{keys}}}) do\n"
+        f"{pad}  if _ms == nil or _ms == \"\" then _ms = way:get_value_by_key(_k) end\n"
+        f"{pad}end\n"
+        f"{pad}local _kmh = 0\n"
+        f"{pad}if _ms and _ms ~= \"\" then\n"
         f"{pad}  local _msl = string.lower(_ms)\n"
-        f"{pad}  local _n = tonumber(string.match(_msl, \"%d+%.?%d*\"))\n"
-        f"{pad}  if _n then\n"
-        f"{pad}    local _mph = _n\n"
-        f"{pad}    if not string.find(_msl, \"mph\", 1, true) then _mph = _n / {ps.MPH_KMH} end\n"
-        f"{snap_block}\n"
+        f"{pad}  local _d = string.match(_msl, \"^%s*(%d+)\")\n"
+        f"{pad}  if _d then\n"
+        f"{pad}    local _n = tonumber(_d)\n"
+        f"{pad}    if string.find(_msl,\"mph\",1,true) or string.find(_msl,\"mp/h\",1,true) then\n"
+        f"{pad}      _n = _n * {ps.MPH_KMH}\n"
+        f"{pad}    end\n"
+        f"{pad}    _kmh = _n\n"
+        f"{pad}  else\n"
+        f"{pad}    local _sym = ({sym})[_msl]\n"
+        f"{pad}    if _sym then _kmh = _sym\n"
+        f"{pad}    else\n"
+        f"{pad}      local _ht = string.match(_msl, \"%a%a:(%a+)\")\n"
+        f"{pad}      _kmh = (_ht and ({dft})[_ht]) or 0\n"
+        f"{pad}    end\n"
         f"{pad}  end\n"
+        f"{pad}end\n"
+        f"{pad}local _bi = 0\n"
+        f"{pad}if _kmh > 0 then\n"
+        f"{pad}  local _mph = _kmh / {ps.MPH_KMH}\n"
+        f"{snap_block}\n"
         f"{pad}end\n"
         f"{pad}local _bucket = _ci * {nb} + _bi\n"
     )
