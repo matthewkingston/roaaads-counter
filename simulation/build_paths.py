@@ -209,6 +209,13 @@ ext_boundary_links      = ext_data["ext_boundary_links"]
 bnd_external_links      = ext_data["bnd_external_links"]
 boundary_boundary_links = ext_data["boundary_boundary_links"]
 allowed_through_pairs   = {k: set(v) for k, v in ext_data["allowed_through_pairs"].items()}
+# Non-through ext→ext virtual edges (denominator-only): {src_id: {dst_id: duration_s}}.
+# These pairs carry no flow over observed links — they exist only so a distant
+# external zone's production-constrained denominator includes its other-external
+# destinations (otherwise its entire per-capita budget is dumped into the core).
+# Older external_links.json files predate this key; default to empty.
+external_external_times = {int(k): {int(d): float(t) for d, t in v.items()}
+                           for k, v in ext_data.get("external_external_times", {}).items()}
 _EMPTY_SET = frozenset()
 boundary_node_ids = set(ext_data["boundary_node_ids"])
 
@@ -216,6 +223,7 @@ print(f"  {len(ext_boundary_links)} X→B links")
 print(f"  {len(bnd_external_links)} B→X links")
 print(f"  {len(boundary_boundary_links)} boundary→boundary shortcuts")
 print(f"  {len(allowed_through_pairs)} allowed through-route pairs")
+print(f"  {sum(len(v) for v in external_external_times.values())} non-through ext→ext virtual edges")
 
 # ── Load external node positions ───────────────────────────────────────────────
 
@@ -397,8 +405,44 @@ for src_i, src_nid in enumerate(all_node_ids):
     if (src_i + 1) % 100 == 0:
         print(f"  {src_i + 1}/{n} nodes  ({time.time()-t0:.1f}s)  {len(od_src_list):,} pairs")
 
+n_routed = len(od_src_list)
+print(f"  {n_routed:,} routed OD pairs  in {time.time()-t0:.1f}s")
+
+# ── Append non-through external→external pairs (denominator-only) ───────────────
+# These carry NO flow across observed/core links (no traced path, no probit hits),
+# so they are NOT added to src_groups and never enter the per-pass scatter. They
+# exist only to complete each external origin's production-constrained denominator
+# D_i = Σ_k w_k·F(d_ik): without them, a distant external zone whose only routed
+# destinations are core nodes dumps its entire per-capita trip budget into the core.
+# od_dist for these pairs is the fixed direct OSRM time (set after the probit passes,
+# since dist_accum is only populated for routed pairs).
+
+_denom_dist = []   # virtual-edge time for each denom-only pair (parallel to the appends)
+_n_denom_skipped = 0
+for _src_id, _dsts in external_external_times.items():
+    _si = node_to_idx.get(_src_id)
+    if _si is None:
+        _n_denom_skipped += len(_dsts)
+        continue
+    for _dst_id, _dur in _dsts.items():
+        _di = node_to_idx.get(_dst_id)
+        if _di is None or _di == _si:
+            _n_denom_skipped += 1
+            continue
+        if not math.isfinite(_dur) or _dur < 1.0:
+            _n_denom_skipped += 1
+            continue
+        od_src_list.append(_si)
+        od_dst_list.append(_di)
+        od_k1_links.append([])      # denominator-only: no road links carried
+        od_k1_dist.append(_dur)     # fallback distance (never hit; not in src_groups)
+        _denom_dist.append(_dur)
+
+n_denom = len(_denom_dist)
 n_pairs = len(od_src_list)
-print(f"  {n_pairs:,} OD pairs  in {time.time()-t0:.1f}s")
+if _n_denom_skipped:
+    print(f"  ({_n_denom_skipped} non-through pairs skipped — external node absent from routing graph)")
+print(f"  {n_denom:,} denominator-only ext→ext pairs  →  {n_pairs:,} total OD pairs")
 
 # Compact od_k1_links into a flat numpy int32 ragged array.
 _k1_lengths = np.array([len(p) for p in od_k1_links], dtype=np.int32)
@@ -413,8 +457,11 @@ del dist_matrix, predecessors
 
 # ── Group OD pairs by source ───────────────────────────────────────────────────
 
+# Only routed pairs (indices 0..n_routed-1) are traced by the probit passes;
+# denominator-only pairs (n_routed..n_pairs-1) carry no flow and are excluded.
 src_groups = {}
-for k, (si, di) in enumerate(zip(od_src_list, od_dst_list)):
+for k in range(n_routed):
+    si, di = od_src_list[k], od_dst_list[k]
     if si not in src_groups:
         src_groups[si] = {'pks': [], 'dsts': []}
     src_groups[si]['pks'].append(k)
@@ -495,6 +542,11 @@ print(f"  All passes done in {time.time()-t0:.1f}s  ({n_fallbacks:,} pair-pass f
 print("Building output arrays …")
 od_dist_out = (dist_accum / N_PASSES).astype(np.float32)
 
+# Denominator-only pairs (indices n_routed..n_pairs-1) were excluded from the probit
+# passes, so their dist_accum is 0. Overwrite with the fixed virtual-edge OSRM times.
+if n_denom:
+    od_dist_out[n_routed:] = np.array(_denom_dist, dtype=np.float32)
+
 _coo         = hit_sparse.tocoo()
 pair_idx_arr = _coo.row.astype(np.int32)
 link_idx_arr = _coo.col.astype(np.int32)
@@ -533,6 +585,9 @@ np.savez_compressed(
     probit_n_passes = np.int32(N_PASSES),
     probit_cv       = np.float32(PROBIT_CV),
     probit_ll_sigma = np.float32(PROBIT_LL_SIGMA),
+    # Flow-carrying (routed) pairs occupy indices 0..n_routed_pairs-1; the remainder
+    # are denominator-only ext→ext virtual edges (no pair_idx/link_idx entries).
+    n_routed_pairs  = np.int32(n_routed),
     src_graph_sha1     = np.array(_sig["src_graph_sha1"]),
     src_extlinks_sha1  = np.array(_sig["src_extlinks_sha1"]),
     src_cost_factor    = np.array(_sig["src_cost_factor"]),
@@ -541,6 +596,6 @@ np.savez_compressed(
 )
 size_mb = os.path.getsize(PATHS_CACHE) / 1e6
 print(f"Saved: {PATHS_CACHE}  ({size_mb:.1f} MB)")
-print(f"  {n_pairs:,} OD pairs  {n_entries:,} entries  "
-      f"{N_PASSES} passes  CV={PROBIT_CV}  LL_SIGMA={PROBIT_LL_SIGMA:g}s")
+print(f"  {n_pairs:,} OD pairs ({n_routed:,} routed + {n_denom:,} denominator-only)  "
+      f"{n_entries:,} entries  {N_PASSES} passes  CV={PROBIT_CV}  LL_SIGMA={PROBIT_LL_SIGMA:g}s")
 print(f"  {n_road} road nodes + {n_ext} external nodes = {n} total")

@@ -10,6 +10,10 @@ Queries a local OSRM instance to determine:
      outside the core, a direct link is added with the OSRM segment duration.
   4. External→external through-route allowlist: (X1, X2) pairs whose OSRM route passes
      through any boundary node (i.e., the route genuinely transits the core area).
+  5. External→external non-through times: (X1, X2) pairs whose OSRM route does NOT
+     transit the core — recorded with their direct OSRM time as denominator-only
+     virtual edges (production-constrained gravity needs these so a distant zone's
+     per-capita trip budget isn't entirely dumped into the core; they carry no flow).
 
 Requires:
   - data/census_zones.json          (from build_census_zones.py)
@@ -296,15 +300,28 @@ for b1 in boundary_nodes:
 
 print(f"  {len(boundary_boundary_links)} boundary→boundary exterior shortcuts")
 
-# ── Step 4: External→external through-route allowlist ─────────────────────────
+# ── Step 4: External→external through-route check + non-through times ─────────
+# Each ordered external pair is classified by whether its OSRM route transits the
+# core (passes a boundary node):
+#   through     → added to allowed_through_pairs; the path distance is computed by
+#                 Dijkstra on the augmented graph in build_paths.py (X→B→…→B'→X'),
+#                 so it carries flow AND a denominator term. No time stored here.
+#   non-through → recorded in external_external_times as a denominator-only virtual
+#                 edge with the direct OSRM time. These pairs carry NO flow across
+#                 observed/core links (production-constrained denominator only), but
+#                 are needed so a distant external zone's per-capita trip budget is
+#                 not entirely dumped into the core. See the production-constrained
+#                 gravity plan (inter-external links: "necessary, not optional").
 
 n_ext = len(external_nodes)
 print(f"\nStep 4: External→external through-route check ({n_ext*(n_ext-1):,} queries) …")
 
-allowed_through_pairs = {}   # {src_id: [dst_id, ...]}
+allowed_through_pairs = {}      # {src_id: [dst_id, ...]}        (through-routed, flow + denom)
+external_external_times = {}    # {src_id: {dst_id: duration_s}} (non-through, denom-only)
 
 for xi, ext1 in enumerate(external_nodes):
-    dsts = []
+    dsts  = []
+    times = {}
     for xj, ext2 in enumerate(external_nodes):
         if xi == xj:
             continue
@@ -312,21 +329,30 @@ for xi, ext1 in enumerate(external_nodes):
         result = osrm_route(ext1["centroid_lat"], ext1["centroid_lon"],
                             ext2["centroid_lat"], ext2["centroid_lon"])
         if result is None:
-            continue
+            continue   # no road route at all (e.g. across water) → no denom term
         node_seq, total_dur, ann_durs, snaps = result
 
         if any(nid in boundary_node_ids for nid in node_seq):
             dsts.append(ext2["id"])
+        else:
+            # Fastest real route does not enter the core → denominator-only virtual edge.
+            times[ext2["id"]] = round(total_dur, 2)
 
     if dsts:
         allowed_through_pairs[ext1["id"]] = dsts
+    if times:
+        external_external_times[ext1["id"]] = times
 
     if (xi + 1) % 10 == 0:
-        n_pairs = sum(len(v) for v in allowed_through_pairs.values())
-        print(f"  {xi+1}/{n_ext} external nodes  ({n_pairs} through pairs so far)")
+        n_pairs   = sum(len(v) for v in allowed_through_pairs.values())
+        n_nonthru = sum(len(v) for v in external_external_times.values())
+        print(f"  {xi+1}/{n_ext} external nodes  "
+              f"({n_pairs} through, {n_nonthru} non-through pairs so far)")
 
-n_through = sum(len(v) for v in allowed_through_pairs.values())
+n_through  = sum(len(v) for v in allowed_through_pairs.values())
+n_nonthru  = sum(len(v) for v in external_external_times.values())
 print(f"  {n_through} allowed through-route pairs ({len(allowed_through_pairs)} sources)")
+print(f"  {n_nonthru} non-through ext→ext virtual edges ({len(external_external_times)} sources)")
 
 # ── Write output ────────────────────────────────────────────────────────────────
 
@@ -338,6 +364,8 @@ output = {
     "bnd_external_links":     bnd_external_links,
     "boundary_boundary_links": boundary_boundary_links,
     "allowed_through_pairs":  {str(k): v for k, v in allowed_through_pairs.items()},
+    "external_external_times": {str(k): {str(d): t for d, t in v.items()}
+                                for k, v in external_external_times.items()},
     "boundary_node_ids":      sorted(boundary_node_ids),
 }
 
@@ -349,5 +377,6 @@ print(f"  {len(ext_boundary_links)} X→B links")
 print(f"  {len(bnd_external_links)} B→X links")
 print(f"  {len(boundary_boundary_links)} boundary→boundary shortcuts")
 print(f"  {sum(len(v) for v in allowed_through_pairs.values())} allowed through-route pairs")
+print(f"  {sum(len(v) for v in external_external_times.values())} non-through ext→ext virtual edges")
 print(f"  {total_queries:,} OSRM queries in {elapsed:.0f}s ({total_queries/elapsed:.0f} q/s)")
 print(f"\nNext: python3 simulation/build_paths.py")

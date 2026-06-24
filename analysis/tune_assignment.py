@@ -20,7 +20,10 @@ Both types are in count space, unified in _slot_data with per-obs weights and rh
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
-Tunes W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school (9 params).
+Tunes W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school (8 params with school).
+Production-constrained per component: each origin's trip production is fixed by its
+producing weight, independent of accessibility (school magnitude is K_sch; W_SCHOOL removed
+as redundant under the constraint).
 External zone values are fixed from census data and are not tuned.
 
 Results:
@@ -43,6 +46,7 @@ import scipy.optimize
 sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
+                   constrained_od_flows, scatter_od_to_links,
                    print_chi2_table, assert_paths_cache_fresh)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -236,7 +240,11 @@ _grav_param_names = ["W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz"]
 if _has_stoch:
     _grav_param_names.append("THETA")
 if _has_school:
-    _grav_param_names += ["W_SCHOOL", "P_school", "ALPHA_school"]
+    # W_SCHOOL removed: under the production constraint the school component is
+    # K_sch·(per-origin-normalised pop↔school split), so a separate W_SCHOOL scale is
+    # exactly redundant with K_sch. Only the school KERNEL SHAPE (P_school, ALPHA_school)
+    # is tuned; its magnitude comes from K_sch (analytical).
+    _grav_param_names += ["P_school", "ALPHA_school"]
 _grav_ref_vals = [
     math.log(max(grav_ref.get("W_BIZ",     1.0),  1e-4)),
     math.log(max(grav_ref.get("P",         600.0), 1e-4)),
@@ -249,7 +257,6 @@ if _has_stoch:
     _grav_ref_vals.append(math.log(max(grav_ref.get("THETA", 1.0), 1e-4)))
 if _has_school:
     _grav_ref_vals += [
-        math.log(max(grav_ref.get("W_SCHOOL",     1.0),  1e-4)),
         math.log(max(grav_ref.get("P_school",     600.0), 1e-4)),
         math.log(max(grav_ref.get("ALPHA_school", 2.0),   1e-4)),
     ]
@@ -259,7 +266,7 @@ if isinstance(grav_lam_raw, dict):
 else:
     log_grav_lam = np.full(len(_grav_param_names), float(grav_lam_raw))
 
-n_gravity = (7 if _has_stoch else 6) + (3 if _has_school else 0)
+n_gravity = (7 if _has_stoch else 6) + (2 if _has_school else 0)
 
 # External node weights come from node_weights.json (census data, fixed — not tuned).
 # Stochastic-path weight products (constant across all evaluations).
@@ -284,52 +291,14 @@ if _has_stoch:
 # Skipped when _has_stoch=True: the stochastic path uses exact per-pair scatter
 # for every eval and never calls the bin-matrix path.
 
-if not _has_stoch:
-    print("Precomputing link-bin matrices …")
-    _t_pc = time.time()
+# NOTE: The legacy distance-bin link matrices are gone. The production-constrained
+# assignment normalises each origin's flow by its own (per-eval, kernel-dependent)
+# denominator D_i, which cannot be pre-summed into static distance bins the way the
+# unconstrained w_i·w_j product could. run_assignment now calls model.constrained_od_flows
+# (per-pair flows + cheap per-origin bincount denominators) and scatters via the probit
+# routing incidence — see the production-constrained gravity plan / project memory note.
 
-    from scipy.sparse import coo_matrix as _coo
-
-    N_BINS      = 300
-    _d_lo       = float(od_dist.min())
-    _d_hi       = float(od_dist.max()) * 1.001
-    _bin_edges  = np.logspace(np.log10(_d_lo), np.log10(_d_hi), N_BINS + 1)
-    _bin_centers = np.sqrt(_bin_edges[:-1] * _bin_edges[1:])  # geometric mean per bin
-
-    # Bin index for each OD pair (0 … N_BINS-1)
-    _pair_bin  = np.clip(np.digitize(od_dist, _bin_edges) - 1, 0, N_BINS - 1).astype(np.int32)
-    _col_all   = _pair_bin[pair_idx]   # bin index for every link-pair entry
-
-    # Weight products per OD pair under base weights (external nodes fixed from census)
-    _pp_od = base_w_pop[od_src] * base_w_pop[od_dst]
-    _pb_od = (base_w_pop[od_src] * base_w_biz[od_dst]
-              + base_w_biz[od_src] * base_w_pop[od_dst])
-    _bb_od = base_w_biz[od_src] * base_w_biz[od_dst]
-    _ps_od = (base_w_pop[od_src] * base_w_school[od_dst]
-              + base_w_school[od_src] * base_w_pop[od_dst])
-
-    _col_all = _pair_bin[pair_idx]
-
-    def _link_bin(dat_od):
-        """Build a dense (N_links, N_BINS) accumulation matrix via COO→dense."""
-        d = dat_od[pair_idx]
-        if _link_weight is not None:
-            d = d * _link_weight
-        return _coo((d, (link_idx_arr, _col_all)), shape=(N_links, N_BINS)).toarray()
-
-    # All OD pairs use a single set of matrices (external weights are fixed, not tuned)
-    all_bin_pp = _link_bin(_pp_od).astype(np.float32)
-    all_bin_pb = _link_bin(_pb_od).astype(np.float32)
-    all_bin_bb = _link_bin(_bb_od).astype(np.float32)
-    all_bin_ps = _link_bin(_ps_od).astype(np.float32)
-
-    del _pp_od, _pb_od, _bb_od, _ps_od, _col_all
-
-    print(f"  {N_BINS} bins  {len(od_src):,} OD pairs  ({time.time()-_t_pc:.1f}s)")
-
-    def _kern_b(P, ALPHA, BETA):
-        u = _bin_centers / P
-        return ((ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))).astype(np.float32)
+N_nodes = len(node_ids)   # for the per-origin denominator bincounts
 
 # ── Per-slot hourly fraction priors ───────────────────────────────────────────
 # Group days into weekday (0), Saturday (1), Sunday (2).
@@ -541,85 +510,35 @@ _slot_gam = np.array([e[12] for e in _slot_data], dtype=np.float64)
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
 def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-                   W_SCHOOL, P_school, ALPHA_school,
+                   P_school, ALPHA_school,
                    w_pop, w_biz, THETA=None):
-    """Gravity assignment → (flow_res, flow_biz, flow_school).
+    """Production-constrained gravity assignment → (flow_res, flow_biz, flow_school).
 
-    flow_res    = pop→pop component, uses P/ALPHA/BETA kernel.
-    flow_biz    = W_BIZ·pb + W_BIZ²·bb, uses P_biz/ALPHA_biz/BETA kernel.
-    flow_school = W_SCHOOL·ps (pop→school cross-term), uses P_school/ALPHA_school/BETA.
+    Each component is singly (production) constrained: T^c_ij = K_c·p^c_i·a^c_j·F_c/D^c_i
+    (see model.constrained_od_flows). This returns the PRE-K per-link flows; the
+    K_res/K_biz/K_sch scaling and temporal fractions are applied analytically by
+    calibrate_Ks_and_fracs (D_i has no K, so flow stays linear in K — the inner
+    alternating-minimisation blocks are unchanged).
 
-    THETA=None  → fast binned all-or-nothing (bin-matrix matmul path).
-    THETA given → CSR SpMV scatter over k=3 paths (legacy; no school support).
+    flow_res    = pop→pop,              kernel (P, ALPHA, BETA).
+    flow_biz    = symmetric pop↔biz split (per-origin normalised) + W_BIZ·(biz×biz),
+                  kernel (P_biz, ALPHA_biz, BETA).
+    flow_school = symmetric pop↔school split (per-origin normalised), kernel
+                  (P_school, ALPHA_school, BETA). Magnitude is K_sch (no separate
+                  W_SCHOOL scale — it would be redundant with K_sch under the constraint).
+
+    THETA is accepted but ignored (probit cache; the legacy k=3 logit scatter is retired).
     """
-    if THETA is None or not _has_stoch:
-        f_b_res = _kern_b(P,       ALPHA,       BETA)
-        f_b_biz = _kern_b(P_biz,   ALPHA_biz,   BETA)
-        f_b_sch = _kern_b(P_school, ALPHA_school, BETA) if _has_school else None
-        W   = W_BIZ
-        W2  = W_BIZ ** 2
-        flow_res = (all_bin_pp @ f_b_res).astype(np.float64)
-        flow_biz = (W * (all_bin_pb @ f_b_biz) + W2 * (all_bin_bb @ f_b_biz)).astype(np.float64)
-        if _has_school:
-            flow_school = (W_SCHOOL * (all_bin_ps @ f_b_sch)).astype(np.float64)
-        else:
-            flow_school = np.zeros(N_links, dtype=np.float64)
-        return flow_res, flow_biz, flow_school
-
-    # Stochastic logit: exact scatter over 3 paths, split by component.
-    # Weight products in float64 to prevent overflow at extreme optimizer steps.
-    # Kernel/share ops stay float32 (distances are always finite, no overflow
-    # risk; float32 SGEMV is ~30× faster than float64 DGEMV).
-    # The combined per-OD vector is computed in float64 then cast to float32
-    # just before the matmul, restoring SGEMV speed. On extreme steps the
-    # cast saturates to ±inf rather than NaN, giving large finite chi².
-
-    pp_od = w_pop[od_src] * w_pop[od_dst]
-    pb_od = (w_pop[od_src] * w_biz[od_dst]
-             + w_biz[od_src] * w_pop[od_dst])
-    bb_od = w_biz[od_src] * w_biz[od_dst]
-
-    # A2: hoist biz_base above path loop (identical across all 3 paths).
-    biz_base = W_BIZ * pb_od + W_BIZ**2 * bb_od
-
-    # A1: logit shares — use precomputed stacked distance matrix (always uses P).
-    log_w  = np.float32(-THETA / P) * _d_mat_f32
-    log_w -= log_w.max(axis=1, keepdims=True)
-    shares = np.exp(log_w)
-    shares /= shares.sum(axis=1, keepdims=True)
-
-    log_P_res      = np.float32(math.log(P))
-    log_P_biz_val  = np.float32(math.log(P_biz))
-    alpha_f        = np.float32(ALPHA)
-    alpha_biz_f    = np.float32(ALPHA_biz)
-    beta_f         = np.float32(BETA)
-    alpha_beta_res = np.float32(ALPHA + BETA)
-    alpha_beta_biz = np.float32(ALPHA_biz + BETA)
-
-    # A4: batch kernels for both components over all 3 paths.
-    log_u_res  = _log_d_stack - log_P_res
-    u_pow_res  = np.exp(alpha_beta_res * log_u_res)
-    u_beta_res = np.exp(beta_f         * log_u_res)
-    f_all_res  = alpha_beta_res * u_beta_res / (alpha_f     + beta_f * u_pow_res)  # (N_OD, 3)
-
-    log_u_biz  = _log_d_stack - log_P_biz_val
-    u_pow_biz  = np.exp(alpha_beta_biz * log_u_biz)
-    u_beta_biz = np.exp(beta_f         * log_u_biz)
-    f_all_biz  = alpha_beta_biz * u_beta_biz / (alpha_biz_f + beta_f * u_pow_biz)  # (N_OD, 3)
-
-    sf_res = shares * f_all_res
-    sf_biz = shares * f_all_biz
-
-    flow_res    = np.zeros(N_links, dtype=np.float64)
-    flow_biz    = np.zeros(N_links, dtype=np.float64)
-    flow_school = np.zeros(N_links, dtype=np.float64)
-    for r, A_r in enumerate([_A1, _A2, _A3]):
-        # Weight products (float64) × sf (float32) → float64 by numpy promotion;
-        # cast to float32 for fast SGEMV. Saturates to ±inf on extreme steps
-        # (large finite chi²) rather than NaN.
-        flow_res += A_r @ (pp_od    * sf_res[:, r]).astype(np.float32)
-        flow_biz += A_r @ (biz_base * sf_biz[:, r]).astype(np.float32)
-    # Legacy stochastic path: school component not supported (returns zeros)
+    t_res, t_biz, t_sch = constrained_od_flows(
+        od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, base_w_school,
+        W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school)
+    flow_res = scatter_od_to_links(t_res, pair_idx, link_idx_arr, _link_weight, N_links)
+    flow_biz = scatter_od_to_links(t_biz, pair_idx, link_idx_arr, _link_weight, N_links)
+    if _has_school:
+        flow_school = scatter_od_to_links(t_sch, pair_idx, link_idx_arr, _link_weight, N_links)
+    else:
+        flow_school = np.zeros(N_links, dtype=np.float64)
     return flow_res, flow_biz, flow_school
 
 
@@ -822,18 +741,17 @@ def objective(log_params, log_ref=None):
     THETA     = math.exp(log_params[6]) if _has_stoch else None
     _sch_off  = 7 if _has_stoch else 6
     if _has_school:
-        W_SCHOOL     = math.exp(log_params[_sch_off])
-        P_school     = math.exp(log_params[_sch_off + 1])
-        ALPHA_school = math.exp(log_params[_sch_off + 2])
+        P_school     = math.exp(log_params[_sch_off])
+        ALPHA_school = math.exp(log_params[_sch_off + 1])
     else:
-        W_SCHOOL = P_school = ALPHA_school = 1.0
+        P_school = ALPHA_school = 1.0
 
     w_pop = base_w_pop
     w_biz = base_w_biz
 
     flow_res, flow_biz, flow_school = run_assignment(
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-        W_SCHOOL, P_school, ALPHA_school,
+        P_school, ALPHA_school,
         w_pop, w_biz, THETA)
     m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
     K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
@@ -888,12 +806,12 @@ def objective(log_params, log_ref=None):
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
 grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0, "BETA": 1.0,
               "P_biz": 600.0, "ALPHA_biz": 2.0, "THETA": 1.0,
-              "W_SCHOOL": 1.0, "P_school": 300.0, "ALPHA_school": 2.0}
+              "P_school": 300.0, "ALPHA_school": 2.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
     for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA",
-              "W_SCHOOL", "P_school", "ALPHA_school"):
+              "P_school", "ALPHA_school"):
         if k in tp:
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
@@ -912,11 +830,15 @@ if _has_stoch:
     _log_p0_vals.append(math.log(max(grav_start["THETA"], _LOG_MIN)))
 if _has_school:
     _log_p0_vals += [
-        math.log(max(grav_start["W_SCHOOL"],     _LOG_MIN)),
         math.log(max(grav_start["P_school"],     _LOG_MIN)),
         math.log(max(grav_start["ALPHA_school"], _LOG_MIN)),
     ]
 log_p0 = np.array(_log_p0_vals, dtype=np.float64)
+
+# Guard against param-vector / index drift (loud failure, not a silent mismatch).
+assert len(log_p0) == n_gravity == len(_grav_param_names) == len(log_grav_ref), (
+    f"param vector length mismatch: log_p0={len(log_p0)} n_gravity={n_gravity} "
+    f"names={len(_grav_param_names)} ref={len(log_grav_ref)}")
 
 # Capture starting gravity params for history (before any optimization)
 initial_gravity = {k: grav_start[k]
@@ -925,7 +847,7 @@ initial_gravity = {k: grav_start[k]
 if _has_stoch and "THETA" in grav_start:
     initial_gravity["THETA"] = grav_start["THETA"]
 if _has_school:
-    for k in ("W_SCHOOL", "P_school", "ALPHA_school"):
+    for k in ("P_school", "ALPHA_school"):
         initial_gravity[k] = grav_start[k]
 
 log_ref = None
@@ -933,7 +855,7 @@ log_ref = None
 if _has_stoch:
     _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]"
 elif _has_school:
-    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, W_SCHOOL, P_school, ALPHA_school]"
+    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school]"
 else:
     _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
 print(f"Gravity: {len(log_p0)} params{_grav_note}")
@@ -969,22 +891,20 @@ ALPHA_biz = math.exp(log_best[5])
 THETA     = math.exp(log_best[6]) if _has_stoch else None
 _sch_off  = 7 if _has_stoch else 6
 if _has_school:
-    W_SCHOOL     = math.exp(log_best[_sch_off])
-    P_school     = math.exp(log_best[_sch_off + 1])
-    ALPHA_school = math.exp(log_best[_sch_off + 2])
+    P_school     = math.exp(log_best[_sch_off])
+    ALPHA_school = math.exp(log_best[_sch_off + 1])
 else:
-    W_SCHOOL = P_school = ALPHA_school = None
+    P_school = ALPHA_school = None
 
 # Final evaluation for clean chi2, K_res, K_biz, K_sch, and slot_fracs (no L2 term)
 w_pop_f = base_w_pop
 w_biz_f = base_w_biz
 
-_ws_final = 1.0 if not _has_school else W_SCHOOL
 _ps_final = 1.0 if not _has_school else P_school
 _as_final = 1.0 if not _has_school else ALPHA_school
 flow_res, flow_biz, flow_school = run_assignment(
     W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-    _ws_final, _ps_final, _as_final,
+    _ps_final, _as_final,
     w_pop_f, w_biz_f, THETA)
 m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
 K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
@@ -1066,7 +986,7 @@ print(f"  phi_biz={phi_biz_out:.3f}  phi_sch={phi_sch_out:.3f}")
 print(f"  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}  BETA={BETA:.4f}"
       f"  P_biz={P_biz:.2f}s  ALPHA_biz={ALPHA_biz:.4f}{_theta_str}")
 if _has_school:
-    print(f"  W_SCHOOL={W_SCHOOL:.4f}  P_school={P_school:.2f}s  ALPHA_school={ALPHA_school:.4f}")
+    print(f"  P_school={P_school:.2f}s  ALPHA_school={ALPHA_school:.4f}  (school magnitude = K_sch)")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -1123,8 +1043,7 @@ tuned = {
     "P_biz":     round(P_biz, 4),
     "ALPHA_biz": round(ALPHA_biz, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    **( {"W_SCHOOL":     round(W_SCHOOL,     6),
-         "P_school":     round(P_school,     4),
+    **( {"P_school":     round(P_school,     4),
          "ALPHA_school": round(ALPHA_school, 6)} if _has_school else {} ),
     "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
@@ -1161,7 +1080,7 @@ try:
             label=f"Business     P_biz={P_biz/60:.1f}min  ALPHA_biz={ALPHA_biz:.3f}  K_biz={K_biz:.3e}")
     ax.axvline(P     / 60.0, color="C0", linestyle=":", alpha=0.6)
     ax.axvline(P_biz / 60.0, color="C1", linestyle=":", alpha=0.6)
-    if _has_school and W_SCHOOL is not None:
+    if _has_school and P_school is not None:
         u_sch   = d_sec / P_school
         k_sch_c = K_sch * (ALPHA_school + BETA) * u_sch**BETA / (ALPHA_school + BETA * u_sch**(ALPHA_school + BETA))
         ax.plot(d_min, k_sch_c, linewidth=1.8, linestyle=":",
@@ -1200,8 +1119,7 @@ params = {
     "P_biz":     round(P_biz, 4),
     "ALPHA_biz": round(ALPHA_biz, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    **( {"W_SCHOOL":     round(W_SCHOOL,     6),
-         "P_school":     round(P_school,     4),
+    **( {"P_school":     round(P_school,     4),
          "ALPHA_school": round(ALPHA_school, 6)} if _has_school else {} ),
     "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},

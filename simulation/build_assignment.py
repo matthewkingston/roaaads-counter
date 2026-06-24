@@ -17,7 +17,8 @@ import numpy as np
 import osmnx as ox
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
-                   gravity_assign, site_flow, compute_chi2, print_chi2_table,
+                   gravity_assign, constrained_od_flows, scatter_od_to_links,
+                   site_flow, compute_chi2, print_chi2_table,
                    assert_paths_cache_fresh)
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -146,44 +147,47 @@ w_school = np.array([node_school_demand.get(nid, 0)   for nid in node_ids_arr], 
 print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
 N_links  = len(link_u)
+N_nodes  = len(node_ids_arr)
+# School component is active when K_sch>0, the school kernel is present, and there is
+# school demand. W_SCHOOL is no longer required/used (removed: redundant with K_sch under
+# the production constraint).
 _use_3c  = (K_res is not None and K_sch is not None and K_sch > 0
-            and W_SCHOOL is not None and w_school.sum() > 0)
+            and P_school is not None and w_school.sum() > 0)
 _use_2c  = (K_res is not None and not _use_3c)
 
-_kw = dict(BETA=BETA, THETA=THETA,
-           P_biz=P_biz, ALPHA_biz=ALPHA_biz,
-           od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
-           od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3,
-           link_weight=link_weight)
-
-if _use_3c:
-    _kw_3c = dict(**_kw, W_SCHOOL=W_SCHOOL, P_school=P_school,
-                  ALPHA_school=ALPHA_school, w_school=w_school)
-    raw_res, raw_biz, raw_sch = gravity_assign(
-        od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-        W_BIZ, P, ALPHA, w_pop, w_biz, return_components=True, **_kw_3c)
+if _use_2c or _use_3c:
+    # Production-constrained assignment (singly-constrained per component).
+    # Per-OD-pair pre-K component flows, then scatter onto links via the probit
+    # routing incidence and apply K_res/K_biz/K_sch.
+    t_res, t_biz, t_sch = constrained_od_flows(
+        od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, w_school,
+        W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_3c)
+    raw_res = scatter_od_to_links(t_res, pair_idx, link_idx, link_weight, N_links)
+    raw_biz = scatter_od_to_links(t_biz, pair_idx, link_idx, link_weight, N_links)
+    raw_sch = (scatter_od_to_links(t_sch, pair_idx, link_idx, link_weight, N_links)
+               if _use_3c else np.zeros(N_links))
     _nonzero = (raw_res + raw_biz + raw_sch) > 0
-    link_flow_res    = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
-                        for k in range(N_links) if _nonzero[k]}
-    link_flow_biz    = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
-                        for k in range(N_links) if _nonzero[k]}
-    link_flow_school = {(int(link_u[k]), int(link_v[k])): raw_sch[k] * K_sch
-                        for k in range(N_links) if _nonzero[k]}
-    link_flow = {lnk: (link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
-                       + link_flow_school.get(lnk, 0.0))
-                 for lnk in set(link_flow_res) | set(link_flow_biz) | set(link_flow_school)}
-elif _use_2c:
-    raw_res, raw_biz = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                                      W_BIZ, P, ALPHA, w_pop, w_biz,
-                                      return_components=True, **_kw)
     link_flow_res = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
-                     for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
+                     for k in range(N_links) if _nonzero[k]}
     link_flow_biz = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
-                     for k in range(N_links) if raw_res[k] + raw_biz[k] > 0}
-    link_flow = {lnk: link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
-                 for lnk in set(link_flow_res) | set(link_flow_biz)}
-    link_flow_school = None
+                     for k in range(N_links) if _nonzero[k]}
+    if _use_3c:
+        link_flow_school = {(int(link_u[k]), int(link_v[k])): raw_sch[k] * K_sch
+                            for k in range(N_links) if _nonzero[k]}
+    else:
+        link_flow_school = None
+    link_flow = {lnk: (link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
+                       + (link_flow_school.get(lnk, 0.0) if link_flow_school else 0.0))
+                 for lnk in set(link_flow_res) | set(link_flow_biz)
+                            | (set(link_flow_school) if link_flow_school else set())}
 else:
+    # Legacy single-K unconstrained path (old param files without K_res/K_biz).
+    _kw = dict(BETA=BETA, THETA=THETA,
+               P_biz=P_biz, ALPHA_biz=ALPHA_biz,
+               od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
+               od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3,
+               link_weight=link_weight)
     raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
                                   W_BIZ, P, ALPHA, w_pop, w_biz, **_kw)
     link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k] * K

@@ -235,6 +235,97 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
         flow_biz += np.bincount(lidx, weights=(biz_base * s_r * f_biz)[pidx], minlength=N_links)
     return flow_res, flow_biz
 
+# ── Production-constrained (singly-constrained) assignment ────────────────────
+# Replaces the unconstrained T_ij = K·w_i·w_j·F(d) with a singly-constrained form
+# applied per component:  T^c_ij = K_c · p^c_i · a^c_j · F_c(d_ij) / D^c_i,
+# where D^c_i = Σ_k a^c_k·F_c(d_ik).  Then Σ_j T^c_ij = K_c·p^c_i, i.e. each origin's
+# trip production is fixed by its producing weight and is independent of accessibility
+# (fixes the generation/distribution conflation — see project memory note
+# project_production_constrained_gravity).  Component producer/attractor (locked 2026-06-24):
+#   res:  p=pop,  a=pop,    kernel (P,ALPHA,BETA)
+#   biz:  symmetric split + per-origin normaliser (pop→biz and biz→pop legs), plus a
+#         biz×biz term constrained on biz; weighted by W_BIZ; kernel (P_biz,ALPHA_biz,BETA)
+#   sch:  symmetric split + per-origin normaliser (pop→school and school→pop legs);
+#         kernel (P_school,ALPHA_school,BETA)
+# The per-origin denominators depend on the kernel params, so they are recomputed every
+# evaluation (cheap O(N_OD) bincounts).  K_c is applied by the caller (the analytical
+# K/φ/f calibration blocks are unchanged — D_i has no K, flow stays linear in K).
+
+
+def _rational_kernel(d, P, ALPHA, BETA):
+    """f(d) = (ALPHA+BETA)·u^BETA / (ALPHA + BETA·u^(ALPHA+BETA)), u = d/P."""
+    u = d / P
+    return (ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))
+
+
+def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
+                         w_pop, w_biz, w_school,
+                         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+                         P_school=None, ALPHA_school=None, with_school=False):
+    """Per-OD-pair, pre-K production-constrained component flows.
+
+    Returns (t_res, t_biz, t_sch), each a float64 array parallel to od_src/od_dst.
+    These are the per-pair flows BEFORE the K_res/K_biz/K_sch scaling; the caller
+    scatters them onto links (all links, or observed rows only) and applies K.
+
+    Denominators are summed over the FULL destination set of each origin (all od
+    pairs sharing that od_src — internal, external-routed, and denominator-only
+    ext→ext virtual edges), so each origin's production budget is conserved.
+    """
+    src = od_src
+    dst = od_dst
+    F_res = _rational_kernel(od_dist, P,     ALPHA,     BETA)
+    F_biz = _rational_kernel(od_dist, P_biz, ALPHA_biz, BETA)
+
+    pop_s = w_pop[src]; pop_d = w_pop[dst]
+    biz_s = w_biz[src]; biz_d = w_biz[dst]
+
+    # Per-origin denominators D^c_i = Σ_k a^c_k·F_c(d_ik); inverse with 0/0 → 0.
+    def _inv_denom(attr_d, F):
+        D = np.bincount(src, weights=attr_d * F, minlength=N_nodes)
+        return np.where(D > 0, 1.0 / D, 0.0)
+
+    iD_res_pop = _inv_denom(pop_d, F_res)   # res: attraction = pop
+    iD_biz_pop = _inv_denom(pop_d, F_biz)   # biz-cross leg biz→pop: attraction = pop
+    iD_biz_biz = _inv_denom(biz_d, F_biz)   # biz-cross leg pop→biz + biz×biz: attraction = biz
+
+    # res: pop_i·pop_j·F_res / D^res,pop_i
+    t_res = pop_s * pop_d * F_res * iD_res_pop[src]
+
+    # biz: symmetric split (pop→biz, biz→pop) + biz×biz (W_BIZ), each per-origin-normalised
+    t_biz = F_biz * (
+        pop_s * biz_d * iD_biz_biz[src]            # home i → work j   (attraction biz)
+        + biz_s * pop_d * iD_biz_pop[src]          # biz i → pop j     (attraction pop)
+        + W_BIZ * biz_s * biz_d * iD_biz_biz[src]  # biz×biz           (attraction biz)
+    )
+
+    if with_school and w_school is not None and w_school.sum() > 0:
+        F_sch = _rational_kernel(od_dist, P_school, ALPHA_school, BETA)
+        sch_s = w_school[src]; sch_d = w_school[dst]
+        iD_sch_pop = _inv_denom(pop_d, F_sch)   # school-cross leg school→pop: attraction = pop
+        iD_sch_sch = _inv_denom(sch_d, F_sch)   # school-cross leg pop→school: attraction = school
+        t_sch = F_sch * (
+            pop_s * sch_d * iD_sch_sch[src]       # pop i → school j  (attraction school)
+            + sch_s * pop_d * iD_sch_pop[src]     # school i → pop j  (attraction pop)
+        )
+    else:
+        t_sch = np.zeros(len(src), dtype=np.float64)
+
+    return t_res, t_biz, t_sch
+
+
+def scatter_od_to_links(t_pair, pair_idx, link_idx, link_weight, N_links):
+    """Scatter a per-OD-pair flow vector onto links via the probit routing incidence.
+
+    flow[l] = Σ_entries t_pair[pair_idx]·link_weight  bincounted into link_idx.
+    Denominator-only OD pairs have no entries in pair_idx/link_idx, so they
+    contribute to the denominators (upstream) but carry no link flow here.
+    """
+    w = t_pair[pair_idx]
+    if link_weight is not None:
+        w = w * link_weight
+    return np.bincount(link_idx, weights=w, minlength=N_links)
+
 # ── Flow extraction ───────────────────────────────────────────────────────────
 
 def site_flow(link_flow_dict, site):
