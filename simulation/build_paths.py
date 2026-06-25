@@ -213,8 +213,10 @@ allowed_through_pairs   = {k: set(v) for k, v in ext_data["allowed_through_pairs
 # These pairs carry no flow over observed links — they exist only so a distant
 # external zone's production-constrained denominator includes its other-external
 # destinations (otherwise its entire per-capita budget is dumped into the core).
-# Older external_links.json files predate this key; default to empty.
-external_external_times = {int(k): {int(d): float(t) for d, t in v.items()}
+# External node IDs are census-area-code strings (e.g. "N21000219"), matching the
+# native keys node_to_idx uses — keep them as-is (do NOT int()-convert), mirroring
+# allowed_through_pairs. Older external_links.json files predate this key → empty.
+external_external_times = {k: {d: float(t) for d, t in v.items()}
                            for k, v in ext_data.get("external_external_times", {}).items()}
 _EMPTY_SET = frozenset()
 boundary_node_ids = set(ext_data["boundary_node_ids"])
