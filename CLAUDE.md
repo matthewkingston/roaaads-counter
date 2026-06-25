@@ -72,7 +72,7 @@ than restart.
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. Loads manual link overrides from `data/manual_link_overrides.json`. After every new link assignment, validates each non-null count direction against the directed graph; raises `ValueError` if the edge doesn't exist. |
 | `analysis/manual_assign_link.py` | CLI tool to manually assign a session to a specific directed link, bypassing GPS snap. Usage: `python3 analysis/manual_assign_link.py <session_id> <from_node> <to_node>`. Validates both nodes exist and checks count-edge consistency. Writes to `data/manual_link_overrides.json` and patches `counts_processed.json` directly. After correcting an assignment, re-run `aggregate_counts.py` then `tune_assignment.py`. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s`. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component, production-constrained model:** gravity flows split into residential (`flow_res`), business-adjacent (`flow_biz`), and school (`flow_school`) components, each singly (production) constrained. Tunes **8 gravity params** (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school) — `W_SCHOOL` removed (redundant with K_sch under the constraint). External zone values are fixed from census data and are not tuned. **Alternating minimisation (5 blocks, up to 10 iters) SURVIVES the constraint** (`D_i` has no `K`, so flow stays linear in K and the f's): K-step (1D); phi_biz-step; phi_sch-step; f_res/f_biz/f_school steps (per-slot analytical) + aggregate coupling γ per slot. `run_assignment` now calls `model.constrained_od_flows` (per-pair flows + per-origin denominator bincounts) and scatters via the probit routing incidence — the old distance-bin-matrix path is gone. **Performance estimate:** ~15–20 min per run (the per-origin denominator dissolves the bin-matrix trick; ~200–290 ms/eval). `--fast` mode caps alt-min at 5 iters. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component, production-constrained model:** gravity flows split into residential (`flow_res`), business-adjacent (`flow_biz`), and school (`flow_school`) components, each singly (production) constrained. Tunes **8 gravity params** (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school) — `W_SCHOOL` removed (redundant with K_sch under the constraint). External zone values are fixed from census data and are not tuned. **Alternating minimisation (5 blocks) SURVIVES the constraint** (`D_i` has no `K`, so flow stays linear in K and the f's): K-step (1D); phi_biz-step; phi_sch-step; f_res/f_biz/f_school steps (per-slot analytical) + aggregate coupling γ per slot. **The alternation is non-monotonic (single Poisson Newton steps) and can collapse K to the 1e-30 floor, so `calibrate_Ks_and_fracs` returns the BEST-SEEN (K,φ,f) iterate by the full regularized objective, max_iter 40 (`--fast` 20) — see "Five-block analytical calibration" (fix 2026-06-25, commit af90de7).** `run_assignment` now calls `model.constrained_od_flows` (per-pair flows + per-origin denominator bincounts) and scatters via the probit routing incidence — the old distance-bin-matrix path is gone. **Performance:** ~2.5–3.5 s/eval (run_assignment-dominated) ⇒ ~20–30 min per run. `CALIBRATE_PROBE=1` is an env-gated diagnostic that reports the post-calibrate residual global scale λ. |
 | `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` and `reports/slot_pulls_{id}.png`. History `slot_prior` entries carry 5 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz, mean_f_school]`. Old entries with 4 values handled gracefully. Note: report still attempts to print external city delta table — will be a no-op for new-format runs. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. New-format param dicts no longer contain external zone keys. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. |
@@ -220,8 +220,22 @@ Predicted count for observation i in slot s:
 
 ### Five-block analytical calibration
 At each optimizer evaluation, (K, phi_biz, phi_sch, f_res, f_biz, f_school) are calibrated via
-alternating minimisation (up to 10 iterations; `--fast` caps at 5).
+alternating minimisation (max_iter 40; `--fast` 20).
 K_res = K·(1−phi_biz−phi_sch), K_biz = K·phi_biz, K_sch = K·phi_sch.
+
+**Non-monotonic — returns the best-seen iterate (fix 2026-06-25, commit af90de7).** The K-step's
+Poisson (walking) Newton correction and the per-slot f-steps' Poisson corrections are *single*
+Newton steps that do **not** guarantee descent, so the alternation is non-monotonic and under the
+production-constrained flow magnitudes can **collapse K toward the 1e-30 floor** at some iteration
+counts. `calibrate_Ks_and_fracs` therefore evaluates the full regularized objective
+(Gaussian + Poisson deviance + f-prior/coupling penalty) each iteration and **returns the
+lowest-objective (K, φ, f) state seen**, not the last iterate; it runs to `max_iter` with no early
+break (the objective oscillates, so a premature stop can miss the good basin). Before this fix the
+prior run stopped at a partially-collapsed point, leaving every modelled flow ~6× too small (a
+uniform global scale λ≈6.2 halved χ²). `CALIBRATE_PROBE=1` runs calibrate at the start params for
+several `max_iter` values and reports the residual global scale λ (≈1 ⇒ K at its optimum).
+**TODO (cleaner follow-up):** harden the Poisson Newton steps (line-search / clamp) so the
+alternation is monotone and best-iterate tracking becomes belt-and-braces rather than load-bearing.
 
 **K-step:** 1D solve, using combined coefficient `(1−phi_b−phi_s)·c_r·f_r + phi_b·c_b·f_b + phi_s·c_s·f_s`.
 
