@@ -59,17 +59,28 @@ OFFICIAL_HOURLY   = "data/official_hourly.json"
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
-note  = None
-fast  = False
+note     = None
+fast     = False
+f_frozen = False
 argv  = sys.argv[1:]
 i = 0
 while i < len(argv):
     if argv[i] == "--fast":
         fast = True
+    elif argv[i] == "--f-frozen":
+        f_frozen = True
     elif argv[i] == "--note" and i + 1 < len(argv):
         i += 1
         note = argv[i]
     i += 1
+
+# --f-frozen pins the per-slot temporal fractions at the NTS profile (f_res=
+# mean_fraction_res, etc.) — the f-steps are skipped — so every residual is purely
+# spatial (no temporal absorption of spatial misfit). K and phi still calibrate.
+# tuned_params.json and history ARE written (history carries an f_frozen marker/note).
+_FREEZE_F = f_frozen
+if _FREEZE_F:
+    print("--f-frozen: temporal fractions pinned at NTS profile (f-steps skipped)")
 
 run_id = secrets.token_hex(4)
 
@@ -681,7 +692,8 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=40):
                  + _slot_mfr * _slot_ivr
                  + _slot_gam * (_slot_mfa - f_b_s[:n_slots] - f_s_s[:n_slots]))
         den   = K_res ** 2 * s_den + _slot_ivr + _slot_gam
-        f_r_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfr)
+        if not _FREEZE_F:
+            f_r_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfr)
         _fr[:] = f_r_s[_sid]
 
         # Update pred after f_res change before next f-step.
@@ -704,7 +716,8 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=40):
                  + _slot_mfb * _slot_ivb
                  + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_s_s[:n_slots]))
         den   = K_biz ** 2 * s_den + _slot_ivb + _slot_gam
-        f_b_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfb)
+        if not _FREEZE_F:
+            f_b_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfb)
         _fb[:] = f_b_s[_sid]
 
         # ── f_school-step ────────────────────────────────────────────────────
@@ -726,7 +739,8 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=40):
                      + _slot_mfs * _slot_ivs
                      + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_b_s[:n_slots]))
             den   = K_sch ** 2 * s_den + _slot_ivs + _slot_gam
-            f_s_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfs)
+            if not _FREEZE_F:
+                f_s_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfs)
 
         # ── Track the best-seen (K, f) state by the full regularized objective ──
         _fr[:] = f_r_s[_sid]; _fb[:] = f_b_s[_sid]; _fs[:] = f_s_s[_sid]
@@ -1124,9 +1138,11 @@ tuned = {
     "stage":      "gravity",
 }
 
+if _FREEZE_F:
+    tuned["f_frozen"] = True
 with open(TUNED_PARAMS, "w") as f:
     json.dump(tuned, f, indent=2)
-print(f"\nSaved → {TUNED_PARAMS}")
+print(f"\nSaved → {TUNED_PARAMS}" + ("  (f-frozen)" if _FREEZE_F else ""))
 
 # ── Gravity model kernel plot ─────────────────────────────────────────────────
 
@@ -1238,9 +1254,13 @@ history_entry = {
     ],
 }
 history_entry["objective"] = "poisson_deviance_walking"
-if note:
+if _FREEZE_F:
+    history_entry["f_frozen"] = True
+    _frozen_note = "f-frozen (temporal fractions pinned at NTS profile)"
+    history_entry["note"] = f"{note}; {_frozen_note}" if note else _frozen_note
+elif note:
     history_entry["note"] = note
 
 with open(HISTORY_FILE, "a") as f:
     f.write(json.dumps(history_entry) + "\n")
-print(f"Appended → {HISTORY_FILE}")
+print(f"Appended → {HISTORY_FILE}" + ("  (f-frozen)" if _FREEZE_F else ""))

@@ -254,9 +254,20 @@ def gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
 
 
 def _rational_kernel(d, P, ALPHA, BETA):
-    """f(d) = (ALPHA+BETA)·u^BETA / (ALPHA + BETA·u^(ALPHA+BETA)), u = d/P."""
+    """f(d) = (ALPHA+BETA)·u^BETA / (ALPHA + BETA·u^(ALPHA+BETA)), u = d/P.
+
+    Evaluated in the algebraically-identical, overflow-safe form
+        f = (ALPHA+BETA) / (ALPHA·u^(-BETA) + BETA·u^ALPHA).
+    The denominator is a sum of two non-negative powers of u; for u>0 it is always
+    > 0 (minimised at u=1, where it equals ALPHA+BETA ⇒ f=1), and at most ONE term
+    can overflow (u^(-BETA)→∞ needs u<1, u^ALPHA→∞ needs u>1). So when a power
+    overflows the result is (ALPHA+BETA)/∞ = 0 — the correct tail/origin limit —
+    instead of the ∞/∞ = NaN the direct form produces at large ALPHA+BETA (e.g. the
+    optimizer pushing ALPHA high). errstate silences the benign overflow warning."""
     u = d / P
-    return (ALPHA + BETA) * u**BETA / (ALPHA + BETA * u**(ALPHA + BETA))
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        denom = ALPHA * u ** (-BETA) + BETA * u ** ALPHA
+        return (ALPHA + BETA) / denom
 
 
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
