@@ -19,6 +19,7 @@ import pandas as pd
 import osmnx as ox
 import folium
 import pyproj
+import odf.opendocument, odf.table, odf.text
 
 from demographics_config import (
     CENTRE, OUT_DIR, GRAPH_PATH, DZ_BOUNDARY_FILE, POI_CACHE, PARKING_CACHE,
@@ -535,6 +536,75 @@ if os.path.exists(_flows_path):
         print(f"Added flow layer from {_flows_path} ({len(_link_flow)} links)")
 else:
     print(f"No flow data found at {_flows_path} — skipping flow layer")
+
+# ── NI traffic count sites (from ODS, Irish Grid → WGS84) ────────────────────
+_ODS_PATH = os.path.join(os.path.dirname(__file__), "..", "data",
+                         "2023-northern-ireland-traffic-count-data-in-ods-format.ods")
+# Sites used in calibration (shown with a distinct star marker)
+_CALIBRATION_SITES = {"507", "508", "444"}
+
+def _cell_text(cell):
+    return " ".join(str(p) for p in cell.getElementsByType(odf.text.P)).strip()
+
+if os.path.exists(_ODS_PATH):
+    _ods_doc  = odf.opendocument.load(_ODS_PATH)
+    _ods_sheets = _ods_doc.spreadsheet.getElementsByType(odf.table.Table)
+    _ig_to_wgs = pyproj.Transformer.from_crs("EPSG:29902", "EPSG:4326", always_xy=True)
+    _ods_sites = []
+    for _sheet in _ods_sheets:
+        _sname = _sheet.getAttribute("name")
+        if _sname == "Mastersheet":
+            continue
+        _rows = _sheet.getElementsByType(odf.table.TableRow)
+        _sid, _grid, _desc = None, None, None
+        for _row in _rows[:8]:
+            _cells = _row.getElementsByType(odf.table.TableCell)
+            _vals = [_cell_text(_c) for _c in _cells]
+            if _vals and _vals[0] == "Site ID":
+                _sid = _vals[1] if len(_vals) > 1 else None
+            elif _vals and _vals[0] == "Grid":
+                _grid = _vals[1] if len(_vals) > 1 else None
+            elif _vals and _vals[0] == "Description":
+                _desc = _vals[1] if len(_vals) > 1 else None
+        if _grid and len(_grid) == 12 and _grid.isdigit():
+            _e, _n = int(_grid[:6]), int(_grid[6:])
+            _lon, _lat = _ig_to_wgs.transform(_e, _n)
+            _ods_sites.append({
+                "id": _sname, "site_id": _sid or _sname, "desc": _desc or "",
+                "lat": _lat, "lon": _lon, "e": _e, "n": _n,
+            })
+
+    count_fg = folium.FeatureGroup(
+        name=f"NI traffic count sites — 2023 ODS ({len(_ods_sites)})", show=True)
+    for _s in _ods_sites:
+        _is_cal = _s["id"] in _CALIBRATION_SITES
+        _tip = (
+            f"<b>Site {_s['id']}</b>"
+            + (" ★ calibration" if _is_cal else "")
+            + f"<br>{_s['desc']}"
+            f"<br>Irish Grid E {_s['e']:,} N {_s['n']:,}"
+            f"<br>{_s['lat']:.5f}°N {abs(_s['lon']):.5f}°W"
+        )
+        if _is_cal:
+            folium.RegularPolygonMarker(
+                location=[_s["lat"], _s["lon"]],
+                number_of_sides=5, radius=10, rotation=54,
+                color="#8b0000", fill=True, fill_color="#e00000",
+                fill_opacity=0.9, weight=2,
+                tooltip=folium.Tooltip(_tip),
+            ).add_to(count_fg)
+        else:
+            folium.CircleMarker(
+                location=[_s["lat"], _s["lon"]], radius=7,
+                color="#5a0080", fill=True, fill_color="#a040c0",
+                fill_opacity=0.75, weight=1.5,
+                tooltip=folium.Tooltip(_tip),
+            ).add_to(count_fg)
+    count_fg.add_to(m)
+    print(f"Added NI count sites layer ({len(_ods_sites)} sites, "
+          f"{sum(1 for s in _ods_sites if s['id'] in _CALIBRATION_SITES)} calibration)")
+else:
+    print(f"ODS file not found at {_ODS_PATH} — skipping count sites layer")
 
 folium.LayerControl(collapsed=False).add_to(m)
 
