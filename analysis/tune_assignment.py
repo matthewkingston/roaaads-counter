@@ -557,7 +557,7 @@ def model_obs_3c(flow_res, flow_biz, flow_school):
     return m_r, m_b, m_s
 
 
-def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
+def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=40):
     """5-block alternating minimisation: (K, phi_biz, phi_sch, f_res, f_biz, f_school).
 
     Reparameterised as K_total, phi_biz = K_biz/K, phi_sch = K_school/K.
@@ -597,6 +597,16 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
     _fb = np.empty(n_obs)
     _fs = np.empty(n_obs)
     _NB = n_slots + 1
+
+    # The alternating updates use single Newton steps for the Poisson (walking)
+    # blocks, which do NOT guarantee descent — under the production-constrained
+    # flow magnitudes the iteration is non-monotonic and can collapse K toward the
+    # 1e-30 floor at some iteration counts (validated). So we evaluate the full
+    # regularized objective each iteration and RETURN THE BEST-SEEN state, not the
+    # last iterate (the iteration is run to max_iter; no early break, since the
+    # objective oscillates and a premature stop can miss the good basin).
+    _best_obj = float("inf")
+    _best     = None
 
     for _ in range(max_iter):
         K_old = K
@@ -713,8 +723,27 @@ def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=10):
             den   = K_sch ** 2 * s_den + _slot_ivs + _slot_gam
             f_s_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfs)
 
-        if abs(K - K_old) / max(abs(K_old), 1e-30) < 1e-8:
-            break
+        # ── Track the best-seen (K, f) state by the full regularized objective ──
+        _fr[:] = f_r_s[_sid]; _fb[:] = f_b_s[_sid]; _fs[:] = f_s_s[_sid]
+        _pred = K_res * cr * _fr + K_biz * cb * _fb + K_sch * cs * _fs
+        _resd = _pred - obs_rhs_arr
+        _obj  = float((_gauss_w_arr * _resd) @ _resd)          # Gaussian (official)
+        _pw   = np.maximum(_pred[_walk_slotted], 1e-30)        # Poisson (walking)
+        _n    = _walk_sl_n
+        _pos  = np.maximum(_n, 1e-300)
+        _obj += float(np.sum(2.0 * np.where(_n > 0, _n * np.log(_pos / _pw) + (_pw - _n), _pw)))
+        _frs = f_r_s[:n_slots]; _fbs = f_b_s[:n_slots]; _fss = f_s_s[:n_slots]
+        _obj += float(np.sum((_frs - _slot_mfr) ** 2 * _slot_ivr
+                             + (_fbs - _slot_mfb) ** 2 * _slot_ivb
+                             + (_fss - _slot_mfs) ** 2 * _slot_ivs
+                             + _slot_gam * (_frs + _fbs + _fss - _slot_mfa) ** 2))
+        if _obj < _best_obj:
+            _best_obj = _obj
+            _best     = (K_res, K_biz, K_sch, f_r_s.copy(), f_b_s.copy(), f_s_s.copy())
+
+    # Restore the best-seen state (guards against the non-monotonic collapse).
+    if _best is not None:
+        K_res, K_biz, K_sch, f_r_s, f_b_s, f_s_s = _best
 
     slot_fracs_res    = {sk: float(f_r_s[si]) for si, (sk, _) in enumerate(slot_list)}
     slot_fracs_biz    = {sk: float(f_b_s[si]) for si, (sk, _) in enumerate(slot_list)}
@@ -755,7 +784,7 @@ def objective(log_params, log_ref=None):
         w_pop, w_biz, THETA)
     m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
     K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
-        calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=5 if fast else 10)
+        calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=20 if fast else 40)
     _obs_f_r = np.empty(n_obs, dtype=np.float64)
     _obs_f_b = np.empty(n_obs, dtype=np.float64)
     _obs_f_s = np.empty(n_obs, dtype=np.float64)
@@ -859,6 +888,40 @@ elif _has_school:
 else:
     _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
 print(f"Gravity: {len(log_p0)} params{_grav_note}")
+
+# ── Calibration convergence probe (CALIBRATE_PROBE=1) ─────────────────────────
+# Diagnostic only: at the start params, run calibrate_Ks_and_fracs at several
+# max_iter values and report the residual global scale λ that would further reduce
+# the data χ² (λ≈1 ⇒ K is at its optimum). No optimization, no writes.
+if os.environ.get("CALIBRATE_PROBE"):
+    print("\n=== CALIBRATE PROBE (no optimization, no writes) ===")
+    _W=math.exp(log_p0[0]);_P=math.exp(log_p0[1]);_A=math.exp(log_p0[2]);_B=math.exp(log_p0[3])
+    _Pb=math.exp(log_p0[4]);_Ab=math.exp(log_p0[5])
+    _so=7 if _has_stoch else 6
+    _Ps=math.exp(log_p0[_so])   if _has_school else 1.0
+    _As=math.exp(log_p0[_so+1]) if _has_school else 1.0
+    _fr,_fb,_fs=run_assignment(_W,_P,_A,_B,_Pb,_Ab,_Ps,_As,base_w_pop,base_w_biz,None)
+    _mr,_mb,_ms=model_obs_3c(_fr,_fb,_fs)
+    def _probe_eval(Kr,Kb,Ks,sfr,sfb,sfs):
+        fr=np.array([sfr.get(sk,1/24) if sk else 1/24 for sk in obs_slot_keys])
+        fb=np.array([sfb.get(sk,1/24) if sk else 1/24 for sk in obs_slot_keys])
+        fs=np.array([sfs.get(sk,0.0) if sk else 0.0 for sk in obs_slot_keys])
+        pred=Kr*_mr*obs_Th*fr+Kb*_mb*obs_Th*fb+Ks*_ms*obs_Th*fs
+        def ch(lam):
+            p=np.maximum(lam*pred,1e-30)
+            c=float((_gauss_w_arr*(p-obs_rhs_arr))@(p-obs_rhs_arr))
+            pw=p[_walk_slotted]; n=_walk_sl_n; pos=np.maximum(n,1e-300)
+            c+=float(np.sum(2*np.where(n>0,n*np.log(pos/pw)+(pw-n),pw)))
+            return c
+        ls=np.logspace(-1,2,2000); cs=[ch(l) for l in ls]; lo=ls[int(np.argmin(cs))]
+        return ch(1.0),lo,ch(lo)
+    print(f"  params: W_BIZ={_W:.3f} P={_P:.1f} ALPHA={_A:.3f} BETA={_B:.3f} P_biz={_Pb:.1f} ALPHA_biz={_Ab:.3f}")
+    for mi in [10,30,100,300]:
+        Kr,Kb,Ks,sfr,sfb,sfs=calibrate_Ks_and_fracs(_mr,_mb,_ms,max_iter=mi)
+        c1,lo,clo=_probe_eval(Kr,Kb,Ks,sfr,sfb,sfs)
+        print(f"  max_iter={mi:4d}  K_res={Kr:.4e} K_biz={Kb:.4e} K_sch={Ks:.4e}"
+              f"  data χ²/N={c1/n_obs:7.3f}  opt_λ={lo:6.3f}  χ²/N@optλ={clo/n_obs:7.3f}")
+    sys.exit(0)
 
 # ── Run optimization ──────────────────────────────────────────────────────────
 
