@@ -46,7 +46,7 @@ import scipy.optimize
 sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
-                   constrained_od_flows, scatter_od_to_links,
+                   constrained_od_flows, scatter_od_to_links, load_self_terms,
                    print_chi2_table, assert_paths_cache_fresh)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -117,6 +117,10 @@ link_v       = cache["link_v"]
 N_links      = len(link_u)
 node_ids     = list(node_ids_arr)
 N_nodes      = len(node_ids)
+
+# External intra-zonal self-term (denominator-only; from build_intra_times.py).
+# Constant across evals — only the kernel F(self_dist) recomputes inside run_assignment.
+_self_src, _self_dist, _self_w = load_self_terms(node_ids)
 
 link_index = {(int(link_u[k]), int(link_v[k])): k for k in range(N_links)}
 
@@ -532,7 +536,8 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
     t_res, t_biz, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, base_w_school,
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school)
+        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school,
+        self_src=_self_src, self_dist=_self_dist, self_w=_self_w)
     flow_res = scatter_od_to_links(t_res, pair_idx, link_idx_arr, _link_weight, N_links)
     flow_biz = scatter_od_to_links(t_biz, pair_idx, link_idx_arr, _link_weight, N_links)
     if _has_school:

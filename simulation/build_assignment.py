@@ -18,6 +18,7 @@ import osmnx as ox
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
                    gravity_assign, constrained_od_flows, scatter_od_to_links,
+                   load_self_terms,
                    site_flow, compute_chi2, print_chi2_table,
                    assert_paths_cache_fresh)
 
@@ -148,6 +149,8 @@ print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum()
 
 N_links  = len(link_u)
 N_nodes  = len(node_ids_arr)
+# External intra-zonal self-term (denominator-only; from build_intra_times.py).
+self_src, self_dist, self_w = load_self_terms(list(node_ids_arr))
 # School component is active when K_sch>0, the school kernel is present, and there is
 # school demand. W_SCHOOL is no longer required/used (removed: redundant with K_sch under
 # the production constraint).
@@ -162,7 +165,8 @@ if _use_2c or _use_3c:
     t_res, t_biz, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, w_school,
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_3c)
+        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_3c,
+        self_src=self_src, self_dist=self_dist, self_w=self_w)
     raw_res = scatter_od_to_links(t_res, pair_idx, link_idx, link_weight, N_links)
     raw_biz = scatter_od_to_links(t_biz, pair_idx, link_idx, link_weight, N_links)
     raw_sch = (scatter_od_to_links(t_sch, pair_idx, link_idx, link_weight, N_links)

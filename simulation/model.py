@@ -48,6 +48,7 @@ TUNER_CONFIG    = "simulation/tuner_config.json"
 TUNED_PARAMS    = "simulation/tuned_params.json"
 LINK_AADT       = "data/link_aadt.json"
 OFFICIAL_HOURLY = "data/official_hourly.json"
+INTRA_TIMES     = "data/external_intra_times.json"
 
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 
@@ -261,7 +262,8 @@ def _rational_kernel(d, P, ALPHA, BETA):
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_pop, w_biz, w_school,
                          W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-                         P_school=None, ALPHA_school=None, with_school=False):
+                         P_school=None, ALPHA_school=None, with_school=False,
+                         self_src=None, self_dist=None, self_w=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
     Returns (t_res, t_biz, t_sch), each a float64 array parallel to od_src/od_dst.
@@ -271,6 +273,18 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     Denominators are summed over the FULL destination set of each origin (all od
     pairs sharing that od_src — internal, external-routed, and denominator-only
     ext→ext virtual edges), so each origin's production budget is conserved.
+
+    External intra-zonal self-term (optional, denominator-only):
+      self_src  — node indices i of external zones, each repeated M_i× (one entry
+                  per sampled intra-zonal OSRM time).
+      self_dist — the sampled intra-zonal times (seconds), parallel to self_src.
+      self_w    — per-entry multiplicity weight (1/M_i), so the M_i entries of a
+                  zone collectively count as one diagonal destination.
+    Adds  a^c_i·(1/M_i)·Σ_m F_c(t_im)  to each per-origin denominator D^c_i — i.e.
+    restores the k=i diagonal that collapsing a zone to a centroid dropped (see
+    project_production_constrained_gravity, "external intra-zonal self-term").  These
+    entries touch ONLY the denominators; they contribute no link flow (no pair_idx).
+    self_src=None ⇒ exact prior behaviour.
     """
     src = od_src
     dst = od_dst
@@ -280,14 +294,25 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     pop_s = w_pop[src]; pop_d = w_pop[dst]
     biz_s = w_biz[src]; biz_d = w_biz[dst]
 
-    # Per-origin denominators D^c_i = Σ_k a^c_k·F_c(d_ik); inverse with 0/0 → 0.
-    def _inv_denom(attr_d, F):
+    _has_self = self_src is not None and len(self_src) > 0
+    if _has_self:
+        F_res_self = _rational_kernel(self_dist, P,     ALPHA,     BETA)
+        F_biz_self = _rational_kernel(self_dist, P_biz, ALPHA_biz, BETA)
+
+    # Per-origin denominators D^c_i = Σ_k a^c_k·F_c(d_ik) (+ intra-zonal self-term);
+    # inverse with 0/0 → 0.  attr_d/F = per-pair destination attraction × kernel;
+    # attr_full/F_self = per-node own-zone attraction × self-kernel for the diagonal.
+    def _inv_denom(attr_d, F, attr_full, F_self):
         D = np.bincount(src, weights=attr_d * F, minlength=N_nodes)
+        if _has_self:
+            D += np.bincount(self_src,
+                             weights=attr_full[self_src] * F_self * self_w,
+                             minlength=N_nodes)
         return np.where(D > 0, 1.0 / D, 0.0)
 
-    iD_res_pop = _inv_denom(pop_d, F_res)   # res: attraction = pop
-    iD_biz_pop = _inv_denom(pop_d, F_biz)   # biz-cross leg biz→pop: attraction = pop
-    iD_biz_biz = _inv_denom(biz_d, F_biz)   # biz-cross leg pop→biz + biz×biz: attraction = biz
+    iD_res_pop = _inv_denom(pop_d, F_res, w_pop, F_res_self if _has_self else None)   # res: attraction = pop
+    iD_biz_pop = _inv_denom(pop_d, F_biz, w_pop, F_biz_self if _has_self else None)   # biz-cross leg biz→pop: attraction = pop
+    iD_biz_biz = _inv_denom(biz_d, F_biz, w_biz, F_biz_self if _has_self else None)   # biz-cross leg pop→biz + biz×biz: attraction = biz
 
     # res: pop_i·pop_j·F_res / D^res,pop_i
     t_res = pop_s * pop_d * F_res * iD_res_pop[src]
@@ -301,9 +326,10 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
 
     if with_school and w_school is not None and w_school.sum() > 0:
         F_sch = _rational_kernel(od_dist, P_school, ALPHA_school, BETA)
+        F_sch_self = _rational_kernel(self_dist, P_school, ALPHA_school, BETA) if _has_self else None
         sch_s = w_school[src]; sch_d = w_school[dst]
-        iD_sch_pop = _inv_denom(pop_d, F_sch)   # school-cross leg school→pop: attraction = pop
-        iD_sch_sch = _inv_denom(sch_d, F_sch)   # school-cross leg pop→school: attraction = school
+        iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop,    F_sch_self)   # school-cross leg school→pop: attraction = pop
+        iD_sch_sch = _inv_denom(sch_d, F_sch, w_school, F_sch_self)   # school-cross leg pop→school: attraction = school
         t_sch = F_sch * (
             pop_s * sch_d * iD_sch_sch[src]       # pop i → school j  (attraction school)
             + sch_s * pop_d * iD_sch_pop[src]     # school i → pop j  (attraction pop)
@@ -325,6 +351,53 @@ def scatter_od_to_links(t_pair, pair_idx, link_idx, link_weight, N_links):
     if link_weight is not None:
         w = w * link_weight
     return np.bincount(link_idx, weights=w, minlength=N_links)
+
+
+def load_self_terms(node_ids, intra_times_file=INTRA_TIMES):
+    """Build (self_src, self_dist, self_w) for constrained_od_flows from the
+    intra-zonal OSRM time samples written by build_intra_times.py.
+
+    For each external zone present BOTH in the intra-times file and in node_ids,
+    emits one entry per sampled time: self_src = the zone's node index (repeated
+    M_i×), self_dist = the sampled times, self_w = 1/M_i (so a zone's M_i samples
+    collectively count as one diagonal destination, contributing mean_m F(t_im)).
+
+    Returns (None, None, None) if the file is absent or yields no usable entries
+    (⇒ constrained_od_flows reverts to no self-term).  Zones in the file but absent
+    from node_ids are skipped (printed); they cannot be indexed into the weight arrays.
+    """
+    if not os.path.exists(intra_times_file):
+        print(f"  [self-term] {intra_times_file} not found — no intra-zonal self-term")
+        return None, None, None
+    with open(intra_times_file) as f:
+        data = json.load(f)
+    data.pop("_meta", None)
+    node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
+    src, dist, wt = [], [], []
+    n_zones = 0
+    missing = []
+    for zid, times in data.items():
+        idx = node_to_idx.get(zid)
+        if idx is None:
+            missing.append(zid)
+            continue
+        if not times:
+            continue
+        m = len(times)
+        src.extend([idx] * m)
+        dist.extend(times)
+        wt.extend([1.0 / m] * m)
+        n_zones += 1
+    if not src:
+        print(f"  [self-term] {intra_times_file} has no zones matching the cache nodes — no self-term")
+        return None, None, None
+    if missing:
+        print(f"  [self-term] {len(missing)} intra-times zones absent from cache node_ids (skipped)")
+    print(f"  [self-term] intra-zonal self-term active for {n_zones} external zones "
+          f"({len(src)} samples)")
+    return (np.asarray(src, dtype=np.intp),
+            np.asarray(dist, dtype=np.float64),
+            np.asarray(wt, dtype=np.float64))
 
 # ── Flow extraction ───────────────────────────────────────────────────────────
 
