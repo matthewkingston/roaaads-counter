@@ -63,10 +63,19 @@ if os.path.exists(CENSUS_ZONES_FILE):
 if _census_zones is not None:
     RADIUS_M = round(_census_zones["max_core_vertex_dist_m"]) + NETWORK_MARGIN_M
 
-_ext_biz_scale = 1.0
+_ext_biz_scale    = 1.0
+_ext_school_per_pop = None
 if os.path.exists(TUNER_CONFIG_FILE):
     with open(TUNER_CONFIG_FILE) as _f:
-        _ext_biz_scale = json.load(_f).get("ext_biz_scale", 1.0)
+        _tc = json.load(_f)
+    _ext_biz_scale      = _tc.get("ext_biz_scale", 1.0)
+    _ext_school_per_pop = _tc.get("ext_school_per_pop")
+
+if _ext_school_per_pop is None:
+    print("ERROR: 'ext_school_per_pop' missing from tuner_config.json.")
+    print("  Run: python3 simulation/compute_ext_school_scale.py")
+    print("  Then add the printed value to tuner_config.json.")
+    sys.exit(1)
 
 # ── Fast path: --zones-only ────────────────────────────────────────────────────
 # Patches only external-zone entries in node_weights.json. Skips all internal
@@ -87,10 +96,11 @@ if args.zones_only:
         w["node_population"][str(nid)]      = float(ext["population"])
         w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) * _ext_biz_scale
         if "node_school_demand" in w:
-            w["node_school_demand"][str(nid)] = 0.0
+            w["node_school_demand"][str(nid)] = float(ext["population"]) * _ext_school_per_pop
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
-              f"biz={w['node_business_demand'][str(nid)]:>10,.1f}")
+              f"biz={w['node_business_demand'][str(nid)]:>10,.1f}  "
+              f"school={w['node_school_demand'][str(nid)]:>8,.1f}")
     with open(weights_path, "w") as f:
         json.dump(w, f)
     print(f"Saved {len(ext_nodes)} external nodes → {weights_path}")
@@ -641,7 +651,7 @@ else:
             nid = ext["id"]
             node_population[nid]      = float(ext["population"])
             node_business_demand[nid] = float(ext["workplace_pop"]) * _ext_biz_scale
-            node_school_demand[nid]   = 0.0   # TBD
+            node_school_demand[nid]   = float(ext["population"]) * _ext_school_per_pop
     else:
         ext_nodes = []
 
