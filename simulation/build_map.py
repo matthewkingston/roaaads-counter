@@ -39,6 +39,8 @@ if os.path.exists(CENSUS_ZONES_FILE):
     with open(CENSUS_ZONES_FILE) as _f:
         _census_zones = json.load(_f)
 
+_ext_node_trips = {}  # populated from flows JSON when available
+
 # POI/parking GeoDataFrames are reloaded from cache below (see map layers).
 _park_utm = None
 pois_utm  = None
@@ -394,6 +396,7 @@ if os.path.exists(_flows_path):
     _link_flow_school = _parse_flows("flows_school")
     _has_components   = bool(_link_flow_res)
     _has_school_layer = bool(_link_flow_school)
+    _ext_node_trips   = _flows_data.get("ext_node_trips", {})
 
     # ── colour helpers ────────────────────────────────────────────────────────
     def _log_scale(flow_dict):
@@ -605,6 +608,48 @@ if os.path.exists(_ODS_PATH):
           f"{sum(1 for s in _ods_sites if s['id'] in _CALIBRATION_SITES)} calibration)")
 else:
     print(f"ODS file not found at {_ODS_PATH} — skipping count sites layer")
+
+# ── External zone markers ─────────────────────────────────────────────────────
+if _census_zones is not None:
+    _ext_zones = _census_zones["external_nodes"]
+    _max_ext_tot = max(
+        (_ext_node_trips.get(_ez["id"], {}).get("trips_through", 0)
+         + _ext_node_trips.get(_ez["id"], {}).get("trips_internal", 0))
+        for _ez in _ext_zones
+    ) if _ext_node_trips else 1.0
+    ext_fg = folium.FeatureGroup(name=f"External zones ({len(_ext_zones)})", show=False)
+    for _ez in _ext_zones:
+        _nid    = _ez["id"]
+        _ez_pop = node_population.get(_nid, 0)
+        _ez_biz = node_business_demand.get(_nid, 0)
+        _ez_sch = node_school_demand.get(_nid, 0)
+        _trips  = _ext_node_trips.get(_nid, {})
+        _t_int  = _trips.get("trips_internal", 0)
+        _t_thr  = _trips.get("trips_through",  0)
+        _t_tot  = _t_int + _t_thr
+        _radius = max(4, 12 * (_t_tot / max(_max_ext_tot, 1)) ** 0.4) if _t_tot > 0 else 4
+        _tip = (
+            f"<b>{_nid}</b> [{_ez['level']}]<br>"
+            f"population: {_ez_pop:,.0f}<br>"
+            f"business demand: {_ez_biz:,.1f}<br>"
+            f"school demand: {_ez_sch:,.1f}"
+        )
+        if _trips:
+            _tip += (
+                f"<br>trips sent: {_t_tot:,.0f}"
+                f"<br>&nbsp;&nbsp;to internal: {_t_int:,.0f}"
+                f"<br>&nbsp;&nbsp;through-trips: {_t_thr:,.0f}"
+            )
+        folium.CircleMarker(
+            location=[_ez["centroid_lat"], _ez["centroid_lon"]],
+            radius=_radius,
+            color="#2c6e49", fill=True, fill_color="#40916c", fill_opacity=0.7, weight=1.5,
+            tooltip=folium.Tooltip(_tip),
+        ).add_to(ext_fg)
+    ext_fg.add_to(m)
+    print(f"Added external zones layer ({len(_ext_zones)} nodes"
+          + (f", {len(_ext_node_trips)} with trip data" if _ext_node_trips else ", no trip data")
+          + ")")
 
 folium.LayerControl(collapsed=False).add_to(m)
 

@@ -185,6 +185,26 @@ if _use_2c or _use_3c:
                        + (link_flow_school.get(lnk, 0.0) if link_flow_school else 0.0))
                  for lnk in set(link_flow_res) | set(link_flow_biz)
                             | (set(link_flow_school) if link_flow_school else set())}
+
+    # Per-external-node trip totals (routed pairs only: through = transiting ext→ext).
+    _n_routed = int(cache.get("n_routed_pairs", len(od_src)))
+    _is_ext   = np.array([isinstance(nid, str) for nid in node_ids_arr])
+    _t_total  = t_res * K_res + t_biz * K_biz + (t_sch * K_sch if _use_3c else np.zeros(len(t_res)))
+    _src_r    = od_src[:_n_routed]
+    _dst_r    = od_dst[:_n_routed]
+    _t_r      = _t_total[:_n_routed]
+    _dst_ext  = _is_ext[_dst_r]
+    ext_node_trips = {}
+    for _ei in (i for i, nid in enumerate(node_ids_arr) if isinstance(nid, str)):
+        _m = _src_r == _ei
+        if not _m.any():
+            continue
+        _t = _t_r[_m]
+        _de = _dst_ext[_m]
+        ext_node_trips[str(node_ids_arr[_ei])] = {
+            "trips_through":  round(float(_t[ _de].sum()), 1),
+            "trips_internal": round(float(_t[~_de].sum()), 1),
+        }
 else:
     # Legacy single-K unconstrained path (old param files without K_res/K_biz).
     _kw = dict(BETA=BETA, THETA=THETA,
@@ -197,6 +217,7 @@ else:
     link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k] * K
                  for k in range(N_links) if raw_flow_arr[k] > 0}
     link_flow_res = link_flow_biz = link_flow_school = None
+    ext_node_trips = {}
 
 print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
 
@@ -251,6 +272,7 @@ if _use_3c or _use_2c:
     out["K_biz"] = K_biz
     out["flows_res"] = {f"{u},{v}": flow for (u, v), flow in link_flow_res.items()}
     out["flows_biz"] = {f"{u},{v}": flow for (u, v), flow in link_flow_biz.items()}
+    out["ext_node_trips"] = ext_node_trips
 if _use_3c:
     out["K_sch"] = K_sch
     out["flows_school"] = {f"{u},{v}": flow for (u, v), flow in link_flow_school.items()}
