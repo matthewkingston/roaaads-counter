@@ -227,13 +227,93 @@ def _factor_table_lua(spec):
     return "{" + ", ".join(items) + "}"
 
 
-def emit_factor_block(spec):
-    """Lua block: divide each way's speed by its tuned per-bucket factor."""
+def _pref_table_lua(pref_dict):
+    """Lua table {key=p} for non-unit preference multipliers.
+
+    Keys are highway class names or 'class_rural' for the rural sub-bucket of
+    split classes (trunk/primary/secondary/tertiary).  Non-unit entries only.
+    """
+    items = [f'["{cls}"]={v}' for cls, v in sorted(pref_dict.items())
+             if abs(float(v) - 1.0) > 1e-9]
+    return "{" + ", ".join(items) + "}"
+
+
+def emit_factor_block(spec, pref_dict=None):
+    """Lua block: timing factors (class×band) + optional urban/rural preference.
+
+    The two tables are separate within one do…end block (highway tag read once).
+    pref_dict maps preference keys → p_c (float); p_c < 1 makes a class
+    preferred in routing without changing reported duration.
+
+    Preference keys:
+      'class'       — urban (≤30mph effective speed) or non-split class
+      'class_rural' — rural (>30mph) for trunk/primary/secondary/tertiary
+    For untagged roads the OSRM speed_profile default speed determines urban/rural.
+    Link classes are resolved to their parent class for the lookup.
+
+    Timing (forward_speed, forward_rate) and preference (forward_rate only) are
+    applied in sequence:
+      1. forward_speed /= _f          -- timing correction (duration changes)
+         forward_rate  = forward_speed / 3.6
+      2. forward_rate /= _p           -- preference bias (duration unchanged)
+    """
+    pref_block = ""
+    if pref_dict:
+        # Lua constants for the urban/rural split.
+        # OSRM speed_profile defaults (km/h) used when no maxspeed tag (_bi==0 or 7).
+        osrm_def = (
+            "{trunk=85, primary=65, secondary=55, tertiary=40,"
+            " trunk_link=40, primary_link=30, secondary_link=25, tertiary_link=20}"
+        )
+        # Split classes: get rural sub-bucket key when effective speed > 30 mph (48.3 km/h).
+        # Link classes are resolved to their parent before the rural check.
+        split_set = "{trunk=true, primary=true, secondary=true, tertiary=true}"
+        link_parent = (
+            "{motorway_link=\"motorway\", trunk_link=\"trunk\","
+            " primary_link=\"primary\", secondary_link=\"secondary\","
+            " tertiary_link=\"tertiary\"}"
+        )
+        # MPH values for band indices 1-6 (20/30/40/50/60/70 mph).
+        mph_for_bi = "{[1]=20, [2]=30, [3]=40, [4]=50, [5]=60, [6]=70}"
+        pref_block = (
+            "    -- Preference bias: forward_rate only (duration unchanged)\n"
+            "    -- Split classes (trunk/primary/secondary/tertiary) get separate urban/rural\n"
+            "    -- parameters: ≤30mph effective speed → base class key; >30mph → class_rural.\n"
+            "    -- For untagged roads (_bi==0) the OSRM speed_profile default is used.\n"
+            "    -- Link classes are resolved to their parent for the lookup.\n"
+            "    do\n"
+            "      local _PREF     = " + _pref_table_lua(pref_dict) + "\n"
+            "      local _SPLIT    = " + split_set + "\n"
+            "      local _LPAR     = " + link_parent + "\n"
+            "      local _OSRMDEF  = " + osrm_def + "\n"
+            "      local _MPHBI    = " + mph_for_bi + "\n"
+            "      local _hw_base  = _LPAR[_hw] or _hw\n"
+            "      local _eff_kmh\n"
+            "      if _bi == 0 or _bi == 7 then\n"
+            "        _eff_kmh = (_OSRMDEF[_hw] or 25)\n"
+            "      else\n"
+            "        _eff_kmh = (_MPHBI[_bi] or 25) * 1.60934\n"
+            "      end\n"
+            "      local _pref_key = (_SPLIT[_hw_base] and _eff_kmh > 48.3)\n"
+            "                        and (_hw_base .. \"_rural\") or _hw_base\n"
+            "      local _p = _PREF[_pref_key] or _PREF[_hw_base] or 1.0\n"
+            "      if _p ~= 1.0 then\n"
+            "        if (result.forward_rate  or 0) > 0 then\n"
+            "          result.forward_rate  = result.forward_rate  / _p\n"
+            "        end\n"
+            "        if (result.backward_rate or 0) > 0 then\n"
+            "          result.backward_rate = result.backward_rate / _p\n"
+            "        end\n"
+            "      end\n"
+            "    end\n"
+        )
     return (
         "\n"
-        "  -- === Calibrated per-bucket speed factors (compile_profile.py) ===\n"
-        "  -- factor > 1 slows the bucket down (OSRM was too fast); keyed by the\n"
-        "  -- same integer (class x band) bucket id as profile_spec.bucket_index.\n"
+        "  -- === Calibrated speed factors + route preference (compile_profile.py) ===\n"
+        "  -- _FAC (class×band): timing corrections — divides forward_speed (affects\n"
+        "  --   reported duration and routing weight equally).\n"
+        "  -- _PREF (class-only): preference bias — divides forward_rate only\n"
+        "  --   (routing weight only; reported duration unchanged).\n"
         "  do\n"
         "    local _FAC = " + _factor_table_lua(spec) + "\n"
         + _bucket_index_lua(4) +
@@ -248,6 +328,7 @@ def emit_factor_block(spec):
         "        result.backward_rate  = result.backward_speed / 3.6\n"
         "      end\n"
         "    end\n"
+        + pref_block +
         "  end\n"
         "  -- ================================================================\n"
     )

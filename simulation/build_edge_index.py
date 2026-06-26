@@ -92,13 +92,15 @@ def _read_match_cache():
     return recs
 
 
-def collect_matches(osrm_url, limit=None):
+def collect_matches(osrm_url, limit=None, manifest_file=None):
     """Map-match every cached route on the real OSRM, caching full detail.
     Resumable: skips routes already in match_cache.jsonl; `limit` caps ODs this
-    run (for quick validation / batching the slow ~1.7 s/match pass)."""
-    if not os.path.exists(MANIFEST_FILE):
-        sys.exit(f"ERROR: {MANIFEST_FILE} not found — run build_od_manifest.py first.")
-    ods = json.load(open(MANIFEST_FILE))["od_pairs"]
+    run (for quick validation / batching the slow ~1.7 s/match pass).
+    manifest_file overrides MANIFEST_FILE — use for a second batch (v2)."""
+    mf = manifest_file or MANIFEST_FILE
+    if not os.path.exists(mf):
+        sys.exit(f"ERROR: {mf} not found — run build_od_manifest.py first.")
+    ods = json.load(open(mf))["od_pairs"]
     cached = [o for o in ods if os.path.exists(os.path.join(RAW_DIR, f"{o['od_id']}.json"))]
     if limit:
         cached = cached[:limit]
@@ -281,14 +283,18 @@ def main():
     ap.add_argument("--limit", type=int, default=None,
                     help="cap ODs processed in --match this run (resumable; for "
                          "quick validation or batching the slow match pass)")
+    ap.add_argument("--manifest", default=None,
+                    help="override manifest file for --match (e.g. od_manifest_v2.json); "
+                         "appends to the shared match_cache.jsonl; use when processing "
+                         "a second batch without touching the v1 manifest")
     args = ap.parse_args()
 
     if args.match and not args.extract:
-        collect_matches(args.osrm_url, args.limit)
+        collect_matches(args.osrm_url, args.limit, args.manifest)
     elif args.extract and not args.match:
         extract()
     else:
-        collect_matches(args.osrm_url, args.limit)
+        collect_matches(args.osrm_url, args.limit, args.manifest)
         extract()
 
 

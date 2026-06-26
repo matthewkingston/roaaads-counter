@@ -7,8 +7,14 @@ speed-factor block (osrm_lua.emit_factor_block — keyed on the *same* integer
 (class x band) bucket id as profile_spec.bucket_index, so it cannot drift from
 the offline model), writes car_roaaads.lua, and prints the re-preprocess commands.
 
-  python3 simulation/compile_profile.py                       # uses tuned_profile.json
-  python3 simulation/compile_profile.py --spec path/to/spec.json
+Optionally also injects class-level route-preference multipliers from
+simulation/tuned_preference.json (--pref / --no-pref).  The timing (_FAC) and
+preference (_PREF) tables are separate; _PREF only touches forward_rate (routing
+weight), not forward_speed (reported duration).
+
+  python3 simulation/compile_profile.py                       # uses tuned_profile.json + tuned_preference.json if present
+  python3 simulation/compile_profile.py --no-pref             # timing only
+  python3 simulation/compile_profile.py --spec path/to/spec.json --pref path/to/pref.json
   python3 simulation/compile_profile.py --out /tmp/car_test.lua
 
 After writing, rebuild the DEPLOYED OSRM (:5000) with the printed commands, then
@@ -16,6 +22,7 @@ gate it with analysis/verify_profile.py before adopting downstream.
 """
 
 import argparse
+import json
 import os
 import sys
 
@@ -25,12 +32,17 @@ import profile_spec as ps
 
 OSRM_DATA_DIR = "/home/matthew/Documents/CodingFun/osrm"
 DEFAULT_SPEC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tuned_profile.json")
+DEFAULT_PREF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tuned_preference.json")
 PBF_NAME = "ireland-and-northern-ireland-latest.osm.pbf"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", default=DEFAULT_SPEC)
+    ap.add_argument("--pref", default=None,
+                    help="preference JSON (default: tuned_preference.json if present)")
+    ap.add_argument("--no-pref", action="store_true",
+                    help="skip preference factors even if tuned_preference.json exists")
     ap.add_argument("--out", default=os.path.join(OSRM_DATA_DIR, "car_roaaads.lua"))
     args = ap.parse_args()
 
@@ -39,12 +51,30 @@ def main():
                  f"(see analysis/eval_profile.py / profile_spec.ProfileSpec).")
     spec = ps.ProfileSpec.load(args.spec)
     n_fac = sum(1 for v in spec.factors.values() if abs(v - 1.0) > 1e-9)
-    print(f"Spec: {args.spec}  ({n_fac} non-unit factors, turn={spec.turn})")
+    print(f"Timing spec: {args.spec}  ({n_fac} non-unit factors, turn={spec.turn})")
+
+    # Load preference dict if available and not suppressed
+    pref_dict = None
+    if not args.no_pref:
+        pref_path = args.pref if args.pref else DEFAULT_PREF
+        if os.path.exists(pref_path):
+            with open(pref_path) as f:
+                pref_data = json.load(f)
+            pref_dict = pref_data.get("preference", {})
+            n_pref = sum(1 for v in pref_dict.values() if abs(v - 1.0) > 1e-4)
+            print(f"Preference:  {pref_path}  ({n_pref} non-unit classes)")
+            for cls, v in sorted(pref_dict.items()):
+                if abs(v - 1.0) > 1e-4:
+                    print(f"  {cls}: {v:.4f}")
+        elif args.pref:
+            sys.exit(f"ERROR: --pref {args.pref} not found.")
+        else:
+            print("Preference:  none (tuned_preference.json absent; timing only)")
 
     print(f"Pulling stock car.lua from {osrm_lua.OSRM_IMAGE} …")
     base_lua, found_path = osrm_lua.pull_base_lua()
     base_lua = osrm_lua.apply_turn_overrides(base_lua, spec.turn)
-    patched, strategy = osrm_lua.inject(base_lua, osrm_lua.emit_factor_block(spec))
+    patched, strategy = osrm_lua.inject(base_lua, osrm_lua.emit_factor_block(spec, pref_dict))
     print(f"  Injection strategy: {strategy}")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -58,6 +88,7 @@ def main():
 
     base = PBF_NAME.replace(".osm.pbf", "")
     lua_name = os.path.basename(args.out)
+    pref_flag = f" --pref {args.pref}" if args.pref else ""
     print(f"""
 Rebuild the DEPLOYED OSRM (:5000) with the calibrated profile:
 
@@ -67,7 +98,7 @@ Rebuild the DEPLOYED OSRM (:5000) with the calibrated profile:
   docker run --rm -v "$(pwd):/data" {osrm_lua.OSRM_IMAGE} osrm-customize  /data/{base}.osrm
   docker run -t -i -p 5000:5000 -v "$(pwd):/data" {osrm_lua.OSRM_IMAGE} osrm-routed --algorithm mld /data/{base}.osrm
 
-Then gate it:
+Then gate timing fidelity (preference doesn't change forward_speed, so gate is unchanged):
   python3 analysis/verify_profile.py --spec {args.spec}
 """)
 
