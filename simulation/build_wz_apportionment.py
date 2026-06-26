@@ -256,8 +256,8 @@ def main():
     sa_workplace = (
         pieces.groupby("SA_PUB2022")["sa_wp_contrib"]
         .sum()
-        .rename("workplace_pop")
-        .reset_index(names="sa_code")
+        .reset_index()
+        .rename(columns={"SA_PUB2022": "sa_code", "sa_wp_contrib": "workplace_pop"})
     )
 
     apportioned_total = sa_workplace["workplace_pop"].sum()
