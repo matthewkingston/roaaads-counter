@@ -104,6 +104,7 @@ def _extract_poi_osm():
     _docker(
         f"osmfilter {o5m_docker} -t=/osrm/wz_pois/_osmfilter_tmp "
         f'--keep-nodes="amenity= shop= office=" '
+        f"--drop-ways --drop-relations "
         f"-o=/osrm/wz_pois/pois.osm"
     )
     print(f"  POI osm: {os.path.getsize(pois_osm_host)/1e6:.0f} MB")
