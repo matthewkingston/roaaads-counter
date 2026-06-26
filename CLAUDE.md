@@ -558,11 +558,25 @@ on a better turn model. The verify gate is the contract that lets the fast loop 
 any tuned `car_roaaads.lua` is adopted (then re-run the downstream chain:
 `build_external_links → reduce_deadends → build_paths → tune_assignment`).
 
-**Empirical-calibration status (2026-06-23):** empirical base speeds make the offline model a
+**Empirical-calibration status (2026-06-26):** empirical base speeds make the offline model a
 faithful proxy for real OSRM on external corridors (verify per-leg medians ≈ 1.00–1.03); the
 external-focused factor tune lands X2B/B2X/X2X medians ≈ 0.97–1.00 vs Google with physically
-sensible factors (motorway sped up to ~Google free-flow, urban A/B-roads slowed). Outstanding:
-in-town (INT) turn model; tuning the global turn params; the route-preference (stage-2) layer.
+sensible factors (motorway sped up to ~Google free-flow, urban A/B-roads slowed). **Confirmed
+stable at 2× data (v1+v2 combined, 3932 routes, 2026-06-26): factors and per-leg medians
+unchanged from the 1946-route fit — timing calibration has converged.** Outstanding: in-town
+(INT) turn model (model 0.882× real on INT, under-counts junctions); tuning the global turn
+params; the route-preference (stage-2) layer.
+
+**Route-preference calibration (class-only, explored 2026-06-26):** a scale-invariant
+log-ratio ranking loss was fitted over 67 true preference violations (Google chose the slower
+road) from the v1+v2 skeleton cache, with an urban/rural split on trunk/primary/secondary/
+tertiary (13 classes, `simulation/tune_preference.py`). Signal is clear (trunk urban preferred,
+tertiary/secondary rural avoided) but **class-only factors cannot be deployed:** at every
+regularisation level (lam 0.001–0.5) the net ranking change is negative — the 67 violations
+are outnumbered ~15:1 by external concordant pairs on the same road classes, so any factor
+large enough to resolve a violation flips 4–5× more concordant pairs. The 1:15 ratio is
+structural; class-level granularity is too coarse. Preference calibration deferred pending a
+better conditioning strategy (e.g. margin conditioning, or a fundamentally different signal).
 
 ---
 
