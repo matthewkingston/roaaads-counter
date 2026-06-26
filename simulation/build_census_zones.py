@@ -1,72 +1,52 @@
 """
-Build the hierarchical census-area external zone network for Newtownards.
+Build the hierarchical census-area external zone network.
 
-Classifies all of NI into a three-level hierarchy:
-  - Core area  : union of DZs that directly intersect CORE_RADIUS
-  - DZ nodes   : non-core DZs from partially-core SDZs (individual DZ-level external nodes)
-  - SDZ nodes  : SDZs within SDZ_ZONE_RADIUS with no core DZs
-  - DEA nodes  : DEAs outside SDZ_ZONE_RADIUS (represented by a single centroid)
+Works for any CENTRE on the island of Ireland: NI areas use DZ/SDZ/DEA from NISRA;
+RoI areas use SA/ED/LEA from CSO.  Both are loaded and merged before classification,
+so changing zones_config.CENTRE to a RoI town produces a valid output automatically.
 
-Population-weighted centroids are computed for each external (SDZ/DEA) node
-from DZ-level census population data.
+Hierarchy
+---------
+  Core area   : small areas (DZ or SA) that intersect CORE_RADIUS
+  Intermediate: SDZs/EDs within SDZ_ZONE_RADIUS whose parent outer-zone is "broken"
+                and that have no core small areas
+  Orphan      : non-core small areas from partially-core intermediate zones
+  Outer       : DEAs/LEAs outside SDZ_ZONE_RADIUS (one centroid node each)
 
-Data files required:
-  simulation/dz2021/DZ2021.geojson   — DZ polygon boundaries
-    https://www.nisra.gov.uk/support/geography/data-zones-census-2021
-  simulation/sdz2021/SDZ2021.geojson  — SDZ polygon boundaries
-    https://www.nisra.gov.uk/support/geography/super-data-zones-census-2021
-  simulation/dea2021/DEA2021.geojson  — DEA polygon boundaries (OSNI Open Data)
-    https://admin.opendatani.gov.uk/dataset/osni-open-data-largescale-boundaries-district-electoral-areas-2012
-  data/census-2021-apwp001.xlsx       — DZ-level workplace population
+Data files required (NI)
+    simulation/dz2021/DZ2021.geojson
+    simulation/sdz2021/SDZ2021.geojson
+    simulation/dea2021/DEA2021.geojson
+    data/census-2021-apwp001.xlsx
 
-Population is fetched from the NISRA API (cached to data/cache_nisra_population.csv).
+Data files required (RoI, in data/ireland_data/)
+    Small_Area_National_Statistical_Boundaries_2022_*.geojson
+    Complete_set_of_Census_2022_SAPs/SAPS_2022_Small_Area_UR_171024.csv
+    Workplace_Zones_ITM/Workplace_Zones_ITM.shp   (WZ boundaries in ITM)
+    cache_sa_workplace.csv   (pre-computed WZ→SA apportionment)
+        → run simulation/build_wz_apportionment.py once to generate this
 
-Output: data/census_zones.json
+Output: data/census_zones.json  (same schema as before; external_nodes now include
+RoI LEA/ED/SA entries alongside NI DEA/SDZ/DZ entries)
 """
 
-import json, math, os, sys, urllib.request
+import json, math, os
 import geopandas as gpd
 import pandas as pd
 import numpy as np
 import pyproj
 from shapely.geometry import Point, mapping
 from shapely.ops import unary_union
+import shapely.ops as sops
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-# CENTRE / CORE_RADIUS / SDZ_ZONE_RADIUS live in zones_config.py (single source).
 from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
 from demographics_config import PROJECTED_CRS
+from ingest_ni_census import load_ni_census
+from ingest_roi_census import load_roi_census
 
-DZ_BOUNDARY_FILE  = "simulation/dz2021/DZ2021.geojson"
-SDZ_BOUNDARY_FILE = "simulation/sdz2021/SDZ2021.geojson"
-DEA_BOUNDARY_FILE = "simulation/dea2021/DEA2021.geojson"
-WORKPLACE_FILE    = "data/census-2021-apwp001.xlsx"
-POPULATION_CACHE  = "data/cache_nisra_population.csv"
-OUTPUT_FILE       = "data/census_zones.json"
+OUTPUT_FILE = "data/census_zones.json"
 
-POPULATION_API = (
-    "https://ws-data.nisra.gov.uk/public/api.restful/"
-    "PxStat.Data.Cube_API.ReadDataset/MYE01T011/CSV/1.0/en/"
-)
-
-# ── Check required files ───────────────────────────────────────────────────────
-
-missing = []
-for f in [DZ_BOUNDARY_FILE, SDZ_BOUNDARY_FILE, DEA_BOUNDARY_FILE, WORKPLACE_FILE]:
-    if not os.path.exists(f):
-        missing.append(f)
-if missing:
-    print("ERROR: Missing required data files:")
-    for f in missing:
-        print(f"  {f}")
-    print("\nDownload from:")
-    print("  DZ2021.geojson  — https://www.nisra.gov.uk/support/geography/data-zones-census-2021")
-    print("  SDZ2021.geojson — https://www.nisra.gov.uk/support/geography/super-data-zones-census-2021")
-    print("  DEA2021.geojson — https://admin.opendatani.gov.uk/dataset/osni-open-data-largescale-boundaries-district-electoral-areas-2012")
-    print("  APWP001.xlsx    — https://www.nisra.gov.uk/statistics/census/2021-census/workplace-population")
-    sys.exit(1)
-
-# ── Coordinate systems ─────────────────────────────────────────────────────────
+# ── Coordinate transformers ───────────────────────────────────────────────────
 
 to_utm = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
 to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
@@ -75,163 +55,69 @@ centre_utm_x, centre_utm_y = to_utm.transform(CENTRE[1], CENTRE[0])
 core_circle = Point(centre_utm_x, centre_utm_y).buffer(CORE_RADIUS)
 sdz_circle  = Point(centre_utm_x, centre_utm_y).buffer(SDZ_ZONE_RADIUS)
 
-# ── Load census population data ────────────────────────────────────────────────
+# ── Load and combine NI + RoI census data ────────────────────────────────────
 
-print("Loading DZ population …")
-if os.path.exists(POPULATION_CACHE):
-    pop_df = pd.read_csv(POPULATION_CACHE)
-else:
-    print("  Fetching from NISRA API …")
-    req = urllib.request.Request(POPULATION_API, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        pop_csv = r.read().decode("utf-8-sig")
-    from io import StringIO
-    pop_df = pd.read_csv(StringIO(pop_csv))
-    pop_df.to_csv(POPULATION_CACHE, index=False)
+dz_gdf,  sdz_gdf,  dea_gdf  = load_ni_census()
+sa_gdf,  ed_gdf,   lea_gdf  = load_roi_census()
 
-pop_df = pop_df[
-    (pop_df["TLIST(A1)"] == 2021) &
-    (pop_df["DZ2021"].str.startswith("N20"))
-][["DZ2021", "VALUE"]].rename(columns={"DZ2021": "DZ2021_cd", "VALUE": "population"})
-pop_lookup = pop_df.set_index("DZ2021_cd")["population"].to_dict()
-print(f"  {len(pop_lookup)} DZs, NI total pop: {sum(pop_lookup.values()):,}")
+# Combined GeoDataFrames — classification logic operates on these uniformly.
+# "dz" = all small areas (NI DZ + RoI SA)
+# "sdz" = all intermediate zones (NI SDZ + RoI ED)
+# "dea" = all outer zones (NI DEA + RoI LEA)
+dz  = pd.concat([dz_gdf,  sa_gdf],  ignore_index=True)
+sdz = pd.concat([sdz_gdf, ed_gdf],  ignore_index=True)
+dea = pd.concat([dea_gdf, lea_gdf], ignore_index=True)
 
-print("Loading DZ workplace population …")
-wp_df = pd.read_excel(WORKPLACE_FILE, sheet_name="DZ", header=5)
-wp_df = wp_df[["Geography Code", "Workplace population"]].rename(
-    columns={"Geography Code": "DZ2021_cd", "Workplace population": "workplace_pop"}
-)
-wp_df = wp_df[wp_df["DZ2021_cd"].astype(str).str.startswith("N20")].copy()
-wp_df["workplace_pop"] = pd.to_numeric(wp_df["workplace_pop"], errors="coerce").fillna(0)
-wp_lookup = wp_df.set_index("DZ2021_cd")["workplace_pop"].to_dict()
-print(f"  {len(wp_lookup)} DZs with workplace data, NI total: {int(sum(wp_lookup.values())):,}")
+# ── Hierarchy lookups ────────────────────────────────────────────────────────
+# small-area code → parent intermediate-zone code
+dz_to_sdz  = dz.set_index("area_code")["parent_code"].to_dict()
+# intermediate-zone code → parent outer-zone code
+sdz_to_dea = sdz.set_index("area_code")["parent_code"].to_dict()
 
-# ── Load boundary files ────────────────────────────────────────────────────────
+# ── Core classification ───────────────────────────────────────────────────────
 
-print("Loading DZ boundaries …")
-dz = gpd.read_file(DZ_BOUNDARY_FILE).to_crs(PROJECTED_CRS)
-dz["population"]   = dz["DZ2021_cd"].map(pop_lookup).fillna(0)
-dz["workplace_pop"] = dz["DZ2021_cd"].map(wp_lookup).fillna(0)
-dz["centroid_utm"]  = dz.geometry.centroid
-print(f"  {len(dz)} DZs loaded")
-
-print("Loading SDZ boundaries …")
-sdz = gpd.read_file(SDZ_BOUNDARY_FILE).to_crs(PROJECTED_CRS)
-print(f"  {len(sdz)} SDZs loaded")
-
-print("Loading DEA boundaries …")
-dea = gpd.read_file(DEA_BOUNDARY_FILE).to_crs(PROJECTED_CRS)
-print(f"  {len(dea)} DEAs loaded")
-
-# ── Detect SDZ code column in DZ file (for hierarchy lookup) ──────────────────
-# NISRA files typically contain a parent-area code column.
-
-def _find_col(df, candidates):
-    """Return the first column name from candidates that exists in df.columns."""
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-dz_sdz_col  = _find_col(dz,  ["SDZ2021_cd", "SDZ_cd", "SDZ2021", "SDZCODE"])
-dea_code_col = _find_col(dea, ["DEA2021_cd", "DEA_cd",  "DEA2021", "DEACODE"])
-sdz_code_col = _find_col(sdz, ["SDZ2021_cd", "SDZ_cd",  "SDZ2021", "SDZCODE"])
-
-if dz_sdz_col:
-    print(f"  DZ→SDZ hierarchy via column '{dz_sdz_col}'")
-else:
-    print("  DZ→SDZ hierarchy via spatial join (no parent code column found)")
-
-if dea_code_col is None:
-    # Try to infer a unique code column
-    candidate = [c for c in dea.columns if "code" in c.lower() or "cd" in c.lower()]
-    dea_code_col = candidate[0] if candidate else dea.columns[0]
-    print(f"  DEA code column inferred: '{dea_code_col}'")
-
-if sdz_code_col is None:
-    candidate = [c for c in sdz.columns if "code" in c.lower() or "cd" in c.lower()]
-    sdz_code_col = candidate[0] if candidate else sdz.columns[0]
-    print(f"  SDZ code column inferred: '{sdz_code_col}'")
-
-# ── Core DZ classification (DZ-level, not SDZ-level) ─────────────────────────
-# Using DZ polygon intersection avoids pulling in whole SDZs whose boundary
-# merely clips the core circle.
-
-dz["is_core"]    = dz.geometry.intersects(core_circle)
-core_dz_codes    = set(dz.loc[dz["is_core"], "DZ2021_cd"])
+dz["is_core"] = dz.geometry.intersects(core_circle)
+core_sa_codes = set(dz.loc[dz["is_core"], "area_code"])
 
 sdz["in_sdz_zone"] = sdz.geometry.intersects(sdz_circle)
-n_sdz_zone = sdz["in_sdz_zone"].sum()
-print(f"\nDZ/SDZ classification:")
-print(f"  {dz['is_core'].sum()} DZs directly intersect CORE_RADIUS ({CORE_RADIUS}m) → core area")
-print(f"  {n_sdz_zone} SDZs intersect SDZ_ZONE_RADIUS ({SDZ_ZONE_RADIUS}m)")
-
-# ── Determine which DEAs intersect the SDZ zone ──────────────────────────────
-
 dea["in_sdz_zone"] = dea.geometry.intersects(sdz_circle)
+
+n_core     = dz["is_core"].sum()
+n_sdz_zone = sdz["in_sdz_zone"].sum()
 n_dea_broken = dea["in_sdz_zone"].sum()
 n_dea_single = (~dea["in_sdz_zone"]).sum()
-print(f"\nDEA classification:")
-print(f"  {n_dea_broken} DEAs intersect SDZ_ZONE_RADIUS → broken into SDZs")
-print(f"  {n_dea_single} DEAs remain as single external nodes")
 
-# ── Map DZs to their parent SDZ ───────────────────────────────────────────────
+print(f"\nClassification (CENTRE {CENTRE[0]:.4f}°N, {CENTRE[1]:.4f}°E):")
+print(f"  {n_core} small areas intersect CORE_RADIUS ({CORE_RADIUS} m) → core")
+print(f"  {n_sdz_zone} intermediate zones intersect SDZ_ZONE_RADIUS ({SDZ_ZONE_RADIUS} m)")
+print(f"  {n_dea_broken} outer zones intersect SDZ_ZONE_RADIUS → broken into intermediate nodes")
+print(f"  {n_dea_single} outer zones remain as single external nodes")
 
-if dz_sdz_col:
-    dz_to_sdz = dz.set_index("DZ2021_cd")[dz_sdz_col].to_dict()
-else:
-    # Spatial join: assign each DZ to the SDZ whose centroid it falls in
-    dz_centroids = dz[["DZ2021_cd", "centroid_utm"]].copy()
-    dz_centroids = dz_centroids.rename(columns={"centroid_utm": "geometry"}).set_geometry("geometry")
-    joined = gpd.sjoin(dz_centroids, sdz[[sdz_code_col, "geometry"]], how="left", predicate="within")
-    dz_to_sdz = joined.set_index("DZ2021_cd")[sdz_code_col].to_dict()
+# Intermediate zones that have at least one core small area
+_int_has_core = {sdz_cd: True for sa_cd, sdz_cd in dz_to_sdz.items()
+                 if sa_cd in core_sa_codes}
+sdz["has_core_sa"] = sdz["area_code"].map(_int_has_core).fillna(False)
 
-# Map DZs to their parent DEA via SDZ
-sdz_to_dea = {}
-if "DEA2021_cd" in sdz.columns or dea_code_col in sdz.columns:
-    _dea_col_in_sdz = _find_col(sdz, ["DEA2021_cd", "DEA_cd", dea_code_col])
-    if _dea_col_in_sdz:
-        sdz_to_dea = sdz.set_index(sdz_code_col)[_dea_col_in_sdz].to_dict()
+# Build core polygon (union of all core small-area geometries)
+core_sa_gdf  = dz[dz["is_core"]]
+core_polygon = unary_union(core_sa_gdf.geometry.values)
 
-if not sdz_to_dea:
-    # Spatial join: assign each SDZ to the DEA it falls in
-    sdz_centroids = sdz[[sdz_code_col, "geometry"]].copy()
-    sdz_centroids["geometry"] = sdz_centroids.geometry.centroid
-    joined2 = gpd.sjoin(sdz_centroids, dea[[dea_code_col, "geometry"]], how="left", predicate="within")
-    sdz_to_dea = joined2.set_index(sdz_code_col)[dea_code_col].to_dict()
+n_core_intermediates = len({dz_to_sdz.get(cd) for cd in core_sa_codes} - {None})
+print(f"\nCore area: {len(core_sa_gdf)} small areas (from {n_core_intermediates} partially/fully-core intermediate zones)")
+print(f"  Core polygon area: {core_polygon.area / 1e6:.2f} km²")
 
-# Which SDZs have at least one core DZ? (used for external node classification)
-_sdz_has_core = {}
-for dz_cd, sdz_cd in dz_to_sdz.items():
-    if dz_cd in core_dz_codes:
-        _sdz_has_core[sdz_cd] = True
-sdz["has_core_dz"] = sdz[sdz_code_col].map(_sdz_has_core).fillna(False)
-
-# ── Build core area polygon ────────────────────────────────────────────────────
-
-core_dz_gdf  = dz[dz["is_core"]]
-core_polygon  = unary_union(core_dz_gdf.geometry.values)
-
-n_core_sdzs = len({dz_to_sdz.get(cd) for cd in core_dz_codes} - {None})
-print(f"\nCore area: {len(core_dz_gdf)} DZs (from {n_core_sdzs} partially/fully-core SDZs)")
-core_area_km2 = core_polygon.area / 1e6
-print(f"  Core polygon area: {core_area_km2:.2f} km²")
-
-# Max distance from centre to any core polygon vertex — determines minimum RADIUS_M
 centre_pt_utm   = Point(centre_utm_x, centre_utm_y)
 max_vertex_dist = max(centre_pt_utm.distance(Point(x, y))
                       for x, y in core_polygon.exterior.coords)
-print(f"  Max core polygon vertex distance: {max_vertex_dist:.0f}m")
+print(f"  Max core polygon vertex distance: {max_vertex_dist:.0f} m")
 
-# ── Determine SDZ zone DEA codes ──────────────────────────────────────────────
+# Outer zones that are broken into intermediate nodes
+broken_outer_codes = set(dea.loc[dea["in_sdz_zone"], "area_code"])
 
-# DEAs that intersect SDZ_ZONE_RADIUS are broken into SDZs
-broken_dea_codes = set(dea.loc[dea["in_sdz_zone"], dea_code_col].tolist())
-
-# ── Compute population-weighted centroids ─────────────────────────────────────
+# ── Weighted centroid helper ─────────────────────────────────────────────────
 
 def weighted_centroid_wgs(geometries, weights):
-    """Return (lat, lon) population-weighted centroid."""
+    """Population-weighted centroid in WGS84 → (lat, lon, utm_x, utm_y)."""
     weights = np.array(weights, dtype=float)
     if weights.sum() == 0:
         weights = np.ones(len(weights))
@@ -242,108 +128,102 @@ def weighted_centroid_wgs(geometries, weights):
     lon, lat = to_wgs.transform(cx, cy)
     return lat, lon, cx, cy
 
-# ── Build external node list ──────────────────────────────────────────────────
+# ── Build external node list ─────────────────────────────────────────────────
 
 external_nodes = []
-
 print("\nBuilding external node list …")
 
-# SDZ external nodes: SDZs in broken DEAs with NO core DZs (fully external)
-sdz["parent_dea"] = sdz[sdz_code_col].map(sdz_to_dea)
-sdz_in_broken_dea = sdz["parent_dea"].isin(broken_dea_codes)
-
-sdz_external_mask = sdz_in_broken_dea & ~sdz["has_core_dz"]
-sdz_external = sdz[sdz_external_mask].copy()
+# 1. Intermediate external nodes (SDZ/ED): in broken outer zones with no core SAs
+sdz["parent_outer"] = sdz["area_code"].map(sdz_to_dea)
+sdz_in_broken_outer = sdz["parent_outer"].isin(broken_outer_codes)
+sdz_external_mask   = sdz_in_broken_outer & ~sdz["has_core_sa"]
+sdz_external        = sdz[sdz_external_mask]
 
 for _, row in sdz_external.iterrows():
-    sdz_code = row[sdz_code_col]
-    child_dz_codes = [dz_cd for dz_cd, parent in dz_to_sdz.items() if parent == sdz_code]
-    child_dz = dz[dz["DZ2021_cd"].isin(child_dz_codes)]
-    pop   = child_dz["population"].sum()
-    wp    = child_dz["workplace_pop"].sum()
-    lat, lon, utm_x, utm_y = weighted_centroid_wgs(child_dz.geometry.values,
-                                                     child_dz["population"].values)
+    int_code      = row["area_code"]
+    child_sa_codes = [sa for sa, p in dz_to_sdz.items() if p == int_code]
+    child_sa       = dz[dz["area_code"].isin(child_sa_codes)]
+    pop = child_sa["population"].sum()
+    wp  = child_sa["workplace_pop"].sum()
+    lat, lon, utm_x, utm_y = weighted_centroid_wgs(
+        child_sa.geometry.values, child_sa["population"].values)
     external_nodes.append({
-        "id":             sdz_code,
-        "level":          "SDZ",
-        "centroid_lat":   round(lat, 6),
-        "centroid_lon":   round(lon, 6),
+        "id":             int_code,
+        "level":          row["level"],
+        "centroid_lat":   round(lat,   6),
+        "centroid_lon":   round(lon,   6),
         "centroid_utm_x": round(utm_x, 1),
         "centroid_utm_y": round(utm_y, 1),
         "population":     int(round(pop)),
         "workplace_pop":  int(round(wp)),
     })
-print(f"  {len(external_nodes)} SDZ external nodes")
+print(f"  {len(external_nodes)} intermediate external nodes (SDZ/ED)")
 
-# DZ external nodes: non-core DZs from partially-core SDZs
-# (their SDZ has some core DZs but these DZs themselves don't intersect the core circle)
-partial_core_sdz_codes = set(sdz.loc[sdz_in_broken_dea & sdz["has_core_dz"], sdz_code_col])
-orphan_dz_mask = (
-    dz["DZ2021_cd"].map(dz_to_sdz).isin(partial_core_sdz_codes)
+# 2. Orphan small-area nodes: non-core SAs from partially-core intermediate zones
+#    (intermediate zone has some core SAs but these SAs themselves are outside the core)
+partial_core_int_codes = set(sdz.loc[sdz_in_broken_outer & sdz["has_core_sa"], "area_code"])
+orphan_sa_mask = (
+    dz["area_code"].map(dz_to_sdz).isin(partial_core_int_codes)
     & ~dz["is_core"]
 )
-orphan_dz = dz[orphan_dz_mask].copy()
-n_dz_ext_start = len(external_nodes)
+orphan_sa = dz[orphan_sa_mask]
+n_int_start = len(external_nodes)
 
-for _, row in orphan_dz.iterrows():
+for _, row in orphan_sa.iterrows():
     cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
     lon, lat = to_wgs.transform(cx, cy)
     external_nodes.append({
-        "id":             row["DZ2021_cd"],
-        "level":          "DZ",
-        "centroid_lat":   round(lat, 6),
-        "centroid_lon":   round(lon, 6),
-        "centroid_utm_x": round(cx, 1),
-        "centroid_utm_y": round(cy, 1),
+        "id":             row["area_code"],
+        "level":          row["level"],
+        "centroid_lat":   round(lat,   6),
+        "centroid_lon":   round(lon,   6),
+        "centroid_utm_x": round(cx,    1),
+        "centroid_utm_y": round(cy,    1),
         "population":     int(round(row["population"])),
         "workplace_pop":  int(round(row["workplace_pop"])),
     })
-print(f"  {len(external_nodes) - n_dz_ext_start} DZ external nodes (orphan DZs from partially-core SDZs)")
+print(f"  {len(external_nodes) - n_int_start} orphan small-area external nodes (DZ/SA)")
 
-# DEA external nodes: DEAs NOT intersecting SDZ_ZONE_RADIUS
-dea_external = dea[~dea["in_sdz_zone"]].copy()
-n_dea_ext_start = len(external_nodes)
+# 3. Outer external nodes (DEA/LEA): outer zones NOT intersecting SDZ_ZONE_RADIUS
+dea_external = dea[~dea["in_sdz_zone"]]
+n_outer_start = len(external_nodes)
 
 for _, row in dea_external.iterrows():
-    dea_code = row[dea_code_col]
-    # Child SDZs → child DZs
-    child_sdz_codes = [s for s, d in sdz_to_dea.items() if d == dea_code]
-    child_dz_codes  = [dz_cd for dz_cd, s in dz_to_sdz.items() if s in child_sdz_codes]
-    child_dz = dz[dz["DZ2021_cd"].isin(child_dz_codes)]
-    pop   = child_dz["population"].sum()
-    wp    = child_dz["workplace_pop"].sum()
-    if len(child_dz) == 0:
-        # Fallback: use DEA polygon centroid
+    outer_code      = row["area_code"]
+    child_int_codes = {s for s, d in sdz_to_dea.items() if d == outer_code}
+    child_sa_codes  = {sa for sa, p in dz_to_sdz.items() if p in child_int_codes}
+    child_sa        = dz[dz["area_code"].isin(child_sa_codes)]
+    pop = child_sa["population"].sum()
+    wp  = child_sa["workplace_pop"].sum()
+    if len(child_sa) == 0:
         cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
         lon, lat = to_wgs.transform(cx, cy)
         utm_x, utm_y = cx, cy
         pop, wp = 0, 0
     else:
-        lat, lon, utm_x, utm_y = weighted_centroid_wgs(child_dz.geometry.values,
-                                                         child_dz["population"].values)
+        lat, lon, utm_x, utm_y = weighted_centroid_wgs(
+            child_sa.geometry.values, child_sa["population"].values)
     external_nodes.append({
-        "id":             dea_code,
-        "level":          "DEA",
-        "centroid_lat":   round(lat, 6),
-        "centroid_lon":   round(lon, 6),
+        "id":             outer_code,
+        "level":          row["level"],
+        "centroid_lat":   round(lat,   6),
+        "centroid_lon":   round(lon,   6),
         "centroid_utm_x": round(utm_x, 1),
         "centroid_utm_y": round(utm_y, 1),
         "population":     int(round(pop)),
         "workplace_pop":  int(round(wp)),
     })
-print(f"  {len(external_nodes) - n_dea_ext_start} DEA external nodes")
+print(f"  {len(external_nodes) - n_outer_start} outer external nodes (DEA/LEA)")
 print(f"  {len(external_nodes)} external nodes total")
 print(f"  Total external pop: {sum(n['population'] for n in external_nodes):,}")
 print(f"  Total external wp:  {sum(n['workplace_pop'] for n in external_nodes):,}")
 
-# ── Serialise core polygon to WGS84 ──────────────────────────────────────────
+# ── Serialise core polygon to WGS84 ─────────────────────────────────────────
 
-# Convert core polygon from UTM back to WGS84 for JSON storage
-import shapely.ops as sops
 core_polygon_wgs = sops.transform(lambda x, y: to_wgs.transform(x, y), core_polygon)
-core_coords = list(mapping(core_polygon_wgs)["coordinates"][0])  # exterior ring
+core_coords = list(mapping(core_polygon_wgs)["coordinates"][0])
 
-# ── Write output ──────────────────────────────────────────────────────────────
+# ── Write output ─────────────────────────────────────────────────────────────
 
 output = {
     "core_radius":             CORE_RADIUS,
@@ -352,8 +232,8 @@ output = {
     "centre_lon":              CENTRE[1],
     "max_core_vertex_dist_m":  round(max_vertex_dist, 1),
     "core_polygon":            core_coords,
-    "n_core_dzs":              int(len(core_dz_gdf)),
-    "n_core_sdzs":             n_core_sdzs,
+    "n_core_dzs":              int(len(core_sa_gdf)),
+    "n_core_sdzs":             n_core_intermediates,
     "external_nodes":          external_nodes,
 }
 

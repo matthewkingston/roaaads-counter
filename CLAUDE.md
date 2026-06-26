@@ -19,7 +19,8 @@ whenever a new third-party import is introduced, and remove ones no longer used.
 ## Pipeline (run in this order)
 
 ```
-python3 simulation/build_census_zones.py     # classify NI census areas → data/census_zones.json (one-off; needs SDZ/DEA boundary files)
+python3 simulation/build_wz_apportionment.py # WZ→SA workplace apportionment via POI-weighted geometric intersection → data/ireland_data/cache_sa_workplace.csv (one-off; needs Docker + WZ boundary shapefile; re-run only when WZ/SA boundaries or WZ SAPS change)
+python3 simulation/build_census_zones.py     # classify NI+RoI census areas → data/census_zones.json (one-off; needs SDZ/DEA boundary files + cache_sa_workplace.csv)
 python3 simulation/build_network.py          # build road network from local NI .osm.pbf via osmium (core polygon + 5km bbox; needs Docker)
 python3 simulation/build_demographics.py     # node weights + boundary detection + external weights (no longer builds the map — see build_map.py)
 python3 simulation/build_external_links.py   # OSRM queries → external↔boundary links + through-route allowlist (needs local OSRM)
@@ -132,6 +133,12 @@ Boundary files needed by `build_census_zones.py` (download from NISRA / OpenData
 - `simulation/dz2021/DZ2021.geojson` — DZ polygon boundaries (already present as .qmd stub).
 - `simulation/sdz2021/SDZ2021.geojson` — SDZ polygon boundaries (**not yet downloaded**).
 - `simulation/dea2021/DEA2021.geojson` — DEA polygon boundaries (**not yet downloaded**).
+
+RoI data files for `build_wz_apportionment.py` + `build_census_zones.py` (in `data/ireland_data/`):
+- `Small_Area_National_Statistical_Boundaries_2022_Ungeneralised_view_*.geojson` — 2022 SA boundaries (~410 MB).
+- `Complete_set_of_Census_2022_SAPs/SAPS_2022_Small_Area_UR_171024.csv` — SA population (`T1_1AGETT`).
+- `Workplace_Zones_ITM/Workplace_Zones_ITM.shp` — 2016 WZ boundaries in EPSG:2157 with headcount (`T1_T`); used only by `build_wz_apportionment.py`.
+- `cache_sa_workplace.csv` — **generated** by `build_wz_apportionment.py`; committed once computed.
 
 ---
 

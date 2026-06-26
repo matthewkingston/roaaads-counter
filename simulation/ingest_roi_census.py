@@ -17,18 +17,16 @@ Standardised columns — same schema as ingest_ni_census.py
 Workplace note
 --------------
 No open 2022 per-zone workplace data exists for RoI (2022 POWSCCAR is restricted
-microdata).  This module uses the 2016 Workplace Zone (WZ) file with a
-population-proportional apportionment to SAs:
+microdata).  Workplace population is loaded from a pre-computed cache file produced
+by simulation/build_wz_apportionment.py, which intersects 2016 WZ polygons with 2022
+SA polygons geometrically and splits each WZ's headcount by POI density.
 
-    SA_workplace = Σ_WZ  WZ_T1T × SA_pop / WZ_pop
-
-where WZ_pop = Σ_{s∈WZ} SA_pop_s.  This is a first-stage approximation;
-POI-weighted split is a planned upgrade (recorded in project_roi_extension memory).
+If the cache is missing, load_roi_census() raises FileNotFoundError telling the user
+to run build_wz_apportionment.py first.
 """
 
-import glob, os
+import glob, os, sys
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 
 from demographics_config import PROJECTED_CRS
@@ -37,13 +35,12 @@ from demographics_config import PROJECTED_CRS
 _BASE = "data/ireland_data"
 SA_BOUNDARY_GLOB = f"{_BASE}/Small_Area_National_Statistical_Boundaries_2022_*.geojson"
 SAPS_CSV         = f"{_BASE}/Complete_set_of_Census_2022_SAPs/SAPS_2022_Small_Area_UR_171024.csv"
-WZ_SAPS_FILE     = f"{_BASE}/Workplace_zones_-_SAPS_2016.xlsx"
-WZ_LOOKUP_FILE   = f"{_BASE}/Look-up_table_-_Small_Area_to_Workplace_Zone.xlsx"
+SA_WP_CACHE      = f"{_BASE}/cache_sa_workplace.csv"
 
 
 def load_roi_census():
     """
-    Load RoI SA/ED/LEA boundaries + CSO 2022 population + 2016 WZ workplace.
+    Load RoI SA/ED/LEA boundaries + CSO 2022 population + pre-computed WZ workplace.
     Returns (sa_gdf, ed_gdf, lea_gdf) with standardised columns.
     """
     # ── SA boundaries ────────────────────────────────────────────────────────
@@ -62,51 +59,20 @@ def load_roi_census():
     saps["sa_code"] = saps["GEOGID"].astype(str).str.zfill(9)
     pop_lookup = saps.set_index("sa_code")["T1_1AGETT"].to_dict()
     sa["population"] = sa["SA_PUB2022"].map(pop_lookup).fillna(0).astype(int)
-    n_unmatched = sa["SA_PUB2022"].isin(pop_lookup).sum()
-    print(f"  {n_unmatched}/{len(sa)} SAs matched to SAPS; RoI total pop: {sa['population'].sum():,}")
+    n_matched = sa["SA_PUB2022"].isin(pop_lookup).sum()
+    print(f"  {n_matched}/{len(sa)} SAs matched to SAPS; RoI total pop: {sa['population'].sum():,}")
 
-    # ── Workplace (2016 WZ → SA, population-proportional) ────────────────────
-    print("RoI: loading WZ workplace (2016) and apportioning to SAs …")
-    wz_saps   = pd.read_excel(WZ_SAPS_FILE, usecols=["WORKPLACE_ZONE", "T1_T"])
-    wz_t1t    = wz_saps.set_index("WORKPLACE_ZONE")["T1_T"].to_dict()
-
-    # header=3: row 3 is the actual column header (County, ..., WZ1, WZ2, ...)
-    lookup    = pd.read_excel(WZ_LOOKUP_FILE, sheet_name="SA to WPZ", header=3)
-    wz_cols   = [c for c in lookup.columns if str(c).startswith("WZ")]
-    if not wz_cols:
-        raise ValueError("No WZ* columns found in SA→WPZ lookup — check header row.")
-
-    # Melt to long (sa_code, wz_code) pairs, drop NaN (SA has <N WZs)
-    long = (
-        lookup[["Small Area"] + wz_cols]
-        .melt(id_vars="Small Area", value_name="wz_code")
-        .dropna(subset=["wz_code"])[["Small Area", "wz_code"]]
-        .copy()
-    )
-    long.columns = ["sa_code", "wz_code"]
-    long["sa_code"] = long["sa_code"].astype(str).str.zfill(9)
-
-    # Attach SA population and WZ headcount
-    long["sa_pop"] = long["sa_code"].map(pop_lookup).fillna(0)
-    long["wz_t1t"] = long["wz_code"].map(wz_t1t).fillna(0)
-
-    # WZ_pop = sum of SA_pop for all SAs in each WZ (the denominator for the split)
-    wz_pop = long.groupby("wz_code")["sa_pop"].sum().rename("wz_pop")
-    long   = long.join(wz_pop, on="wz_code")
-    # Guard zero-population WZs: uniform split across member SAs
-    zero_wz = long["wz_pop"] == 0
-    if zero_wz.any():
-        wz_sa_count = long.groupby("wz_code")["sa_code"].transform("count")
-        long.loc[zero_wz, "sa_pop"] = 1
-        long.loc[zero_wz, "wz_pop"] = wz_sa_count[zero_wz]
-
-    long["sa_wk_contrib"] = long["wz_t1t"] * long["sa_pop"] / long["wz_pop"]
-    sa_wp = long.groupby("sa_code")["sa_wk_contrib"].sum()
-    sa["workplace_pop"] = sa["SA_PUB2022"].map(sa_wp).fillna(0)
-
-    wz_total = sum(wz_t1t.values())
-    print(f"  WZ total headcount (raw 2016): {wz_total:,}")
-    print(f"  SA apportioned total: {sa['workplace_pop'].sum():,.0f}")
+    # ── Workplace (pre-computed WZ→SA apportionment) ──────────────────────────
+    print("RoI: loading WZ workplace cache …")
+    if not os.path.exists(SA_WP_CACHE):
+        raise FileNotFoundError(
+            f"Missing {SA_WP_CACHE}\n"
+            "Run: python3 simulation/build_wz_apportionment.py"
+        )
+    wp_df = pd.read_csv(SA_WP_CACHE)
+    wp_lookup = wp_df.set_index("sa_code")["workplace_pop"].to_dict()
+    sa["workplace_pop"] = sa["SA_PUB2022"].map(wp_lookup).fillna(0)
+    print(f"  RoI total workplace_pop: {sa['workplace_pop'].sum():,.0f}")
 
     # ── Build standardised SA GeoDataFrame ──────────────────────────────────
     sa_gdf = gpd.GeoDataFrame({
@@ -130,15 +96,13 @@ def load_roi_census():
         )
         .reset_index()
     )
-    # After dissolve: "parent_code" column = ED code (was the groupby key)
-    # "grandparent_code" column = LEA name (first value from child SAs — EDs don't straddle LEAs)
     ed_gdf = gpd.GeoDataFrame({
-        "area_code":   ed_raw["parent_code"].values,       # ED code
-        "parent_code": ed_raw["grandparent_code"].values,  # LEA name
-        "level":       "ED",
-        "population":  ed_raw["population"].values,
+        "area_code":     ed_raw["parent_code"].values,
+        "parent_code":   ed_raw["grandparent_code"].values,
+        "level":         "ED",
+        "population":    ed_raw["population"].values,
         "workplace_pop": ed_raw["workplace_pop"].values,
-        "geometry":    ed_raw["geometry"].values,
+        "geometry":      ed_raw["geometry"].values,
     }, crs=PROJECTED_CRS)
     print(f"  {len(ed_gdf)} EDs derived")
 
@@ -153,7 +117,7 @@ def load_roi_census():
         .reset_index()
     )
     lea_gdf = gpd.GeoDataFrame({
-        "area_code":   lea_raw["grandparent_code"].values,  # LEA name
+        "area_code":   lea_raw["grandparent_code"].values,
         "parent_code": pd.Series([pd.NA] * len(lea_raw), dtype=object),
         "level":       "LEA",
         "population":  lea_raw["population"].values,
