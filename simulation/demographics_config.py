@@ -12,6 +12,12 @@ centre, file paths, OSM tag handling, and map styling without drifting apart.
 from zones_config import CENTRE  # noqa: F401  (re-exported)
 OUT_DIR = "simulation"
 
+# ── Projected CRS (single source of truth) ────────────────────────────────────
+# Irish Transverse Mercator (ITM) covers all of Ireland with uniform accuracy,
+# avoiding the zone-boundary distortion that UTM Zone 30N introduces for
+# Republic of Ireland towns in the west (Zone 29N territory).
+PROJECTED_CRS = "EPSG:2157"
+
 # OSM download radius and DZ selection are bounded by the core polygon
 # (data/census_zones.json), not a fixed circle. NETWORK_MARGIN_M sizes the OSM
 # POI/building/parking download circle around the core polygon. (The road

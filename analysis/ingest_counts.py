@@ -132,7 +132,7 @@ if needs_graph:
     print(f"Loading graph ({len(needs_graph)} session(s) need snap or road name) …")
     G = ox.load_graphml(CONS_GRAPH)
 
-    to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
+    to_utm = Transformer.from_crs("EPSG:4326", "EPSG:2157", always_xy=True)
 
     # Deduplicated undirected edges: store actual (u, v) so geometry direction
     # matches best_u/best_v in snap_to_link (fixes direction flip on one-way

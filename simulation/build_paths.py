@@ -36,6 +36,7 @@ from scipy.sparse.csgraph import dijkstra
 
 from routing_config import HIGHWAY_COST_FACTOR, PROBIT_CV, PROBIT_LL_SIGMA
 from model import paths_cache_signature
+from demographics_config import PROJECTED_CRS
 
 # Routing graph + weights are the dead-end-reduced artifacts from reduce_deadends.py
 # (run after build_demographics.py, before this script). See CLAUDE.md "Dead-end reduction".
@@ -232,7 +233,7 @@ print(f"  {sum(len(v) for v in external_external_times.values())} non-through ex
 with open(CENSUS_ZONES_FILE) as f:
     census_zones = json.load(f)
 
-to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
+to_utm = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
 
 ext_node_list = census_zones["external_nodes"]
 ext_id_to_utm = {}

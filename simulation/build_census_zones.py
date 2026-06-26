@@ -35,6 +35,7 @@ from shapely.ops import unary_union
 # ── Config ─────────────────────────────────────────────────────────────────────
 # CENTRE / CORE_RADIUS / SDZ_ZONE_RADIUS live in zones_config.py (single source).
 from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
+from demographics_config import PROJECTED_CRS
 
 DZ_BOUNDARY_FILE  = "simulation/dz2021/DZ2021.geojson"
 SDZ_BOUNDARY_FILE = "simulation/sdz2021/SDZ2021.geojson"
@@ -67,8 +68,8 @@ if missing:
 
 # ── Coordinate systems ─────────────────────────────────────────────────────────
 
-to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
-to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+to_utm = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
+to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 
 centre_utm_x, centre_utm_y = to_utm.transform(CENTRE[1], CENTRE[0])
 core_circle = Point(centre_utm_x, centre_utm_y).buffer(CORE_RADIUS)
@@ -108,18 +109,18 @@ print(f"  {len(wp_lookup)} DZs with workplace data, NI total: {int(sum(wp_lookup
 # ── Load boundary files ────────────────────────────────────────────────────────
 
 print("Loading DZ boundaries …")
-dz = gpd.read_file(DZ_BOUNDARY_FILE).to_crs("EPSG:32630")
+dz = gpd.read_file(DZ_BOUNDARY_FILE).to_crs(PROJECTED_CRS)
 dz["population"]   = dz["DZ2021_cd"].map(pop_lookup).fillna(0)
 dz["workplace_pop"] = dz["DZ2021_cd"].map(wp_lookup).fillna(0)
 dz["centroid_utm"]  = dz.geometry.centroid
 print(f"  {len(dz)} DZs loaded")
 
 print("Loading SDZ boundaries …")
-sdz = gpd.read_file(SDZ_BOUNDARY_FILE).to_crs("EPSG:32630")
+sdz = gpd.read_file(SDZ_BOUNDARY_FILE).to_crs(PROJECTED_CRS)
 print(f"  {len(sdz)} SDZs loaded")
 
 print("Loading DEA boundaries …")
-dea = gpd.read_file(DEA_BOUNDARY_FILE).to_crs("EPSG:32630")
+dea = gpd.read_file(DEA_BOUNDARY_FILE).to_crs(PROJECTED_CRS)
 print(f"  {len(dea)} DEAs loaded")
 
 # ── Detect SDZ code column in DZ file (for hierarchy lookup) ──────────────────
