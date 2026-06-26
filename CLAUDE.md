@@ -130,9 +130,9 @@ than restart.
 - `data/census-2021-apwp001.xlsx` — DZ-level workplace population. Used by `build_demographics.py` and `build_census_zones.py`.
 
 Boundary files needed by `build_census_zones.py` (download from NISRA / OpenDataNI):
-- `simulation/dz2021/DZ2021.geojson` — DZ polygon boundaries (already present as .qmd stub).
-- `simulation/sdz2021/SDZ2021.geojson` — SDZ polygon boundaries (**not yet downloaded**).
-- `simulation/dea2021/DEA2021.geojson` — DEA polygon boundaries (**not yet downloaded**).
+- `simulation/dz2021/DZ2021.geojson` — DZ polygon boundaries (present, gitignored).
+- `simulation/sdz2021/SDZ2021.geojson` — SDZ polygon boundaries (present, gitignored).
+- `simulation/dea2021/DEA2021.geojson` — DEA polygon boundaries (present, gitignored).
 
 RoI data files for `build_wz_apportionment.py` + `build_census_zones.py` (in `data/ireland_data/`):
 - `Small_Area_National_Statistical_Boundaries_2022_Ungeneralised_view_*.geojson` — 2022 SA boundaries (~410 MB).
