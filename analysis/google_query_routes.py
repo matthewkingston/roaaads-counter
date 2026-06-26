@@ -30,13 +30,14 @@ import argparse, json, os, sys, time, urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from google_routing_common import (
     CONF_MIN, decode_polyline, downsample_by_distance,
-    osrm_route, osrm_match, google_routes, parse_google_duration)
+    osrm_route, osrm_match_detail, google_routes, parse_google_duration)
 
 REPO_ROOT     = "/home/matthew/Documents/CodingFun/roaaads"
-CACHE_DIR     = os.path.join(REPO_ROOT, "data", "google_cache")
-RAW_DIR       = os.path.join(CACHE_DIR, "raw")
-MANIFEST_FILE = os.path.join(CACHE_DIR, "od_manifest.json")
-RESULTS_FILE  = os.path.join(CACHE_DIR, "results.jsonl")
+CACHE_DIR         = os.path.join(REPO_ROOT, "data", "google_cache")
+RAW_DIR           = os.path.join(CACHE_DIR, "raw")
+MANIFEST_FILE     = os.path.join(CACHE_DIR, "od_manifest.json")
+RESULTS_FILE      = os.path.join(CACHE_DIR, "results.jsonl")
+MATCH_CACHE_FILE  = os.path.join(CACHE_DIR, "match_cache.jsonl")
 
 
 def raw_path(od_id):
@@ -95,77 +96,139 @@ def phase_a_query(ods, args):
     return n
 
 
+def _read_match_cache():
+    """Return {(od_id, route_idx): record} from match_cache.jsonl."""
+    cache = {}
+    if not os.path.exists(MATCH_CACHE_FILE):
+        return cache
+    with open(MATCH_CACHE_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                cache[(r["od_id"], r["route_idx"])] = r
+            except (json.JSONDecodeError, KeyError):
+                continue
+    return cache
+
+
 def phase_b_reprocess(ods, osrm_url):
-    """Rebuild results.jsonl from cached raw responses via OSRM (no API calls)."""
-    by_id = {o["od_id"]: o for o in ods}
+    """Rebuild results.jsonl from cached raw responses, writing full match detail
+    to match_cache.jsonl in the same pass (one /match per route, not two).
+
+    Routes already in match_cache.jsonl are skipped for the detail write but
+    their cached detail is used to rebuild results.jsonl entries.
+    """
     cached = [o for o in ods if os.path.exists(raw_path(o["od_id"]))]
     print(f"\nPhase B: reprocessing {len(cached)} cached ODs via OSRM /match …")
 
-    n_routes = n_valid = n_lowconf = n_matchfail = 0
-    tmp = RESULTS_FILE + ".tmp"
-    with open(tmp, "w") as out:
-        for k, o in enumerate(cached):
-            gdata = json.load(open(raw_path(o["od_id"])))
-            groutes = gdata.get("routes", [])
-            if not groutes:
-                continue
-            r = osrm_route(osrm_url, o["o"]["lat"], o["o"]["lon"],
-                           o["d"]["lat"], o["d"]["lon"])
-            if r is None:
-                continue
-            osrm_route_dur, osrm_route_dist, route_nodes = r
+    match_cache = _read_match_cache()
+    n_already = sum(1 for o in cached
+                    for j in range(3) if (o["od_id"], j) in match_cache)
+    print(f"  {len(match_cache)} routes already in match_cache.jsonl — no second /match for those")
 
-            per_route = []
-            for j, route in enumerate(groutes):
-                gdur = parse_google_duration(route["duration"])
-                gdist = route.get("distanceMeters", 0)
-                gsamp = downsample_by_distance(
-                    decode_polyline(route["polyline"]["encodedPolyline"]))
-                m = osrm_match(osrm_url, gsamp)
-                if m is None:
-                    match_dur, match_nodes, conf = None, [], 0.0
-                    n_matchfail += 1
-                else:
-                    match_dur, match_nodes, conf, _ = m
-                valid = (match_dur is not None) and (conf >= CONF_MIN)
-                n_routes += 1
-                n_valid += valid
-                if (match_dur is not None) and not valid:
-                    n_lowconf += 1
-                overlap = None
-                if j == 0 and match_nodes:
-                    sm, sr = set(match_nodes), set(route_nodes)
-                    overlap = len(sm & sr) / len(sm)
-                per_route.append({
-                    "idx": j, "g_dur": gdur, "g_dist": gdist,
-                    "match_dur": match_dur, "conf": conf,
-                    "te_matched": (match_dur / gdur) if match_dur else None,
-                    "valid": valid,
-                    "route_overlap": overlap,
-                })
-            best = per_route[0]
-            rec = {
-                "od_id": o["od_id"], "leg_type": o["leg_type"],
-                "len_band": o["len_band"], "len_s": o["len_s"],
-                "o": o["o"], "d": o["d"],
-                "google_best_dur": best["g_dur"], "n_alts": len(groutes),
-                "osrm_route_dur": osrm_route_dur, "osrm_route_dist": osrm_route_dist,
-                "te_endpoint": osrm_route_dur / best["g_dur"],
-                "route_overlap": best["route_overlap"],
-                "routes": per_route,
-            }
-            out.write(json.dumps(rec) + "\n")
-            if (k + 1) % 100 == 0:
-                print(f"  {k+1}/{len(cached)} reprocessed")
+    n_routes = n_valid = n_lowconf = n_matchfail = n_skip = 0
+    tmp = RESULTS_FILE + ".tmp"
+    mc_out = open(MATCH_CACHE_FILE, "a", buffering=1)
+    try:
+        with open(tmp, "w") as out:
+            for k, o in enumerate(cached):
+                gdata = json.load(open(raw_path(o["od_id"])))
+                groutes = gdata.get("routes", [])
+                if not groutes:
+                    continue
+                r = osrm_route(osrm_url, o["o"]["lat"], o["o"]["lon"],
+                               o["d"]["lat"], o["d"]["lon"])
+                if r is None:
+                    continue
+                osrm_route_dur, osrm_route_dist, route_nodes = r
+
+                per_route = []
+                for j, route in enumerate(groutes):
+                    gdur  = parse_google_duration(route["duration"])
+                    gdist = route.get("distanceMeters", 0)
+
+                    cached_det = match_cache.get((o["od_id"], j))
+                    if cached_det is not None:
+                        # Already matched — read from cache, no second /match call.
+                        match_dur   = cached_det.get("match_dur")   # None for old v1 entries
+                        match_nodes = cached_det.get("nodes", [])
+                        conf        = cached_det.get("conf", 0.0)
+                        n_skip += 1
+                    else:
+                        gsamp = downsample_by_distance(
+                            decode_polyline(route["polyline"]["encodedPolyline"]))
+                        det = osrm_match_detail(osrm_url, gsamp)
+                        if det is not None:
+                            match_dur   = det["duration"]
+                            match_nodes = det["nodes"]
+                            conf        = det["conf"]
+                            mc_out.write(json.dumps({
+                                "od_id":      o["od_id"],
+                                "route_idx":  j,
+                                "leg_type":   o["leg_type"],
+                                "len_band":   o["len_band"],
+                                "g_dur":      gdur,
+                                "g_dist":     gdist,
+                                "match_dur":  round(match_dur, 3),
+                                "conf":       round(conf, 4),
+                                "nodes":      match_nodes,
+                                "distances":  [round(d, 2) for d in det["distances"]],
+                                "maneuvers":  det["maneuvers"],
+                            }) + "\n")
+                        else:
+                            match_dur = match_nodes = conf = None
+
+                    if match_dur is None:
+                        match_nodes = []
+                        conf = 0.0
+                        n_matchfail += 1
+
+                    valid = (match_dur is not None) and (conf >= CONF_MIN)
+                    n_routes += 1
+                    n_valid  += valid
+                    if (match_dur is not None) and not valid:
+                        n_lowconf += 1
+
+                    overlap = None
+                    if j == 0 and match_nodes:
+                        sm, sr = set(match_nodes), set(route_nodes)
+                        overlap = len(sm & sr) / len(sm)
+                    per_route.append({
+                        "idx": j, "g_dur": gdur, "g_dist": gdist,
+                        "match_dur": match_dur, "conf": conf,
+                        "te_matched": (match_dur / gdur) if match_dur else None,
+                        "valid": valid,
+                        "route_overlap": overlap,
+                    })
+
+                best = per_route[0]
+                rec = {
+                    "od_id": o["od_id"], "leg_type": o["leg_type"],
+                    "len_band": o["len_band"], "len_s": o["len_s"],
+                    "o": o["o"], "d": o["d"],
+                    "google_best_dur": best["g_dur"], "n_alts": len(groutes),
+                    "osrm_route_dur": osrm_route_dur, "osrm_route_dist": osrm_route_dist,
+                    "te_endpoint": osrm_route_dur / best["g_dur"],
+                    "route_overlap": best["route_overlap"],
+                    "routes": per_route,
+                }
+                out.write(json.dumps(rec) + "\n")
+                if (k + 1) % 100 == 0:
+                    print(f"  {k+1}/{len(cached)} reprocessed")
+    finally:
+        mc_out.close()
     os.replace(tmp, RESULTS_FILE)
 
     tem = []
     for line in open(RESULTS_FILE):
         rec = json.loads(line)
         tem += [r["te_matched"] for r in rec["routes"] if r["valid"]]
-    print(f"\nWrote {RESULTS_FILE}")
+    print(f"\nWrote {RESULTS_FILE}  (also appended new routes to {MATCH_CACHE_FILE})")
     print(f"  {n_routes} routes, {n_valid} valid (conf>={CONF_MIN}), "
-          f"{n_lowconf} low-conf, {n_matchfail} match-fail")
+          f"{n_lowconf} low-conf, {n_matchfail} match-fail, {n_skip} already cached")
     if tem:
         tem.sort()
         print(f"  te_matched: median {tem[len(tem)//2]:.2f}, mean {sum(tem)/len(tem):.2f}, "

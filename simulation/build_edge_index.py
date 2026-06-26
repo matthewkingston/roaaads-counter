@@ -127,6 +127,7 @@ def collect_matches(osrm_url, limit=None, manifest_file=None):
                     "leg_type": o["leg_type"], "len_band": o["len_band"],
                     "g_dur": float(str(route["duration"]).rstrip("s")),
                     "g_dist": route.get("distanceMeters", 0) or 0,
+                    "match_dur": round(det["duration"], 3),
                     "conf": round(det["conf"], 4),
                     "nodes": det["nodes"],
                     "distances": [round(d, 2) for d in det["distances"]],
