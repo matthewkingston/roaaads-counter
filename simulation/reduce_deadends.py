@@ -44,6 +44,7 @@ import pyproj
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from routing_config import HIGHWAY_COST_FACTOR
 import model
+from demographics_config import PROJECTED_CRS
 
 CONS_GRAPH    = "simulation/newtownards_consolidated.graphml"
 WEIGHTS_FILE  = "simulation/node_weights.json"
@@ -224,7 +225,7 @@ def main():
 
     deadend_map = {}
     absorbed_all = set()
-    utm_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+    utm_to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 
     for region, E, t_fwd, t_rev, maxT, rpop, rbiz in sorted(selected, key=lambda t: min(t[0])):
         region_nodes = sorted(region)

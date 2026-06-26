@@ -30,7 +30,7 @@ from zones_config import CENTRE
 # PBF source + bbox margin live in demographics_config (single source for the
 # OSM snapshot path, shared conceptually with the OSRM build).
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-from demographics_config import PBF_PATH, BOUNDARY_BBOX_MARGIN_M
+from demographics_config import PBF_PATH, BOUNDARY_BBOX_MARGIN_M, PROJECTED_CRS
 CONSOLIDATION_TOLERANCE_M = 15   # merge nodes within this distance
 OUT_DIR   = "simulation"
 
@@ -68,8 +68,8 @@ _DRIVE_OSM  = os.path.join(OUT_DIR, "_pbf_drive_extract.osm")   # intermediate (
 #   osmfilter --keep="highway=<drive set>" → drive.osm  (drivable highways + nodes)
 #   ox.graph_from_xml(drive.osm)          → simplified MultiDiGraph
 
-_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
-_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+_to_utm = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
+_to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 
 if os.path.exists(CENSUS_ZONES_FILE):
     _cz = json.load(open(CENSUS_ZONES_FILE))
@@ -172,7 +172,7 @@ else:
     print("\nNo census_zones.json — skipping core-polygon clip (run build_census_zones.py first)")
 
 print(f"Consolidating junctions (tolerance={CONSOLIDATION_TOLERANCE_M}m) …")
-G_proj = ox.project_graph(G_core)  # auto-selects UTM zone (EPSG:32630 for NI)
+G_proj = ox.project_graph(G_core, to_crs=PROJECTED_CRS)
 G_cons = ox.consolidate_intersections(
     G_proj,
     tolerance=CONSOLIDATION_TOLERANCE_M,

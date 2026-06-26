@@ -24,7 +24,7 @@ import odf.opendocument, odf.table, odf.text
 from demographics_config import (
     CENTRE, OUT_DIR, GRAPH_PATH, DZ_BOUNDARY_FILE, POI_CACHE, PARKING_CACHE,
     CENSUS_ZONES_FILE, EXCLUDE_AMENITY, SCHOOL_ENROLL_FALLBACK,
-    HIGHWAY_STYLE, ROAD_TYPE_LABELS,
+    HIGHWAY_STYLE, ROAD_TYPE_LABELS, PROJECTED_CRS,
 )
 
 _SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
@@ -45,8 +45,8 @@ pois_utm  = None
 
 # ── Load saved outputs ──────────────────────────────────────────────────────────
 print("Loading saved outputs …")
-transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
-transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
+transformer_to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 centre_utm_x, centre_utm_y = transformer_to_utm.transform(CENTRE[1], CENTRE[0])
 print("Loading graph …")
 G_cons = ox.load_graphml(GRAPH_PATH)
@@ -266,7 +266,7 @@ _park_wgs = None
 if _park_utm is not None:  # full run: set in else branch above
     _park_wgs = _park_utm.to_crs("EPSG:4326")
 elif os.path.exists(PARKING_CACHE):  # --map-only: reload and reprocess from cache
-    _p = gpd.read_file(PARKING_CACHE).to_crs("EPSG:32630")
+    _p = gpd.read_file(PARKING_CACHE).to_crs(PROJECTED_CRS)
     _p = _p[_p.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     _p["area_m2"] = _p.geometry.area
     _p["is_private"] = _p["access"].isin(["private"]) if "access" in _p.columns else False
@@ -379,7 +379,7 @@ if _poi_wgs is not None:
 _flows_path = f"{OUT_DIR}/newtownards_flows.json"
 if os.path.exists(_flows_path):
     import pyproj as _pyproj
-    _tr_flow = _pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+    _tr_flow = _pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 
     with open(_flows_path) as _f:
         _flows_data = json.load(_f)

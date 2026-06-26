@@ -31,7 +31,7 @@ from demographics_config import (
     CENTRE, OUT_DIR, NETWORK_MARGIN_M, POPULATION_API, DZ_BOUNDARY_FILE,
     GRAPH_PATH, WORKPLACE_DATA_FILE, POPULATION_CACHE, POI_CACHE,
     BUILDING_CACHE, PARKING_CACHE, CENSUS_ZONES_FILE, TUNER_CONFIG_FILE,
-    EXCLUDE_AMENITY, POI_WEIGHTS, SCHOOL_ENROLL_FALLBACK,
+    EXCLUDE_AMENITY, POI_WEIGHTS, SCHOOL_ENROLL_FALLBACK, PROJECTED_CRS,
 )
 
 _SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
@@ -151,11 +151,11 @@ else:
 
     print("Selecting Data Zones within the core polygon …")
 
-    transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32630", always_xy=True)
-    transformer_to_wgs = pyproj.Transformer.from_crs("EPSG:32630", "EPSG:4326", always_xy=True)
+    transformer_to_utm = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
+    transformer_to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 
     # Work in UTM throughout for accurate area calculations
-    dz_utm = dz.to_crs("EPSG:32630")
+    dz_utm = dz.to_crs(PROJECTED_CRS)
     centre_utm_x, centre_utm_y = transformer_to_utm.transform(CENTRE[1], CENTRE[0])
 
     from shapely.geometry import Polygon as _Polygon
@@ -177,7 +177,7 @@ else:
     print("Filtering to DZs containing road nodes …")
     G_cons = ox.load_graphml(GRAPH_PATH)
 
-    # Consolidated graph nodes already have x/y in EPSG:32630 (UTM)
+    # Consolidated graph nodes already have x/y in PROJECTED_CRS (ITM)
     node_ids = list(G_cons.nodes())
     node_coords_utm = [(G_cons.nodes[n]["x"], G_cons.nodes[n]["y"]) for n in node_ids]
 
@@ -185,7 +185,7 @@ else:
     node_gdf = gpd.GeoDataFrame(
         {"node_id": node_ids},
         geometry=[Point(x, y) for x, y in node_coords_utm],
-        crs="EPSG:32630",
+        crs=PROJECTED_CRS,
     )
     joined = gpd.sjoin(node_gdf, dz_intersect[["DZ2021_cd", "geometry"]], how="inner", predicate="within")
     dzs_with_nodes = set(joined["DZ2021_cd"])
@@ -315,7 +315,7 @@ else:
         _bld_raw = pd.concat([_bld1, _bld2])
         _bld_raw = _bld_raw[~_bld_raw.index.duplicated(keep="first")]
         _bld_raw = _bld_raw[_bld_raw.geometry.notna()].copy()
-        _bld_raw = _bld_raw.to_crs("EPSG:32630")
+        _bld_raw = _bld_raw.to_crs(PROJECTED_CRS)
         _bld_raw["geometry"] = _bld_raw.geometry.centroid
         _bld_raw = _bld_raw[_bld_raw.geometry.geom_type == "Point"]
         _bld_raw = _bld_raw[["geometry"]].to_crs("EPSG:4326")
@@ -323,7 +323,7 @@ else:
         print(f"  Cached → {BUILDING_CACHE}")
 
     # Reset to clean integer index so sjoin indices are valid positional offsets
-    buildings_utm = _bld_raw.to_crs("EPSG:32630").reset_index(drop=True)
+    buildings_utm = _bld_raw.to_crs(PROJECTED_CRS).reset_index(drop=True)
     print(f"  {len(buildings_utm)} buildings in study area")
 
     # Spatial join: which buildings fall inside each DZ?
@@ -453,7 +453,7 @@ else:
         pois_raw = pois_raw[mask]
 
     # Normalise all geometries to points (polygon/linestring features → centroid)
-    pois_utm = pois_raw.to_crs("EPSG:32630").copy()
+    pois_utm = pois_raw.to_crs(PROJECTED_CRS).copy()
     pois_utm["geometry"] = pois_utm.geometry.centroid
     # Keep only POIs inside the core polygon (the download circle overshoots it).
     pois_utm = pois_utm[pois_utm.geometry.within(core_poly_utm)].copy()
@@ -522,7 +522,7 @@ else:
         print(f"  Cached → {PARKING_CACHE}")
 
     # Polygon features only — excludes point-tagged parking_entrance, parking_space nodes
-    _park_utm = _park_raw.to_crs("EPSG:32630").copy()
+    _park_utm = _park_raw.to_crs(PROJECTED_CRS).copy()
     _park_utm = _park_utm[_park_utm.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     _park_utm["area_m2"] = _park_utm.geometry.area
     _park_utm["centroid_geom"] = _park_utm.geometry.centroid

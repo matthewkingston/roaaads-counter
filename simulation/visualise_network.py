@@ -65,7 +65,7 @@ def add_edges(G, m, use_xy=False):
                     # projected CRS — coords are (easting, northing), need lat/lon
                     import pyproj
                     transformer = pyproj.Transformer.from_crs(
-                        G.graph.get("crs", "EPSG:32630"), "EPSG:4326", always_xy=True
+                        G.graph.get("crs", "EPSG:2157"), "EPSG:4326", always_xy=True
                     )
                     coords = [
                         transformer.transform(x, y)[::-1]  # (lat, lon)
@@ -111,7 +111,7 @@ def add_nodes(G, m, label, color, show, use_xy=False):
     transformer = None
     if use_xy:
         transformer = pyproj.Transformer.from_crs(
-            G.graph.get("crs", "EPSG:32630"), "EPSG:4326", always_xy=True
+            G.graph.get("crs", "EPSG:2157"), "EPSG:4326", always_xy=True
         )
 
     intersections = [(n, d) for n, d in G.nodes(data=True) if G.degree(n) > 2]
