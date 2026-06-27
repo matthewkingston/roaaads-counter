@@ -1,9 +1,14 @@
 """
-Shared routing constants used by both the internal Dijkstra (build_paths.py)
-and the OSRM profile generator (build_osrm_profile.py).
+Shared routing constants for the probit noise + the legacy OSRM profile generator.
 
 HIGHWAY_COST_FACTOR: multiply the travel time of each road class by this factor
 before path-finding.  Values < 1 make that class preferred; > 1 make it avoided.
+**No longer used by internal routing** (build_paths.py) or the dead-end reducer
+(reduce_deadends.py): those now compute OSRM-equivalent (class × band) edge times
+from the Google-calibrated profile via simulation/edge_speed.py. This constant is
+retained only for the legacy tooling that still references it — the standalone
+OSRM profile generator (build_osrm_profile.py), build_skeleton_index.py's
+--base-speeds defactor, and skeleton_model.legacy_spec_from_highway_cost_factor.
 
 PROBIT_CV / PROBIT_LL_SIGMA: probit stochastic route-choice noise (build_paths.py).
 Each edge cost is perturbed by exp(eps * w), eps ~ N(0, PROBIT_CV), with a

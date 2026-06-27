@@ -42,7 +42,7 @@ import osmnx as ox
 import pyproj
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from routing_config import HIGHWAY_COST_FACTOR
+import edge_speed
 import model
 from demographics_config import PROJECTED_CRS
 
@@ -58,22 +58,20 @@ OUT_BROKEN    = "simulation/deadend_broken_obs.json"
 T_MAX_DEFAULT   = 60.0    # max entrance->dead-end journey time (routing-cost seconds)
 BIZ_CAP_DEFAULT = 100.0   # max business demand a region may absorb
 MIN_REGION_SIZE = 2       # skip single-node spurs
-SYNTH_HIGHWAY   = "deadend_collapsed"  # not in HIGHWAY_COST_FACTOR -> cost factor 1.0
+SYNTH_HIGHWAY   = edge_speed.DEADEND_HIGHWAY  # "deadend_collapsed"; factor 1.0 in build_paths
 SYNTH_SPEED_KPH = 30.0    # reference speed for synthetic edge length back-calculation
 
 
-def hw_factor(highway):
-    if isinstance(highway, list):
-        highway = highway[0] if highway else "unclassified"
-    return HIGHWAY_COST_FACTOR.get(highway, 1.0)
+def build_cost_digraph(G, spec):
+    """Min OSRM-equivalent routing cost (seconds) per directed (u, v).
 
-
-def build_cost_digraph(G):
-    """Min routing-cost (travel_time * highway factor) per directed (u, v)."""
+    Uses the same calibrated (class × band) edge-time model build_paths.py uses
+    (simulation/edge_speed.py), so the intra-region collapse times / T_MAX
+    feasibility match the speeds the reduced graph is later routed on."""
     D = nx.DiGraph()
     D.add_nodes_from(G.nodes())
     for u, v, edata in G.edges(data=True):
-        cost = float(edata.get("travel_time", 1.0)) * hw_factor(edata.get("highway"))
+        cost = edge_speed.edge_time_seconds(edata, edata.get("length", 1.0), spec)
         if D.has_edge(u, v):
             if cost < D[u][v]["cost"]:
                 D[u][v]["cost"] = cost
@@ -100,6 +98,8 @@ def main():
     G = ox.routing.add_edge_speeds(G)
     G = ox.routing.add_edge_travel_times(G)
     print(f"  {G.number_of_nodes()} nodes  {G.number_of_edges()} edges")
+    spec = edge_speed.load_profile()
+    print(f"  loaded tuned profile ({len(spec.factors)} non-unit factors)")
 
     with open(WEIGHTS_FILE) as f:
         nw = json.load(f)
@@ -156,7 +156,7 @@ def main():
     print(f"  {len(candidates)} candidate regions")
 
     # ── Feasibility ───────────────────────────────────────────────────────────
-    D = build_cost_digraph(G)
+    D = build_cost_digraph(G, spec)
     feasible = []   # (region frozenset, entrance, t_fwd, t_rev, maxT, region_pop, region_biz)
     skipped_unreachable = []
 

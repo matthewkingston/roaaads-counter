@@ -19,10 +19,15 @@ stops a long X→B leg's ±CV multiplicative swing from swamping the few-minute
 differences between competing boundary entries — boundary node selection for each
 external→internal OD pair is then driven by real time differences, not noise.
 
+Internal edge costs are the OSRM-equivalent (class × band) travel times from the
+Google-calibrated profile (simulation/tuned_profile.json + empirical base speeds),
+via simulation/edge_speed.py — replacing the old hand-picked HIGHWAY_COST_FACTOR.
+
 Run this once after any change to:
   - The road network (build_network.py / edit_network.py)
   - External links (build_external_links.py)
-  - HIGHWAY_COST_FACTOR values
+  - The tuned profile (simulation/tuned_profile.json) or base speeds
+    (data/google_cache/base_speeds.json)
   - N_PASSES, PROBIT_CV, or PROBIT_LL_SIGMA
 """
 
@@ -34,7 +39,8 @@ import pyproj
 from scipy.sparse import csr_matrix, coo_matrix
 from scipy.sparse.csgraph import dijkstra
 
-from routing_config import HIGHWAY_COST_FACTOR, PROBIT_CV, PROBIT_LL_SIGMA
+from routing_config import PROBIT_CV, PROBIT_LL_SIGMA
+import edge_speed
 from model import paths_cache_signature
 from demographics_config import PROJECTED_CRS
 
@@ -177,7 +183,9 @@ def _run_pass(args):
 print("Loading graph …")
 G = ox.load_graphml(CONS_GRAPH)
 G = ox.routing.add_edge_speeds(G)
-G = ox.routing.add_edge_travel_times(G)
+G = ox.routing.add_edge_travel_times(G)   # still needed for deadend_collapsed edge times
+spec = edge_speed.load_profile()
+print(f"  loaded tuned profile ({len(spec.factors)} non-unit factors)")
 road_node_ids = list(G.nodes())
 n_road = len(road_node_ids)
 print(f"  {n_road} road nodes  {G.number_of_edges()} edges")
@@ -271,8 +279,12 @@ for u, v, edata in G.edges(data=True):
     ht = edata.get("highway", "unclassified")
     if isinstance(ht, list):
         ht = ht[0]
-    factor = HIGHWAY_COST_FACTOR.get(ht, 1.0)
-    cost = float(edata.get("travel_time", 1.0)) * factor
+    if ht == edge_speed.DEADEND_HIGHWAY:
+        # Synthetic dead-end edge: keep its osmnx-encoded intra-region time
+        # (reduce_deadends.py picked maxspeed/length to reproduce it); factor 1.0.
+        cost = float(edata.get("travel_time", 1.0))
+    else:
+        cost = edge_speed.edge_time_seconds(edata, edata.get("length", 1.0), spec)
     i, j = node_to_idx[u], node_to_idx[v]
     rows.append(i); cols.append(j); data_road.append(cost)
     lnk = (u, v)
@@ -593,7 +605,8 @@ np.savez_compressed(
     n_routed_pairs  = np.int32(n_routed),
     src_graph_sha1     = np.array(_sig["src_graph_sha1"]),
     src_extlinks_sha1  = np.array(_sig["src_extlinks_sha1"]),
-    src_cost_factor    = np.array(_sig["src_cost_factor"]),
+    src_profile_sha1   = np.array(_sig["src_profile_sha1"]),
+    src_base_speeds_sha1 = np.array(_sig["src_base_speeds_sha1"]),
     src_probit_cv      = np.array(_sig["src_probit_cv"]),
     src_probit_ll_sigma = np.array(_sig["src_probit_ll_sigma"]),
 )
