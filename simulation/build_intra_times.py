@@ -21,6 +21,8 @@ Inputs:
   simulation/sdz2021/SDZ2021.geojson — SDZ polygons (keyed SDZ2021_cd)
   simulation/dz2021/DZ2021.geojson   — DZ polygons  (keyed DZ2021_cd)
   simulation/dea2021/DEA2021.geojson — DEA polygons (keyed FinalR_DEA)
+  data/ireland_data/Small_Area_National_Statistical_Boundaries_2022_*.geojson
+                                    — RoI SA polygons; ED/LEA derived by dissolving
   Local OSRM at OSRM_HOST:OSRM_PORT (same car profile build_external_links.py uses).
 
 Output:
@@ -30,6 +32,7 @@ Run after build_census_zones.py, with OSRM up.  Independent of build_paths.py �
 self-term lives in the model layer, not the paths cache, so re-running this does NOT
 require a paths-cache rebuild.  Re-run only when external zones change.
 """
+import glob
 import http.client
 import json
 import sys
@@ -44,6 +47,7 @@ CENSUS_ZONES_FILE = "data/census_zones.json"
 SDZ_FILE          = "simulation/sdz2021/SDZ2021.geojson"
 DZ_FILE           = "simulation/dz2021/DZ2021.geojson"
 DEA_FILE          = "simulation/dea2021/DEA2021.geojson"
+SA_BOUNDARY_GLOB  = "data/ireland_data/Small_Area_National_Statistical_Boundaries_2022_*.geojson"
 OUTPUT_FILE       = "data/external_intra_times.json"
 OSRM_HOST         = "localhost"
 OSRM_PORT         = 5000
@@ -51,7 +55,7 @@ OSRM_PORT         = 5000
 M_DEFAULT = 30          # point-pairs sampled per zone
 SEED      = 20260625    # deterministic
 
-# geojson property holding the zone code, per level
+# geojson property holding the zone code, per NI level
 CODE_COL = {"SDZ": "SDZ2021_cd", "DZ": "DZ2021_cd", "DEA": "FinalR_DEA"}
 
 # ── OSRM helper (mirrors build_external_links.py; duration only) ────────────────
@@ -109,8 +113,10 @@ def _check_osrm():
 # ── Polygon loading + uniform point sampling ───────────────────────────────────
 
 def load_polygons():
-    """Return {(level, code): shapely geometry in WGS84} for all three levels."""
+    """Return {(level, code): shapely geometry in WGS84} for all NI + RoI levels."""
     polys = {}
+
+    # NI: DZ / SDZ / DEA from boundary files
     for level, path in (("SDZ", SDZ_FILE), ("DZ", DZ_FILE), ("DEA", DEA_FILE)):
         gdf = gpd.read_file(path).to_crs("EPSG:4326")
         col = CODE_COL[level]
@@ -120,6 +126,27 @@ def load_polygons():
         for code, geom in zip(gdf[col], gdf.geometry):
             polys[(level, str(code))] = geom
         print(f"  {level}: {len(gdf)} polygons from {path}")
+
+    # RoI: SA directly; ED and LEA derived by dissolving SAs
+    sa_files = glob.glob(SA_BOUNDARY_GLOB)
+    if sa_files:
+        print(f"  Loading RoI SA boundaries (~410 MB) …")
+        sa = gpd.read_file(sa_files[0]).to_crs("EPSG:4326")
+        for code, geom in zip(sa["SA_PUB2022"], sa.geometry):
+            polys[("SA", str(code))] = geom
+        print(f"  SA: {len(sa)} polygons")
+        ed = sa[["ED_ID_STR", "geometry"]].dissolve(by="ED_ID_STR").reset_index()
+        for code, geom in zip(ed["ED_ID_STR"], ed.geometry):
+            polys[("ED", str(code))] = geom
+        print(f"  ED: {len(ed)} polygons (dissolved from SAs)")
+        lea = sa[["CSO_LEA", "geometry"]].dissolve(by="CSO_LEA").reset_index()
+        for code, geom in zip(lea["CSO_LEA"], lea.geometry):
+            polys[("LEA", str(code))] = geom
+        print(f"  LEA: {len(lea)} polygons (dissolved from SAs)")
+    else:
+        print(f"  WARNING: RoI SA boundary file not found ({SA_BOUNDARY_GLOB})")
+        print(f"           RoI external zones will be skipped (no self-term applied)")
+
     return polys
 
 
