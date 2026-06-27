@@ -316,8 +316,16 @@ changed** and is not comparable to pre-2026-06-27 runs. The tuner's χ²/N is no
 **Reading "modelled flow" across reports.** The three reporting surfaces print *different
 projections* of the same tuned model — they are not directly comparable line-for-line:
 - `build_assignment.py` "Official count sites" block and the `"flows"` values in
-  `newtownards_flows.json` → **directed daily AADT** = `K_res·flow_res + K_biz·flow_biz + K_sch·flow_school`.
-  This is the canonical modelled link flow. Node-based sites (508/444) sum every directed link at the node.
+  `newtownards_flows.json` → **directed daily AADT** = `K_res·flow_res·W_res + K_biz·flow_biz·W_biz
+  + K_sch·flow_school·W_sch`, where `W_c` (`model.aadt_weights`, ≈0.561/0.369/0.069, summing to ~1)
+  is the day-type-weighted (5·weekday+Sat+Sun)/7 sum of component `c`'s hourly fractions. **The `W_c`
+  weighting is essential:** `K_c·flow_c` is calibrated so `K_c·flow_c·f_c[slot]` matches the *hourly*
+  count, so `K_c·flow_c` alone is NOT a daily total — it is ~1/ΣW ≈ 2.6× too large. (Fixed 2026-06-27;
+  before this the block reported the unweighted `Σ K_c·flow_c` and the sites looked ~2.6–5.5× over when
+  the model actually ~fits them. The unweighted per-component flows still feed `compute_chi2`, which
+  applies `f_c` itself — do not double-weight.) `newtownards_flows.json` now stores the W-weighted AADT
+  in `flows`/`flows_res`/`flows_biz`/`flows_school` plus an `aadt_weights` block. Node-based sites
+  (508/444) sum every directed link at the node.
 - `newtownards_map.html` combined layer → the same AADT but **summed over both directions** of each
   edge (`flow(u,v)+flow(v,u)`), i.e. a two-way total (~2× a single directed link).
 - The tuner / `report_tune.py` fit table → **per-observation, count-space**: official rows are

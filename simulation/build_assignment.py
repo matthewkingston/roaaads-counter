@@ -18,7 +18,7 @@ import osmnx as ox
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
                    gravity_assign, constrained_od_flows, scatter_od_to_links,
-                   load_self_terms,
+                   load_self_terms, aadt_weights,
                    site_flow, compute_chi2, print_chi2_table,
                    assert_paths_cache_fresh)
 
@@ -186,10 +186,31 @@ if _use_2c or _use_3c:
                  for lnk in set(link_flow_res) | set(link_flow_biz)
                             | (set(link_flow_school) if link_flow_school else set())}
 
+    # ── True AADT (daily) link flows ──────────────────────────────────────────
+    # link_flow_* above are K_c·m_c — calibrated so K_c·m_c·f_c[slot] matches the
+    # HOURLY count, so they are NOT daily totals and must NOT be compared to AADT.
+    # The annual-average daily contribution is K_c·m_c·W_c (W_c from aadt_weights).
+    # These weighted dicts are what is REPORTED/SERIALISED as AADT; the unweighted
+    # link_flow_* still feed compute_chi2 (which applies f_c itself — do not double
+    # weight).  W_res+W_biz+W_sch ≈ 1.
+    W_res, W_biz, W_sch = aadt_weights(slot_fracs_res, slot_fracs_biz, slot_fracs_school)
+    aadt_res = {lnk: v * W_res for lnk, v in link_flow_res.items()}
+    aadt_biz = {lnk: v * W_biz for lnk, v in link_flow_biz.items()}
+    aadt_school = ({lnk: v * W_sch for lnk, v in link_flow_school.items()}
+                   if link_flow_school else None)
+    aadt_combined = {lnk: (aadt_res.get(lnk, 0.0) + aadt_biz.get(lnk, 0.0)
+                           + (aadt_school.get(lnk, 0.0) if aadt_school else 0.0))
+                     for lnk in set(aadt_res) | set(aadt_biz)
+                                | (set(aadt_school) if aadt_school else set())}
+    print(f"  AADT weights: W_res={W_res:.3f} W_biz={W_biz:.3f} W_sch={W_sch:.3f}"
+          f"  (sum={W_res+W_biz+W_sch:.3f})")
+
     # Per-external-node trip totals (routed pairs only: through = transiting ext→ext).
+    # AADT-weighted per component so these are true daily trips.
     _n_routed = int(cache.get("n_routed_pairs", len(od_src)))
     _is_ext   = np.array([isinstance(nid, str) for nid in node_ids_arr])
-    _t_total  = t_res * K_res + t_biz * K_biz + (t_sch * K_sch if _use_3c else np.zeros(len(t_res)))
+    _t_total  = (t_res * K_res * W_res + t_biz * K_biz * W_biz
+                 + (t_sch * K_sch * W_sch if _use_3c else np.zeros(len(t_res))))
     _src_r    = od_src[:_n_routed]
     _dst_r    = od_dst[:_n_routed]
     _t_r      = _t_total[:_n_routed]
@@ -243,8 +264,11 @@ print(f"\nOfficial count sites  (K = {K:.4e}"
          + (f"  K_sch={K_sch:.3e}" if _use_3c else "")
          if (_use_2c or _use_3c) else "") + ")")
 print(f"  {'Site':<45s}  {'Modelled':>9s}  {'Observed':>9s}  {'Ratio':>6s}")
+# Compare TRUE AADT (component-weighted) to the observed AADT — not the unweighted
+# K·m link_flow, which is ~1/ΣW ≈ 2.6× larger and is hourly-calibrated, not daily.
+_report_flow = aadt_combined if (_use_2c or _use_3c) else link_flow
 for s in COUNT_SITES:
-    f = site_flow(link_flow, s)
+    f = site_flow(_report_flow, s)
     print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
 rows, chi2, n_obs, n_eff = compute_chi2(
@@ -263,19 +287,22 @@ print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 # ── Serialise flows ───────────────────────────────────────────────────────────
 
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
+# Serialise TRUE AADT (component-weighted) flows — consumed by build_map.py as AADT.
+_out_flow = aadt_combined if (_use_3c or _use_2c) else link_flow
 out = {
     "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "BETA": BETA, "K": K,
-    "flows": {f"{u},{v}": flow for (u, v), flow in link_flow.items()},
+    "flows": {f"{u},{v}": flow for (u, v), flow in _out_flow.items()},
 }
 if _use_3c or _use_2c:
     out["K_res"] = K_res
     out["K_biz"] = K_biz
-    out["flows_res"] = {f"{u},{v}": flow for (u, v), flow in link_flow_res.items()}
-    out["flows_biz"] = {f"{u},{v}": flow for (u, v), flow in link_flow_biz.items()}
+    out["aadt_weights"] = {"res": W_res, "biz": W_biz, "school": W_sch}
+    out["flows_res"] = {f"{u},{v}": flow for (u, v), flow in aadt_res.items()}
+    out["flows_biz"] = {f"{u},{v}": flow for (u, v), flow in aadt_biz.items()}
     out["ext_node_trips"] = ext_node_trips
 if _use_3c:
     out["K_sch"] = K_sch
-    out["flows_school"] = {f"{u},{v}": flow for (u, v), flow in link_flow_school.items()}
+    out["flows_school"] = {f"{u},{v}": flow for (u, v), flow in aadt_school.items()}
 with open(flows_path, "w") as f:
     json.dump(out, f)
 _comp_str = ("+ res/biz/school" if _use_3c else ("+ res/biz" if _use_2c else ""))

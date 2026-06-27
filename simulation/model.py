@@ -459,6 +459,30 @@ def site_flow(link_flow_dict, site):
     return sum(f for (u, v), f in link_flow_dict.items() if u == node or v == node)
 
 
+# Number of days each model day_type stands for (weekday=Mon–Fri, Sat, Sun).
+_AADT_DAY_WEIGHT = {0: 5, 1: 1, 2: 1}
+
+
+def aadt_weights(slot_fracs_res, slot_fracs_biz, slot_fracs_school=None):
+    """Per-component AADT weights for converting a pre-K component flow to a daily total.
+
+    A component flow K_c·m_c is calibrated so that K_c·m_c·f_c[slot] matches the
+    HOURLY count in that slot — so K_c·m_c by itself is NOT a daily total; it is the
+    daily total divided by the component's daily fraction sum.  The annual-average
+    daily contribution is K_c·m_c·W_c with
+        W_c = (5·Σ_h f_c[weekday,h] + Σ_h f_c[Sat,h] + Σ_h f_c[Sun,h]) / 7,
+    i.e. the day-type-weighted sum of the component's hourly fractions.  W_res+W_biz+
+    W_sch ≈ 1 (the components partition the aggregate profile, which sums to ~1/day).
+
+    Returns (W_res, W_biz, W_sch).  Components with no slot_fracs return 0.0.
+    """
+    def _w(sf):
+        if not sf:
+            return 0.0
+        return sum(_AADT_DAY_WEIGHT.get(dt, 0) * f for (dt, h), f in sf.items()) / 7.0
+    return _w(slot_fracs_res), _w(slot_fracs_biz), _w(slot_fracs_school)
+
+
 def _site_flow_2c(flow_res_dict, flow_biz_dict, node, links):
     """Return (m_res, m_biz) for a site defined by node or directed links."""
     if links:
