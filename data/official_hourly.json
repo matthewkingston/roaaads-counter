@@ -665,8 +665,17 @@
   },
   "508": {
     "label": "site 508, A48 Donaghadee Road",
-    "node": 136173611,
-    "links": null,
+    "node": null,
+    "links": [
+      [
+        544419411,
+        136173596
+      ],
+      [
+        136173596,
+        544419411
+      ]
+    ],
     "observations": [
       {
         "time_slot": [
