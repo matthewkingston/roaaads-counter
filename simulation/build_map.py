@@ -18,11 +18,12 @@ import geopandas as gpd
 import pandas as pd
 import osmnx as ox
 import folium
+from folium.plugins import FeatureGroupSubGroup
 import pyproj
 import odf.opendocument, odf.table, odf.text
 
 from demographics_config import (
-    CENTRE, OUT_DIR, GRAPH_PATH, DZ_BOUNDARY_FILE, POI_CACHE, PARKING_CACHE,
+    CENTRE, OUT_DIR, GRAPH_PATH, POI_CACHE, PARKING_CACHE,
     CENSUS_ZONES_FILE, EXCLUDE_AMENITY, SCHOOL_ENROLL_FALLBACK,
     HIGHWAY_STYLE, ROAD_TYPE_LABELS, PROJECTED_CRS,
 )
@@ -75,7 +76,11 @@ G_raw = ox.load_graphml(f"{OUT_DIR}/newtownards_network.graphml")
 
 m = folium.Map(location=list(CENTRE), zoom_start=14, tiles="CartoDB positron")
 
-# 5a. Road network edges (from raw geographic graph)
+# ── Roads (master "Roads" group + per-type subgroups) ─────────────────────────
+# A single parent FeatureGroup toggles every road type at once; each road type is
+# a FeatureGroupSubGroup so it can also be toggled individually. (Folium has no
+# true collapsible tree in the layer control, so the subgroups appear as their own
+# entries; toggling the parent shows/hides them collectively.)
 from collections import defaultdict
 by_type = defaultdict(list)
 for u, v, data in G_raw.edges(data=True):
@@ -90,13 +95,15 @@ type_order = [
 ]
 all_types = type_order + [t for t in by_type if t not in type_order]
 
+roads_parent = folium.FeatureGroup(name="Roads", show=False)
+roads_parent.add_to(m)
 for htype in all_types:
     edges = by_type.get(htype)
     if not edges:
         continue
     style = HIGHWAY_STYLE.get(htype, {"color": "#aaaaaa", "weight": 1})
     label = ROAD_TYPE_LABELS.get(htype, f"Roads · {htype}")
-    fg = folium.FeatureGroup(name=label, show=False)
+    sub = FeatureGroupSubGroup(roads_parent, label, show=True)
     for u, v, data in edges:
         geom = data.get("geometry")
         if geom and hasattr(geom, "coords"):
@@ -112,14 +119,10 @@ for htype in all_types:
             coords, color=style["color"], weight=style["weight"],
             opacity=0.7,
             tooltip=f"{name or '(unnamed)'} [{htype}] · {length:.0f}m",
-        ).add_to(fg)
-    fg.add_to(m)
+        ).add_to(sub)
+    sub.add_to(m)
 
-# 5b. Classify nodes as boundary (in/out flow) vs interior.
-#
-# Set established by auto-detection followed by manual inspection.
-# To update: add/remove node IDs from BOUNDARY_NODE_IDS.
-
+# ── Node classification (boundary vs interior) ────────────────────────────────
 BOUNDARY_NODE_IDS = _boundary_ids_cons  # consolidated IDs for map display
 
 boundary_nodes_map = {}   # node_id → (wgs_lat, wgs_lon, dist, degree)
@@ -134,71 +137,93 @@ for node_id, (nx_utm, ny_utm) in zip(node_ids, node_coords_utm):
     else:
         interior_nodes_map[node_id] = (nlat, nlon, dist, deg)
 
+all_nodes_map = {**boundary_nodes_map, **interior_nodes_map}
 print(f"  Node classification: {len(boundary_nodes_map)} boundary, {len(interior_nodes_map)} interior")
 
-# Boundary nodes — ON by default, orange diamonds
-boundary_fg = folium.FeatureGroup(name=f"In/Out flow nodes — auto-detected ({len(boundary_nodes_map)})", show=True)
-for node_id, (nlat, nlon, dist, deg) in boundary_nodes_map.items():
+# ── Nodes — single layer; boundary nodes drawn as orange squares ──────────────
+nodes_fg = folium.FeatureGroup(name="Nodes", show=True)
+for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
+    is_boundary = node_id in BOUNDARY_NODE_IDS
     node_pop = node_population.get(node_id, 0)
     node_biz = node_business_demand.get(node_id, 0)
     node_sch = node_school_demand.get(node_id, 0)
-    _sch_str = f"<br>school pupils: {node_sch:.0f}" if node_sch > 0 else ""
-    folium.RegularPolygonMarker(
-        location=[nlat, nlon],
-        number_of_sides=4, radius=6, rotation=45,
-        color="#e05c00", fill=True, fill_color="#ff7c20", fill_opacity=0.9, weight=1.5,
-        tooltip=(
-            f"<b>Node {node_id}</b> [boundary]<br>"
-            f"degree={deg} · {dist:.0f}m from centre<br>"
-            f"pop: {node_pop:,.0f}<br>"
-            f"workplace: {node_biz:,.0f}"
-            f"{_sch_str}"
-        ),
-    ).add_to(boundary_fg)
-boundary_fg.add_to(m)
+    tooltip = (
+        f"<b>Node {node_id}</b>{' [boundary]' if is_boundary else ''}<br>"
+        f"population: {node_pop:,.0f}<br>"
+        f"business demand: {node_biz:,.1f}<br>"
+        f"school capacity: {node_sch:,.1f}"
+    )
+    if is_boundary:
+        folium.RegularPolygonMarker(
+            location=[nlat, nlon],
+            number_of_sides=4, radius=6, rotation=45,
+            color="#e05c00", fill=True, fill_color="#ff7c20", fill_opacity=0.9, weight=1.5,
+            tooltip=tooltip,
+        ).add_to(nodes_fg)
+    else:
+        folium.CircleMarker(
+            location=[nlat, nlon], radius=3,
+            color="#1a73e8", fill=True, fill_color="#1a73e8", fill_opacity=0.8, weight=1,
+            tooltip=tooltip,
+        ).add_to(nodes_fg)
+nodes_fg.add_to(m)
 
-# Interior nodes — ON by default, small blue dots
-interior_fg = folium.FeatureGroup(name=f"Interior nodes ({len(interior_nodes_map)})", show=True)
-for node_id, (nlat, nlon, dist, deg) in interior_nodes_map.items():
-    node_pop = node_population.get(node_id, 0)
-    node_biz = node_business_demand.get(node_id, 0)
-    node_sch = node_school_demand.get(node_id, 0)
-    _sch_str = f"<br>school pupils: {node_sch:.1f}" if node_sch > 0 else ""
+# ── Metric node layers — size scaled by the metric, OFF by default ────────────
+# Ranges are set from internal nodes only so boundary giants (e.g. Belfast) don't
+# collapse the visible size range.
+def _scaled_radius(value, vmax):
+    return max(3, 14 * (value / vmax) ** 0.5)
+
+# Population nodes
+max_pop_internal = max((node_population.get(n, 0) for n in all_nodes_map), default=1) or 1
+pop_fg = folium.FeatureGroup(name="Population nodes", show=False)
+for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
+    pop = node_population.get(node_id, 0)
+    if pop <= 0:
+        continue
     folium.CircleMarker(
-        location=[nlat, nlon], radius=3,
-        color="#1a73e8", fill=True, fill_color="#1a73e8", fill_opacity=0.8, weight=1,
+        location=[nlat, nlon], radius=_scaled_radius(pop, max_pop_internal),
+        color="#1a4fa0", fill=True, fill_color="#5b9bf3", fill_opacity=0.65, weight=1,
+        tooltip=f"<b>Node {node_id}</b><br>population: {pop:,.1f}",
+    ).add_to(pop_fg)
+pop_fg.add_to(m)
+
+# Business nodes
+max_biz_internal = max((node_business_demand.get(n, 0) for n in interior_nodes_map), default=1) or 1
+biz_fg = folium.FeatureGroup(name="Business nodes", show=False)
+for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
+    biz = node_business_demand.get(node_id, 0)
+    if biz <= 0:
+        continue
+    park_eq   = node_parking_equiv.get(node_id, 0)
+    wp_demand = biz - park_eq
+    folium.CircleMarker(
+        location=[nlat, nlon], radius=_scaled_radius(biz, max_biz_internal),
+        color="#7b2d8b", fill=True, fill_color="#b05ec0", fill_opacity=0.65, weight=1,
         tooltip=(
-            f"Node {node_id} · degree={deg} · {dist:.0f}m from centre<br>"
-            f"est. pop: {node_pop:.1f}<br>"
-            f"workplace pop: {node_biz:.1f}"
-            f"{_sch_str}"
+            f"<b>Node {node_id}</b><br>"
+            f"workplace population: {wp_demand:,.1f}<br>"
+            f"parking equivalent: {park_eq:,.1f}<br>"
+            f"business demand: {biz:,.1f}"
         ),
-    ).add_to(interior_fg)
-interior_fg.add_to(m)
+    ).add_to(biz_fg)
+biz_fg.add_to(m)
 
-# 5d-pre. Core area DZ boundaries — actual DZs in the core polygon from census_zones.json,
-# not the old 3km-clipped set.  Useful for seeing exactly which DZs were pulled into core.
-if _census_zones is not None:
-    from shapely.geometry import Polygon as _CorePoly
-    _core_poly_wgs_map = _CorePoly(_census_zones["core_polygon"])
-    _dz_all_wgs = gpd.read_file(DZ_BOUNDARY_FILE).to_crs("EPSG:4326")
-    _dz_core_map = _dz_all_wgs[_dz_all_wgs.geometry.centroid.within(_core_poly_wgs_map)].copy()
-    core_dz_fg = folium.FeatureGroup(
-        name=f"Core area DZs — from census_zones.json ({len(_dz_core_map)})", show=False)
-    for _, _row in _dz_core_map.iterrows():
-        folium.GeoJson(
-            _row.geometry.__geo_interface__,
-            style_function=lambda f: {
-                "fillColor": "#ff6600", "color": "#cc4400",
-                "weight": 2, "fillOpacity": 0.12,
-            },
-            tooltip=folium.Tooltip(
-                f"<b>{_row.get('DZ2021_nm','')}</b><br>{_row.get('DZ2021_cd','')}"),
-        ).add_to(core_dz_fg)
-    core_dz_fg.add_to(m)
+# School nodes
+max_sch_internal = max((node_school_demand.get(n, 0) for n in all_nodes_map), default=1) or 1
+sch_fg = folium.FeatureGroup(name="School nodes", show=False)
+for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
+    sch = node_school_demand.get(node_id, 0)
+    if sch <= 0:
+        continue
+    folium.CircleMarker(
+        location=[nlat, nlon], radius=_scaled_radius(sch, max_sch_internal),
+        color="#1a7a3c", fill=True, fill_color="#2ecc71", fill_opacity=0.65, weight=1,
+        tooltip=f"<b>Node {node_id}</b><br>school capacity: {sch:,.1f}",
+    ).add_to(sch_fg)
+sch_fg.add_to(m)
 
-# 5d. DZ choropleth (estimated population in clipped area)
-# Convert clipped DZs back to WGS84 for Leaflet rendering
+# ── Core Data Zones — pop choropleth, OFF by default ──────────────────────────
 dz_plot = dz_final.to_crs("EPSG:4326")
 pop_vals = dz_plot["pop_estimated"].dropna().astype(float)
 pop_min, pop_max = pop_vals.min(), pop_vals.max()
@@ -211,13 +236,10 @@ def pop_color(pop):
     b = int(255 * (1 - t * 0.3))
     return f"#{r:02x}{g:02x}{b:02x}"
 
-dz_fg = folium.FeatureGroup(name=f"Data Zones — pop estimate ({len(dz_plot)})", show=False)
+dz_fg = folium.FeatureGroup(name="Core Data Zones", show=False)
 for _, row in dz_plot.iterrows():
     geojson_str = json.dumps(row.geometry.__geo_interface__)
-    pop_est = int(row["pop_estimated"]) if pd.notna(row["pop_estimated"]) else None
     pop_full = int(row["population"]) if pd.notna(row["population"]) else None
-    area_pct = row["area_pct"]
-    clipped = area_pct < 0.99
     folium.GeoJson(
         geojson_str,
         style_function=lambda f, pop=row["pop_estimated"]: {
@@ -228,42 +250,13 @@ for _, row in dz_plot.iterrows():
         },
         tooltip=folium.Tooltip(
             f"<b>{row['DZ2021_nm']}</b><br>"
-            f"Code: {row['DZ2021_cd']}<br>"
-            f"Est. pop (clipped): {pop_est if pop_est else 'N/A'}<br>"
-            + (f"Census pop (full DZ): {pop_full} · {area_pct*100:.0f}% of DZ in study area<br>" if clipped else
-               f"Census pop: {pop_full}<br>")
-            + f"Area in study: {row['area_clipped_m2']/10000:.1f} ha"
+            f"{row['DZ2021_cd']}<br>"
+            f"population: {pop_full if pop_full is not None else 'N/A'}"
         ),
     ).add_to(dz_fg)
 dz_fg.add_to(m)
 
-# 5e. Business demand nodes — proportional purple circles, OFF by default
-# Scale based on internal nodes only so boundary giants (Belfast) don't collapse the range.
-max_biz_internal = max((node_business_demand.get(n, 0) for n in interior_nodes_map), default=1)
-biz_fg = folium.FeatureGroup(name="Business demand nodes", show=False)
-all_nodes_map = {**boundary_nodes_map, **interior_nodes_map}
-for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
-    biz = node_business_demand.get(node_id, 0)
-    if biz <= 0:
-        continue
-    radius = max(3, 14 * (biz / max_biz_internal) ** 0.5)
-    node_pop  = node_population.get(node_id, 0)
-    park_eq   = node_parking_equiv.get(node_id, 0)
-    wp_demand = biz - park_eq
-    folium.CircleMarker(
-        location=[nlat, nlon], radius=radius,
-        color="#7b2d8b", fill=True, fill_color="#b05ec0", fill_opacity=0.65, weight=1,
-        tooltip=(
-            f"<b>Node {node_id}</b><br>"
-            f"workplace population: {wp_demand:.1f}<br>"
-            f"parking eq.: {park_eq:.1f}<br>"
-            f"business demand: {biz:.1f}<br>"
-            f"est. pop: {node_pop:.1f}"
-        ),
-    ).add_to(biz_fg)
-biz_fg.add_to(m)
-
-# 5f. Parking polygons — realism check layer (red = private, blue = public/untagged)
+# ── Car parks — realism check layer (red = private, blue = public/untagged) ────
 _park_wgs = None
 if _park_utm is not None:  # full run: set in else branch above
     _park_wgs = _park_utm.to_crs("EPSG:4326")
@@ -275,7 +268,7 @@ elif os.path.exists(PARKING_CACHE):  # --map-only: reload and reprocess from cac
     _park_wgs = _p.to_crs("EPSG:4326")
 
 if _park_wgs is not None:
-    park_fg = folium.FeatureGroup(name=f"Car parks — OSM ({len(_park_wgs)})", show=False)
+    park_fg = folium.FeatureGroup(name="Car parks", show=False)
     for _, _row in _park_wgs.iterrows():
         _access_col = "access" in _park_wgs.columns
         _access_val = _row["access"] if _access_col else None
@@ -297,9 +290,9 @@ if _park_wgs is not None:
             tooltip=folium.Tooltip(_tip),
         ).add_to(park_fg)
     park_fg.add_to(m)
-    print(f"Added parking layer ({len(_park_wgs)} polygons)")
+    print(f"Added car parks layer ({len(_park_wgs)} polygons)")
 
-# 5g. POI layer — amenity/shop/office features used for workplace allocation
+# ── Businesses — amenity/shop/office POIs used for workplace allocation ────────
 #     (school POIs excluded — shown in their own layer below)
 _poi_wgs = None
 if pois_utm is not None:  # full run: set in else branch above
@@ -321,7 +314,7 @@ if _poi_wgs is not None:
     _biz_pois_wgs    = _poi_wgs[~_school_mask].copy()
 
     _POI_COLOURS = {"amenity": "#e67e22", "shop": "#27ae60", "office": "#2980b9"}
-    poi_fg = folium.FeatureGroup(name=f"POIs — workplace allocation ({len(_biz_pois_wgs)})", show=False)
+    poi_fg = folium.FeatureGroup(name="Businesses", show=False)
     for _, _row in _biz_pois_wgs.iterrows():
         _kind, _val, _color = None, None, "#888888"
         for _col in ("amenity", "shop", "office"):
@@ -340,11 +333,11 @@ if _poi_wgs is not None:
             tooltip=folium.Tooltip(_tip),
         ).add_to(poi_fg)
     poi_fg.add_to(m)
-    print(f"Added POI layer ({len(_biz_pois_wgs)} non-school POIs: orange=amenity, green=shop, blue=office)")
+    print(f"Added businesses layer ({len(_biz_pois_wgs)} non-school POIs: orange=amenity, green=shop, blue=office)")
 
-    # 5h. School POI layer — schools with enrollment, green circles, OFF by default
+    # ── Schools — school POIs with enrollment, OFF by default ─────────────────
     if len(_school_pois_wgs) > 0:
-        school_poi_fg = folium.FeatureGroup(name=f"Schools — OSM ({len(_school_pois_wgs)})", show=False)
+        school_poi_fg = folium.FeatureGroup(name="Schools", show=False)
         for _, _row in _school_pois_wgs.iterrows():
             _amenity = _row.get("amenity") if "amenity" in _school_pois_wgs.columns else None
             _name = ""
@@ -375,7 +368,7 @@ if _poi_wgs is not None:
                 tooltip=folium.Tooltip(_tip),
             ).add_to(school_poi_fg)
         school_poi_fg.add_to(m)
-        print(f"Added school POI layer ({len(_school_pois_wgs)} schools)")
+        print(f"Added schools layer ({len(_school_pois_wgs)} schools)")
 
 # ── Optional flow layers (loaded from newtownards_flows.json if it exists) ────
 _flows_path = f"{OUT_DIR}/newtownards_flows.json"
@@ -477,7 +470,7 @@ if os.path.exists(_flows_path):
     # ── Combined layer (always shown) ─────────────────────────────────────────
     # Tooltip built inline because it needs per-edge (u,v) to look up res/biz components.
     lmin_c, lmax_c = _log_scale(_link_flow)
-    fg_combined = folium.FeatureGroup(name="Road flows — est. AADT", show=True)
+    fg_combined = folium.FeatureGroup(name="Flows", show=True)
     for _u, _v, _data in G_cons.edges(data=True):
         _flow = _link_flow.get((_u, _v), 0) + _link_flow.get((_v, _u), 0)
         _geom = _data.get("geometry")
@@ -512,14 +505,14 @@ if os.path.exists(_flows_path):
     # ── Component layers (off by default, only added when data available) ─────
     if _has_components:
         _add_flow_fg(
-            _link_flow_res, "Road flows — residential (pop→pop)", _color_res,
+            _link_flow_res, "Flows - residential", _color_res,
             lambda name, flow, length: (
                 f"{name or 'link'}<br>residential AADT: {flow:,.0f}<br>length: {length:.0f}m"
             ),
             show=False,
         )
         _add_flow_fg(
-            _link_flow_biz, "Road flows — business-adjacent (pb+bb)", _color_biz,
+            _link_flow_biz, "Flows - business", _color_biz,
             lambda name, flow, length: (
                 f"{name or 'link'}<br>business AADT: {flow:,.0f}<br>length: {length:.0f}m"
             ),
@@ -527,7 +520,7 @@ if os.path.exists(_flows_path):
         )
         if _has_school_layer:
             _add_flow_fg(
-                _link_flow_school, "Road flows — school (pop→school)", _color_school,
+                _link_flow_school, "Flows - school", _color_school,
                 lambda name, flow, length: (
                     f"{name or 'link'}<br>school AADT: {flow:,.0f}<br>length: {length:.0f}m"
                 ),
@@ -540,7 +533,7 @@ if os.path.exists(_flows_path):
 else:
     print(f"No flow data found at {_flows_path} — skipping flow layer")
 
-# ── NI traffic count sites (from ODS, Irish Grid → WGS84) ────────────────────
+# ── Count sites (from ODS, Irish Grid → WGS84) ───────────────────────────────
 _ODS_PATH = os.path.join(os.path.dirname(__file__), "..", "data",
                          "2023-northern-ireland-traffic-count-data-in-ods-format.ods")
 # Sites used in calibration (shown with a distinct star marker)
@@ -577,8 +570,7 @@ if os.path.exists(_ODS_PATH):
                 "lat": _lat, "lon": _lon, "e": _e, "n": _n,
             })
 
-    count_fg = folium.FeatureGroup(
-        name=f"NI traffic count sites — 2023 ODS ({len(_ods_sites)})", show=True)
+    count_fg = folium.FeatureGroup(name="Count sites", show=True)
     for _s in _ods_sites:
         _is_cal = _s["id"] in _CALIBRATION_SITES
         _tip = (
@@ -604,12 +596,12 @@ if os.path.exists(_ODS_PATH):
                 tooltip=folium.Tooltip(_tip),
             ).add_to(count_fg)
     count_fg.add_to(m)
-    print(f"Added NI count sites layer ({len(_ods_sites)} sites, "
+    print(f"Added count sites layer ({len(_ods_sites)} sites, "
           f"{sum(1 for s in _ods_sites if s['id'] in _CALIBRATION_SITES)} calibration)")
 else:
     print(f"ODS file not found at {_ODS_PATH} — skipping count sites layer")
 
-# ── External zone markers ─────────────────────────────────────────────────────
+# ── External nodes ────────────────────────────────────────────────────────────
 if _census_zones is not None:
     _ext_zones = _census_zones["external_nodes"]
     _max_ext_tot = max(
@@ -617,7 +609,7 @@ if _census_zones is not None:
          + _ext_node_trips.get(_ez["id"], {}).get("trips_internal", 0))
         for _ez in _ext_zones
     ) if _ext_node_trips else 1.0
-    ext_fg = folium.FeatureGroup(name=f"External zones ({len(_ext_zones)})", show=False)
+    ext_fg = folium.FeatureGroup(name="External nodes", show=False)
     for _ez in _ext_zones:
         _nid    = _ez["id"]
         _ez_pop = node_population.get(_nid, 0)
@@ -647,7 +639,7 @@ if _census_zones is not None:
             tooltip=folium.Tooltip(_tip),
         ).add_to(ext_fg)
     ext_fg.add_to(m)
-    print(f"Added external zones layer ({len(_ext_zones)} nodes"
+    print(f"Added external nodes layer ({len(_ext_zones)} nodes"
           + (f", {len(_ext_node_trips)} with trip data" if _ext_node_trips else ", no trip data")
           + ")")
 
