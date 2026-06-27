@@ -441,6 +441,36 @@ _walk_link_raw = np.array(
 _walk_link_safe = np.where(_walk_link_raw >= 0, _walk_link_raw, 0)
 _walk_valid     = _walk_link_raw >= 0
 
+# ── Observed-link scatter restriction (tuner-only speedup) ────────────────────
+# model_obs_3c reads modelled flow on only the OBSERVED links (the official-site +
+# walking links in obs_link_idxs / _walk_link_safe). run_assignment, however, used
+# to scatter the full ~62M probit-incidence entries onto ALL N_links every eval,
+# then discard flow on the ~1400 links no observation ever touches. The scatter
+# dominates each eval (~3×2.8 s), so we precompute the subset of incidence entries
+# landing on observed links and scatter only those into a COMPACT observed-link
+# space (link id → 0..n_obs_links-1). Identical result on observed links; build
+# time only (no per-eval cost). build_assignment.py keeps the full scatter for the
+# map/flow outputs — this restriction is local to the tuner's objective.
+_obs_link_ids = np.array(sorted({k for idxs in obs_link_idxs for k in idxs}),
+                         dtype=np.int64)
+_N_obs_links  = len(_obs_link_ids)
+_link_remap   = np.full(N_links, -1, dtype=np.int64)   # full link id → compact id (or -1)
+_link_remap[_obs_link_ids] = np.arange(_N_obs_links)
+
+_compact_link_idx = _link_remap[link_idx_arr]          # -1 where the entry's link is unobserved
+_scatter_keep     = _compact_link_idx >= 0
+_pair_idx_obs     = np.ascontiguousarray(pair_idx[_scatter_keep])
+_link_idx_obs     = np.ascontiguousarray(_compact_link_idx[_scatter_keep])
+_link_weight_obs  = (np.ascontiguousarray(_link_weight[_scatter_keep])
+                     if _link_weight is not None else None)
+
+# Readback indices remapped into the compact observed-link space.
+_obs_link_idxs_compact = [[int(_link_remap[k]) for k in idxs] for idxs in obs_link_idxs]
+_walk_link_safe_compact = np.where(_walk_valid, _link_remap[_walk_link_safe], 0)
+print(f"  Observed-link scatter: {_N_obs_links} links carry "
+      f"{_scatter_keep.sum():,}/{len(link_idx_arr):,} incidence entries "
+      f"({100*_scatter_keep.sum()/len(link_idx_arr):.0f}%) — scatter restricted to these")
+
 # Group slotted observations by (day_type, hour)
 slot_groups = {}
 for i, sk in enumerate(obs_slot_keys):
@@ -549,12 +579,15 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
         P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w)
-    flow_res = scatter_od_to_links(t_res, pair_idx, link_idx_arr, _link_weight, N_links)
-    flow_biz = scatter_od_to_links(t_biz, pair_idx, link_idx_arr, _link_weight, N_links)
+    # Scatter only onto observed links (compact space) — see the observed-link
+    # scatter-restriction block above. flow_* are indexed by COMPACT link id
+    # (0.._N_obs_links-1); model_obs_3c reads them via the compact remap.
+    flow_res = scatter_od_to_links(t_res, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
+    flow_biz = scatter_od_to_links(t_biz, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
     if _has_school:
-        flow_school = scatter_od_to_links(t_sch, pair_idx, link_idx_arr, _link_weight, N_links)
+        flow_school = scatter_od_to_links(t_sch, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
     else:
-        flow_school = np.zeros(N_links, dtype=np.float64)
+        flow_school = np.zeros(_N_obs_links, dtype=np.float64)
     return flow_res, flow_biz, flow_school
 
 
@@ -563,13 +596,14 @@ def model_obs_3c(flow_res, flow_biz, flow_school):
     m_r = np.empty(n_obs)
     m_b = np.empty(n_obs)
     m_s = np.empty(n_obs)
-    for i, idxs in enumerate(obs_link_idxs[:n_official_hourly]):
+    # flow_* are indexed by compact observed-link id (see run_assignment).
+    for i, idxs in enumerate(_obs_link_idxs_compact[:n_official_hourly]):
         m_r[i] = flow_res[idxs].sum()    if idxs else 0.0
         m_b[i] = flow_biz[idxs].sum()    if idxs else 0.0
         m_s[i] = flow_school[idxs].sum() if idxs else 0.0
-    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe],    0.0)
-    m_b[n_official_hourly:] = np.where(_walk_valid, flow_biz[_walk_link_safe],    0.0)
-    m_s[n_official_hourly:] = np.where(_walk_valid, flow_school[_walk_link_safe], 0.0)
+    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe_compact],    0.0)
+    m_b[n_official_hourly:] = np.where(_walk_valid, flow_biz[_walk_link_safe_compact],    0.0)
+    m_s[n_official_hourly:] = np.where(_walk_valid, flow_school[_walk_link_safe_compact], 0.0)
     return m_r, m_b, m_s
 
 
