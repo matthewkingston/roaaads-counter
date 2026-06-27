@@ -488,16 +488,27 @@ External zone values are now fully data-driven from Census 2021 (via `data/censu
 
 ## Google Routing-Time Calibration (offline, optional — NOT part of the main pipeline)
 
-**Purpose.** OSRM (current profile) is systematically *too fast*, badly so on the external
-approach corridors (e.g. Ballyrainey), which inflates external→core flow and hurts the fit.
-This workflow uses **Google Maps Routes API as a source-of-truth for journey times** to
-calibrate a more realistic OSRM time profile. The guiding design is to **decouple impedance
-(realistic travel time) from route preference (generalised cost)** — currently conflated in
-the single `HIGHWAY_COST_FACTOR`. Feasibility confirmed OSRM is ~26% too fast on average
-(median matched-geometry time ratio ≈0.79; up to ~0.55 on short/urban + Ballyrainey), with a
-length-structured error implying a **turn/junction penalty** is needed, not just per-class
-speed factors. This is a multi-block research project; only the data-collection tooling exists
-so far (no calibrated profile yet).
+**Status — COMPLETED (2026-06-26), largely successful.** A calibrated per-`(road-class × speed-band)`
+speed-factor profile (`simulation/tuned_profile.json`) was fit against Google and deployed (via
+`compile_profile.py` → `car_roaaads.lua`), bringing OSRM **external-corridor** times into line with
+Google: offline benchmark `predicted/Google` medians **X2B 1.00, B2X 0.99, X2X 1.00** (overall
+median 0.99), vs stock OSRM's per-leg ~0.95–0.97. **Residuals not fully resolved:** (a) **in-town
+(INT)** times remain ~12% too fast (median ≈0.88) — a **turn/junction-model** gap, not a base-speed
+one; (b) specific external corridors, notably **Ballyrainey**, are improved but not fully matched.
+The route-preference (stage-2) layer was not pursued.
+
+**Correction to earlier figures.** The old headline "OSRM ~26% too fast (median matched-time ≈0.79)"
+came from the **small best-only feasibility pilot** and overstated the bias. The full route-set
+benchmark puts **stock** OSRM at `predicted/Google` median **≈0.944** (~6% too fast at the median),
+and the fast bias is **concentrated** in-town (INT ≈0.79) and on the nearest external bands, not
+uniform. Do not cite the 26%/0.79 figures.
+
+**Purpose / design (retained).** OSRM was systematically *too fast* (worst in-town and on some
+external approach corridors), which inflated external→core flow and hurt the fit. The workflow uses
+**Google Maps Routes API as a journey-time source-of-truth** to calibrate a realistic OSRM time
+profile, **decoupling impedance (realistic travel time) from route preference (generalised cost)** —
+the two were conflated in the single `HIGHWAY_COST_FACTOR`. The length-structured error confirmed a
+**turn/junction penalty** is needed, not just per-class speed factors (hence the INT residual above).
 
 **⚠️ Paid external API.** Every Google query costs money (Routes API ~$5/1000 requests on a
 pay-as-you-go account). **Never run a live Google query without explicit, per-run user
@@ -574,11 +585,14 @@ on a better turn model. The verify gate is the contract that lets the fast loop 
 any tuned `car_roaaads.lua` is adopted (then re-run the downstream chain:
 `build_external_links → reduce_deadends → build_paths → tune_assignment`).
 
-**Empirical-calibration status (2026-06-23):** empirical base speeds make the offline model a
-faithful proxy for real OSRM on external corridors (verify per-leg medians ≈ 1.00–1.03); the
-external-focused factor tune lands X2B/B2X/X2X medians ≈ 0.97–1.00 vs Google with physically
-sensible factors (motorway sped up to ~Google free-flow, urban A/B-roads slowed). Outstanding:
-in-town (INT) turn model; tuning the global turn params; the route-preference (stage-2) layer.
+**Calibration status — COMPLETED (final tune 2026-06-26, 3932 routes):** empirical base speeds make
+the offline model a faithful proxy for real OSRM on external corridors (verify per-leg medians ≈
+1.00–1.03); the external-focused factor tune lands X2B/B2X/X2X medians ≈ **0.99–1.00** vs Google
+(stock ~0.95–0.97) with physically sensible factors (motorway sped up to ~Google free-flow, urban
+A/B-roads slowed; factor span ≈ 0.84–1.21), aggregate offline loss ~0.025 (stock) → ~0.012 (tuned).
+The tuned profile was compiled to `car_roaaads.lua` and deployed. **Still outstanding (accepted):**
+in-town (INT) turn model (INT median ≈0.88, ~12% fast); global turn-param tuning; the
+route-preference (stage-2) layer; and full resolution of the **Ballyrainey** corridor.
 
 ---
 
