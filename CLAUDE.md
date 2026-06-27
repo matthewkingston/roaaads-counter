@@ -244,9 +244,14 @@ OSRM-samples `M=30` uniform intra-zonal point-pairs per external zone → `data/
 over the sample, `E[f]`, not `f(mean)`). It is **denominator-only** — no link flow — and applies to
 **external zones only** (internal road nodes have no zone area). Direct OSRM sampling avoids any
 characteristic-distance constant, speed assumption, or zone-shape model (real per-zone times carry local
-speed + network detour). Effect (measured): exported external→core budget −0.8% overall, concentrated on
-the far DEAs (which collapse to ~0 core-bound flow, as they should — bounded because coarse ⇒ distant ⇒ tiny
-`f(d→core)`); near-town SDZs barely move. Wired into `build_assignment.py` and `tune_assignment.py` via
+speed + network detour). Effect is **strongly ALPHA-dependent** (re-measured 2026-06-27 at the tuned
+sharp-kernel params): under a sharp tail an external zone's short intra-zonal times give a large
+`f(t_intra)` that dominates its denominator, so the self-term **cuts exported external→core flow ~51%
+overall**, concentrated in absolute terms on the **near/mid SDZs** (which carry essentially all
+core-bound flow); the far DEAs already contribute ~0 core-bound flow (coarse ⇒ distant ⇒ tiny
+`f(d→core)`) so they barely move in absolute terms. (An earlier "−0.8% overall, concentrated on the far
+DEAs" figure was measured at the old low-ALPHA params, where the heavy tail made the intra-zonal diagonal
+negligible — **do not cite it**.) Wired into `build_assignment.py` and `tune_assignment.py` via
 `model.load_self_terms`; absent file ⇒ no self-term (exact prior behaviour). **Re-tune required** to realize
 the benefit — at the pre-self-term params the removed flow makes the fixed-param χ²/N worse; the tuner
 absorbed the bias (likely into the `ALPHA` tail), so re-running `tune_assignment.py` is what converts the
