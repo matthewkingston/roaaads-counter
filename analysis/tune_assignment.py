@@ -47,7 +47,8 @@ sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
                    constrained_od_flows, scatter_od_to_links, load_self_terms,
-                   print_chi2_table, assert_paths_cache_fresh)
+                   print_chi2_table, assert_paths_cache_fresh,
+                   format_slot_time, nice_official)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -233,8 +234,12 @@ if os.path.exists(CONS_GRAPH):
 
 
 def _link_label(u, v):
-    name = link_name.get((u, v), "")
-    return f"{u}→{v}  {name}" if name else f"{u}→{v}"
+    """Human-readable street name for a directed link ('' if unnamed).
+
+    Used as the model.compute_chi2 label_fn and to populate the report Label column;
+    the precise u→v reference now lives in the table's separate Link column.
+    """
+    return link_name.get((u, v), "")
 
 # ── Load tuner config ─────────────────────────────────────────────────────────
 
@@ -367,6 +372,7 @@ obs_slot_keys = []   # (day_type, hour) per obs
 obs_weights   = []   # 1/sigma² (official) or 1/n_eff (walking)
 obs_rhs       = []   # target value in count space
 obs_Th_lst    = []   # T_s / 3600
+obs_meta      = []   # {"label": display name, "link": precise u→v / node ref} per obs
 
 # Official hourly obs from ODS-derived JSON (replace single AADT constraints)
 n_official_hourly = 0
@@ -376,12 +382,14 @@ if os.path.exists(OFFICIAL_HOURLY):
     for _site_id, _site in _oh.items():
         _node  = _site["node"]
         _links = [tuple(lnk) for lnk in _site["links"]] if _site["links"] else None
+        _site_label, _site_link = nice_official(_site)
         for _obs in _site["observations"]:
             _ts    = tuple(_obs["time_slot"])
             _sk    = (_ts[0], _ts[1])   # time_slot already encodes (day_type, hour)
             _count = float(_obs["count"])
             _sigma = float(_obs["sigma"])
             observations.append(("official_hourly", _node, _links, _count, _sigma, 3600.0))
+            obs_meta.append({"label": _site_label, "link": _site_link})
             obs_slot_keys.append(_sk if _sk in slot_prior else None)
             obs_weights.append(1.0 / (_sigma ** 2))
             obs_rhs.append(_count)
@@ -405,6 +413,8 @@ if os.path.exists(LINK_AADT):
             _aadt = float(_sess["aadt"])
             _aadt_unc = float(_sess["aadt_uncertainty"])
             observations.append(("walking", (_u, _v), None, _aadt, _aadt_unc, _dur))
+            obs_meta.append({"label": link_name.get((_u, _v), "") or "(unnamed)",
+                             "link":  f"{_u}→{_v}"})
             if _ts is not None:
                 _sk = (_DOW_TO_TYPE[_ts[0]], _ts[1])
                 obs_slot_keys.append(_sk if _sk in slot_prior else None)
@@ -1072,13 +1082,12 @@ for sk in sorted(slot_fracs_res):
 # ── Goodness-of-fit table (sorted by |z|) ────────────────────────────────────
 
 fit_rows = []
-for i_obs, (kind, target, links, _, _, _) in enumerate(observations):
-    if kind == "official_hourly":
-        sk  = obs_slot_keys[i_obs]
-        lbl = f"{target} h{sk[1]:02d}{'WD' if sk[0]==0 else ('Sa' if sk[0]==1 else 'Su')}"
-    else:
-        lbl = _link_label(target[0], target[1])
-    fit_rows.append((kind, lbl, obs_eff[i_obs], sig_eff[i_obs], mod_eff[i_obs], resid[i_obs]))
+for i_obs in range(len(observations)):
+    sk       = obs_slot_keys[i_obs]
+    time_str = format_slot_time(*sk) if sk is not None else ""
+    meta     = obs_meta[i_obs]
+    fit_rows.append((meta["label"], time_str, obs_eff[i_obs], sig_eff[i_obs],
+                     mod_eff[i_obs], resid[i_obs], meta["link"]))
 
 fit_rows.sort(key=lambda r: abs(r[5]), reverse=True)
 print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
@@ -1216,10 +1225,10 @@ history_entry = {
     "observations": [
         {
             "kind":     observations[i_obs][0],
-            "label":    (f"{observations[i_obs][1]} h{obs_slot_keys[i_obs][1]:02d}"
-                         if observations[i_obs][0] == "official_hourly"
-                         else _link_label(observations[i_obs][1][0],
-                                          observations[i_obs][1][1])),
+            "label":    obs_meta[i_obs]["label"],
+            "time":     (format_slot_time(*obs_slot_keys[i_obs])
+                         if obs_slot_keys[i_obs] is not None else None),
+            "link":     obs_meta[i_obs]["link"],
             "observed": round(float(obs_eff[i_obs]), 1),
             "sigma":    round(float(sig_eff[i_obs]), 1),
             "model":    round(float(mod_eff[i_obs]), 1),

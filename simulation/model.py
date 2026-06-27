@@ -52,6 +52,40 @@ INTRA_TIMES     = "data/external_intra_times.json"
 
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 
+# ── Report-table display helpers ────────────────────────────────────────────────
+# Shared by print_chi2_table (model.py), the tuner's live fit table + history obs
+# dicts (tune_assignment.py), and report_tune.py, so the per-observation
+# disagreement table reads the same everywhere.
+
+DT_TIME_NAMES = {0: "Week", 1: "Sat", 2: "Sun"}
+
+
+def format_slot_time(day_type, hour):
+    """(day_type, hour) → 'Week 1400' / 'Sat 0100' / 'Sun 1900'.  '' if either is None."""
+    if day_type is None or hour is None:
+        return ""
+    return f"{DT_TIME_NAMES.get(day_type, '?')} {int(hour):02d}00"
+
+
+def nice_official(site):
+    """
+    From an official_hourly.json / COUNT_SITES site dict, return (label, link):
+      label — road name annotated as a count site, e.g. 'A21 Bangor Road (count site)'
+              (the leading 'site NNN, ' prefix is stripped).
+      link  — precise reference: 'u↔v' from site['links'][0] if present, else the node id.
+    """
+    raw = site.get("label", "") or ""
+    # "site 507, A21 Bangor Road" → "A21 Bangor Road"
+    name = raw.split(", ", 1)[1] if raw.startswith("site ") and ", " in raw else raw
+    label = f"{name} (count site)" if name else "(count site)"
+    links = site.get("links")
+    if links:
+        u, v = links[0]
+        link = f"{u}↔{v}"
+    else:
+        link = str(site.get("node"))
+    return label, link
+
 # ── Paths-cache freshness guard ─────────────────────────────────────────────────
 # build_paths.py stamps a signature of its inputs (routing graph, external links,
 # HIGHWAY_COST_FACTOR) into the .npz. tune_assignment.py and build_assignment.py
@@ -472,7 +506,7 @@ def compute_chi2(link_flow_dict, label_fn=None,
       N_eff = N − N_slots.
 
     Returns (rows, chi2, n_obs, n_eff).
-      rows: list of (kind, label, obs, sig, mod, z) sorted by |z| descending.
+      rows: list of (label, time_str, obs, sig, mod, z, link) sorted by |z| descending.
     """
     if link_flow_school_dict is not None and link_flow_biz_dict is not None:
         return _compute_chi2_3c(link_flow_dict, link_flow_biz_dict, link_flow_school_dict,
@@ -511,6 +545,7 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
             node  = site["node"]
             links = [tuple(lnk) for lnk in site["links"]] if site["links"] else None
             m_r, m_b = _site_flow_2c(flow_res_dict, flow_biz_dict, node, links)
+            lbl, link = nice_official(site)
             for obs in site["observations"]:
                 dt, h    = obs["time_slot"]
                 sk       = (dt, h)
@@ -520,8 +555,7 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 pred     = m_r * f_r + m_b * f_b   # T=3600 → T/3600=1
                 z        = (pred - count) / sigma if sigma > 0 else 0.0
                 chi2    += z ** 2
-                lbl      = f"{site['label']} h{h:02d}"
-                rows.append(("official", lbl, count, sigma, pred, z))
+                rows.append((lbl, format_slot_time(dt, h), count, sigma, pred, z, link))
                 n_official += 1
 
     # ── Walking obs (count-space Poisson) ─────────────────────────────────────
@@ -533,7 +567,8 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
             u, v = map(int, key.split(","))
             if (u, v) in excl:
                 continue
-            lbl  = label_fn(u, v) if label_fn else f"{u}→{v}"
+            lbl  = (label_fn(u, v) if label_fn else "") or "(unnamed)"
+            link = f"{u}→{v}"
             m_r  = flow_res_dict.get((u, v), 0.0)
             m_b  = flow_biz_dict.get((u, v), 0.0)
             for sess in entry.get("observations", []):
@@ -563,7 +598,7 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                     mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b)
                 else:
                     obs_disp = sig_disp = mod_disp = 0.0
-                rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))
+                rows.append((lbl, format_slot_time(*sk), obs_disp, sig_disp, mod_disp, z, link))
 
     n_obs   = len(rows)
     # N_eff: 2 df per slot (f_res and f_biz each).
@@ -599,6 +634,7 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
             links = [tuple(lnk) for lnk in site["links"]] if site["links"] else None
             m_r, m_b, m_s = _site_flow_3c(flow_res_dict, flow_biz_dict,
                                            flow_school_dict, node, links)
+            lbl, link = nice_official(site)
             for obs in site["observations"]:
                 dt, h    = obs["time_slot"]
                 sk       = (dt, h)
@@ -608,8 +644,7 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
                 pred     = m_r * f_r + m_b * f_b + m_s * f_s
                 z        = (pred - count) / sigma if sigma > 0 else 0.0
                 chi2    += z ** 2
-                lbl      = f"{site['label']} h{h:02d}"
-                rows.append(("official", lbl, count, sigma, pred, z))
+                rows.append((lbl, format_slot_time(dt, h), count, sigma, pred, z, link))
                 n_official += 1
 
     n_slots_seen = set()
@@ -620,7 +655,8 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
             u, v = map(int, key.split(","))
             if (u, v) in excl:
                 continue
-            lbl  = label_fn(u, v) if label_fn else f"{u}→{v}"
+            lbl  = (label_fn(u, v) if label_fn else "") or "(unnamed)"
+            link = f"{u}→{v}"
             m_r  = flow_res_dict.get((u, v), 0.0)
             m_b  = flow_biz_dict.get((u, v), 0.0)
             m_s  = flow_school_dict.get((u, v), 0.0)
@@ -650,7 +686,7 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
                     mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b + m_s)
                 else:
                     obs_disp = sig_disp = mod_disp = 0.0
-                rows.append(("walking", lbl, obs_disp, sig_disp, mod_disp, z))
+                rows.append((lbl, format_slot_time(*sk), obs_disp, sig_disp, mod_disp, z, link))
 
     n_obs = len(rows)
     if n_official:
@@ -667,10 +703,11 @@ def _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links
     obs_data = []
 
     for s in COUNT_SITES:
-        obs_data.append(("official", s["label"],
+        lbl, link = nice_official(s)
+        obs_data.append(("official", lbl,
                          site_flow(link_flow_dict, s),
                          float(s["observed"]), 0.10 * s["observed"],
-                         None, None))
+                         None, None, link))
 
     if link_aadt_file and os.path.exists(link_aadt_file):
         with open(link_aadt_file) as f:
@@ -680,7 +717,8 @@ def _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links
             u, v = map(int, key.split(","))
             if (u, v) in excl:
                 continue
-            lbl = label_fn(u, v) if label_fn else f"{u}→{v}"
+            lbl  = (label_fn(u, v) if label_fn else "") or "(unnamed)"
+            link = f"{u}→{v}"
             mod = link_flow_dict.get((u, v), 0.0)
             for sess in entry.get("observations", []):
                 ts  = sess.get("time_slot")
@@ -688,7 +726,7 @@ def _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links
                 obs_data.append(("walking", lbl, mod,
                                  float(sess["aadt"]), float(sess["aadt_uncertainty"]),
                                  tuple(ts) if ts is not None else None,
-                                 float(frs) if frs is not None else None))
+                                 float(frs) if frs is not None else None, link))
 
     n_obs = len(obs_data)
 
@@ -712,7 +750,11 @@ def _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links
         uf_r  = sum(sigma_f[i] * r[i] / sigma_c_sq[i] for i in idxs)
         chi2 += float(sum(r[i] ** 2 / sigma_c_sq[i] for i in idxs) - uf_r ** 2 / denom)
 
-    rows = [(d[0], d[1], d[3], d[4], d[2], float(r[i] / d[4]))
+    def _time(d):
+        ts = d[5]
+        return format_slot_time(_DOW_TO_TYPE[ts[0]], ts[1]) if ts is not None else ""
+
+    rows = [(d[1], _time(d), d[3], d[4], d[2], float(r[i] / d[4]), d[7])
             for i, d in enumerate(obs_data)]
     rows.sort(key=lambda row: abs(row[5]), reverse=True)
     return rows, chi2, n_obs, n_eff
@@ -722,12 +764,13 @@ def print_chi2_table(rows, chi2, n_obs, n_eff=None, header="Goodness of fit"):
     """Print the standard chi²/N table. Returns chi²/N."""
     chi2_per_n = chi2 / n_obs if n_obs else 0.0
     n_eff_str  = f"  χ²/N_eff={chi2 / n_eff:.4f}  N_eff={n_eff}" if n_eff else ""
-    LABEL_W = 52
+    LABEL_W = 30
     print(f"\n{header}  χ²={chi2:.2f}  n={n_obs}  χ²/N={chi2_per_n:.4f}{n_eff_str}")
-    print(f"  {'':1s}  {'Src':<8}  {'Label':<{LABEL_W}}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}")
-    for kind, lbl, obs, sig, mod, z in rows:
+    print(f"  {'':1s}  {'Label':<{LABEL_W}}  {'Time':<9}  {'Obs':>8}  {'σ':>7}  {'Model':>8}  {'z':>6}  {'Link'}")
+    for label, time_str, obs, sig, mod, z, link in rows:
         marker = "*" if abs(z) > 2 else " "
-        print(f"  {marker} {kind:<8}  {lbl:<{LABEL_W}}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}")
+        lbl = label if len(label) <= LABEL_W else label[:LABEL_W - 1] + "…"
+        print(f"  {marker} {lbl:<{LABEL_W}}  {time_str:<9}  {obs:>8,.0f}  {sig:>7,.0f}  {mod:>8,.0f}  {z:>+.2f}  {link}")
     abs_z  = [abs(row[5]) for row in rows]
     n_out2 = sum(1 for a in abs_z if a > 2)
     n_out3 = sum(1 for a in abs_z if a > 3)

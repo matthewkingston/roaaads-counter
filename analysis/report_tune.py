@@ -47,6 +47,16 @@ def _fmt_pct(val):
     return f"{val:+.1f}%"
 
 
+def _obs_fields(o):
+    """(label, time, link) for an observation dict.
+
+    New history entries carry explicit `label`/`time`/`link`. Older entries predate
+    these fields — they only have a combined `label`; degrade gracefully (Time/Link blank,
+    Label = the stored label) until a fresh tune regenerates history.
+    """
+    return o.get("label", "?"), o.get("time", "") or "", o.get("link", "") or ""
+
+
 # ── Section: SUMMARY ──────────────────────────────────────────────────────────
 
 def _section_summary(e):
@@ -73,10 +83,10 @@ def _section_summary(e):
 def _section_by_measurement(e):
     obs = e["observations"]
     lines = [_rule("CHI² TABLE: BY MEASUREMENT"), ""]
-    LW = 54
+    LW = 30
     header = (
-        f"  {'':1s}  {'Kind':<8}  {'Label':<{LW}}  "
-        f"{'Obs':>9}  {'σ':>8}  {'Model':>9}  {'z':>7}"
+        f"  {'':1s}  {'Label':<{LW}}  {'Time':<9}  "
+        f"{'Obs':>9}  {'σ':>8}  {'Model':>9}  {'z':>7}  {'Link'}"
     )
     lines.append(header)
     lines.append("  " + "─" * (len(header) - 2))
@@ -84,13 +94,13 @@ def _section_by_measurement(e):
     rows = sorted(obs, key=lambda o: abs(o["z"]), reverse=True)
     for o in rows:
         marker = "*" if abs(o["z"]) > 2 else " "
-        lbl = o.get("label", "?")
+        lbl, time_str, link = _obs_fields(o)
         if len(lbl) > LW:
             lbl = lbl[:LW - 1] + "…"
         lines.append(
-            f"  {marker}  {o['kind']:<8}  {lbl:<{LW}}  "
+            f"  {marker}  {lbl:<{LW}}  {time_str:<9}  "
             f"{o['observed']:>9,.0f}  {o['sigma']:>8,.0f}  "
-            f"{o['model']:>9,.0f}  {o['z']:>+7.2f}"
+            f"{o['model']:>9,.0f}  {o['z']:>+7.2f}  {link}"
         )
 
     chi2 = e["chi2"]
@@ -114,51 +124,46 @@ def _section_by_measurement(e):
 def _section_by_link(e):
     obs = e["observations"]
     lines = [_rule("CHI² TABLE: BY LINK"), ""]
-    LW = 54
+    LW = 30
 
-    # Group observations by site/link.
-    # Walking obs: group by label (unique per directed link, same across sessions).
-    # Official hourly obs: group by site (strip the " hXX" hour suffix from label).
+    # Group observations by precise link reference.
+    # New entries carry an explicit `link` (walking u→v; official node/link pair, shared
+    # across a site's hourly obs). Old entries predate `link` — fall back to grouping by
+    # label (stripping the legacy " hXX" hour suffix off official labels).
     link_groups = {}
     for o in obs:
-        kind = o["kind"]
-        lbl  = o.get("label", "?")
-        if kind in ("official", "official_hourly"):
-            # "731 h08" → "731";  "site 507, A21 ... h08" → "site 507, A21 ..."
-            site_key = lbl.rsplit(" h", 1)[0] if " h" in lbl else lbl
-            key = ("official_hourly", site_key)
-        else:
-            key = ("walking", lbl)
+        lbl, _time, link = _obs_fields(o)
+        key = link if link else (lbl.rsplit(" h", 1)[0] if " h" in lbl else lbl)
         link_groups.setdefault(key, []).append(o)
 
-    # Build rows: (χ²/N, max|z|, z_min, z_max, N_sess, lbl, kind)
+    # Build rows: (χ²/N, max|z|, z_min, z_max, N_sess, lbl, link)
     rows = []
-    for (kind, grp_key), group in link_groups.items():
+    for grp_key, group in link_groups.items():
         zvals   = [o["z"] for o in group]
         n       = len(zvals)
         mean_z2 = sum(z * z for z in zvals) / n
         z_min   = min(zvals)
         z_max   = max(zvals)
         max_az  = max(abs(z) for z in zvals)
-        lbl     = group[0].get("label", str(grp_key))
-        rows.append((mean_z2, max_az, z_min, z_max, n, lbl, kind))
+        lbl, _t, link = _obs_fields(group[0])
+        rows.append((mean_z2, max_az, z_min, z_max, n, lbl, link or grp_key))
 
     rows.sort(key=lambda r: r[0], reverse=True)
 
     header = (
-        f"  {'':1s}  {'Kind':<8}  {'Label':<{LW}}  "
-        f"{'N':>3}  {'χ²/N':>7}  {'z_min':>7}  {'z_max':>7}  {'|z|_max':>7}"
+        f"  {'':1s}  {'Label':<{LW}}  "
+        f"{'N':>3}  {'χ²/N':>7}  {'z_min':>7}  {'z_max':>7}  {'|z|_max':>7}  {'Link'}"
     )
     lines.append(header)
     lines.append("  " + "─" * (len(header) - 2))
 
-    for (mean_z2, max_az, z_min, z_max, n_sess, lbl, kind) in rows:
+    for (mean_z2, max_az, z_min, z_max, n_sess, lbl, link) in rows:
         marker = "*" if max_az > 2 else " "
         if len(lbl) > LW:
             lbl = lbl[:LW - 1] + "…"
         lines.append(
-            f"  {marker}  {kind:<8}  {lbl:<{LW}}  "
-            f"{n_sess:>3}  {mean_z2:>7.2f}  {z_min:>+7.2f}  {z_max:>+7.2f}  {max_az:>7.2f}"
+            f"  {marker}  {lbl:<{LW}}  "
+            f"{n_sess:>3}  {mean_z2:>7.2f}  {z_min:>+7.2f}  {z_max:>+7.2f}  {max_az:>7.2f}  {link}"
         )
 
     lines.append("")
