@@ -73,12 +73,12 @@ than restart.
 | `simulation/build_osrm_profile.py` | Generates `car_roaaads.lua` — the road-class-biased OSRM car profile. Pulls the default `car.lua` from the `osrm/osrm-backend` Docker image, injects a block after the `forward_rate` assignment that divides `forward_speed`/`forward_rate` by `HIGHWAY_COST_FACTOR` (matching internal Dijkstra biasing). Re-run whenever `HIGHWAY_COST_FACTOR` changes, then re-preprocess OSRM (`osrm-extract -p car_roaaads.lua`, `osrm-partition`, `osrm-customize`). Output: `/home/matthew/Documents/CodingFun/osrm/car_roaaads.lua`. |
 | `simulation/reduce_deadends.py` | **NEW.** Collapses "residential dead-end" regions in the consolidated routing graph to shrink node count (speeds up `build_paths.py`/tuning, enables a larger core area). A region R (entrance E ∉ R) qualifies iff: (1) R connects to the rest of the network through exactly one cut vertex E; (2) R contains no boundary node and no school-demand node (both *protected* — never absorbed — which enforces the no-boundary and zero-school rules structurally); (3) max directed journey time E→n over n∈R < `T_MAX` (default 60 routing-cost seconds); (4) total business demand < `BIZ_CAP` (default 100; residential pop unbounded); (5) `|R| ≥ 2` (single-node spurs skipped — 1→1 saves nothing). **Algorithm:** every valid region is a protected-free connected component of H−a (H = undirected simple projection) for some articulation point a, so it enumerates all such (entrance, region) candidates, filters by constraints 2–5 + directed reachability both ways, and selects the *maximal feasible* regions (laminar family ⇒ disjoint; naturally descends into an oversized branch to find the largest collapsible sub-pockets — catches cyclic closes that leaf-pruning would miss). Each region → one super-node S (=min id, summed pop/biz/school, pop-weighted UTM centroid) joined to E by directed links E→S, S→E whose travel times are population-weighted means of the intra-region directed times. Synthetic edges use `highway="deadend_collapsed"` (factor 1.0 in `HIGHWAY_COST_FACTOR`) with `maxspeed`+`length` set so osmnx's `add_edge_speeds`/`add_edge_travel_times` (re-run by `build_paths.py`) reproduce the target `travel_time`. **Run after `build_demographics.py` (needs pop/biz/school + boundary) and before `build_paths.py`.** Outputs (gitignored): `newtownards_reduced.graphml`, `node_weights_reduced.json`, `deadend_map.json` (provenance: super-node→absorbed nodes + times), `deadend_broken_obs.json` (observed/count links whose endpoints were eaten — **manual review before adoption**; observed-link endpoints are deliberately *not* protected). Params: `--t-max`, `--biz-cap`. Current run: 1002→727 nodes (275 absorbed, 64 regions); build_paths.py runs ~5.3 s/probit-pass on the reduced graph with 0 fallbacks. **Wired into the pipeline:** `build_paths.py` (`CONS_GRAPH`), `build_assignment.py` (`CONS_GRAPH`), `tune_assignment.py` (`CONS_GRAPH`) read `newtownards_reduced.graphml`, and `model.WEIGHTS_FILE`/`ROUTING_GRAPH` point at the reduced files — so this step must run after `build_demographics.py`. The 6 absorbed walking observations (Westmount Park, Old Belfast Road) are discarded via `EXCLUDE_LINKS` in `model.py`. **Map caveat:** `build_map.py` still draws the *full* consolidated graph, so flow on collapsed interior streets is not shown on the map (demand layers are unaffected; main-road flows and the fit are unaffected). Re-mapping collapsed regions via their super-nodes is a possible follow-up. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Gravity param regularization and temporal coupling priors. `gravity_lambda` + `gravity_ref` regularise P/ALPHA/BETA/W_BIZ/P_biz/ALPHA_biz; `gamma_coupling_scale` controls the per-slot aggregate coupling (γ = scale/std_f²); `phi_biz_prior`/`phi_biz_std` and `phi_school_prior`/`phi_school_std` set Gaussian priors on business and school flow fractions. `ext_biz_scale` (current value 1.702) scales external node business demand in `build_demographics.py` to compensate for the OSM car park area contribution that internal nodes receive but external census nodes don't (ratio of total business demand to total NISRA workplace pop across all internal nodes, including boundary). Recomputed 2026-06-22 after the core-polygon demographics fix widened internal coverage: total internal biz 22,517 / workplace 13,230 = 1.702. `ext_school_per_pop` (current value 0.159913) is the pupils-per-person ratio from the core area, applied to external nodes as `population × ext_school_per_pop` — a uniform approximation that lets the school self-term and school component activate for external zones. Computed by `simulation/compute_ext_school_scale.py` (core internal nodes: 33,143 pop, 5,300 pupils). **Required** — `build_demographics.py` fails loud if absent; re-run the script and update this value if core OSM school POIs change significantly. **Removed:** `cities` block (replaced by `census_zones.json`) and `through_route_pairs` whitelist (replaced by OSRM-derived `external_links.json`). `lambda` is retained but no longer used (external zone params are not tuned). |
+| `simulation/tuner_config.json` | **Tracked in git.** Gravity param regularization and temporal coupling priors. `gravity_lambda` + `gravity_ref` regularise P/ALPHA/BETA/W_BIZ/P_biz/ALPHA_biz; `phi_biz_prior`/`phi_biz_std` and `phi_school_prior`/`phi_school_std` set Gaussian priors on the business and school **scale shares** (`φ = K_c/ΣK`) inside `solve_scales` (degeneracy break). `gamma_coupling_scale` is **no longer used** (left in the file; the per-slot aggregate coupling went away when `f` was pinned at NTS — 2026-06-27). `ext_biz_scale` (current value 1.702) scales external node business demand in `build_demographics.py` to compensate for the OSM car park area contribution that internal nodes receive but external census nodes don't (ratio of total business demand to total NISRA workplace pop across all internal nodes, including boundary). Recomputed 2026-06-22 after the core-polygon demographics fix widened internal coverage: total internal biz 22,517 / workplace 13,230 = 1.702. `ext_school_per_pop` (current value 0.159913) is the pupils-per-person ratio from the core area, applied to external nodes as `population × ext_school_per_pop` — a uniform approximation that lets the school self-term and school component activate for external zones. Computed by `simulation/compute_ext_school_scale.py` (core internal nodes: 33,143 pop, 5,300 pupils). **Required** — `build_demographics.py` fails loud if absent; re-run the script and update this value if core OSM school POIs change significantly. **Removed:** `cities` block (replaced by `census_zones.json`) and `through_route_pairs` whitelist (replaced by OSRM-derived `external_links.json`). `lambda` is retained but no longer used (external zone params are not tuned). |
 | `analysis/parse_official_hourly.py` | Parses sheets 444/507/508 from the 2023 NI ODS traffic count file → `data/official_hourly.json`. Run once (or when the ODS file changes). Weekday sigma = max(between-day std, 10% relative, √count); weekend sigma = max(√count, 15% relative). The √count floor prevents unrealistically tight sigmas at overnight low-count hours. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. Loads manual link overrides from `data/manual_link_overrides.json`. After every new link assignment, validates each non-null count direction against the directed graph; raises `ValueError` if the edge doesn't exist. |
 | `analysis/manual_assign_link.py` | CLI tool to manually assign a session to a specific directed link, bypassing GPS snap. Usage: `python3 analysis/manual_assign_link.py <session_id> <from_node> <to_node>`. Validates both nodes exist and checks count-edge consistency. Writes to `data/manual_link_overrides.json` and patches `counts_processed.json` directly. After correcting an assignment, re-run `aggregate_counts.py` then `tune_assignment.py`. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s`. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component, production-constrained model:** gravity flows split into residential (`flow_res`), business-adjacent (`flow_biz`), and school (`flow_school`) components, each singly (production) constrained. Tunes **8 gravity params** (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school) — `W_SCHOOL` removed (redundant with K_sch under the constraint). External zone values are fixed from census data and are not tuned. **Alternating minimisation (5 blocks) SURVIVES the constraint** (`D_i` has no `K`, so flow stays linear in K and the f's): K-step (1D); phi_biz-step; phi_sch-step; f_res/f_biz/f_school steps (per-slot analytical) + aggregate coupling γ per slot. **The alternation is non-monotonic (single Poisson Newton steps) and can collapse K to the 1e-30 floor, so `calibrate_Ks_and_fracs` returns the BEST-SEEN (K,φ,f) iterate by the full regularized objective, max_iter 40 (`--fast` 20) — see "Five-block analytical calibration" (fix 2026-06-25, commit af90de7).** `run_assignment` now calls `model.constrained_od_flows` (per-pair flows + per-origin denominator bincounts) and scatters via the probit routing incidence — the old distance-bin-matrix path is gone. **Performance:** ~2.5–3.5 s/eval (run_assignment-dominated) ⇒ ~20–30 min per run. `CALIBRATE_PROBE=1` is an env-gated diagnostic that reports the post-calibrate residual global scale λ. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Three-component, production-constrained model:** gravity flows split into residential (`flow_res`), business-adjacent (`flow_biz`), and school (`flow_school`) components, each singly (production) constrained. Tunes **8 gravity params** (W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school) — `W_SCHOOL` removed (redundant with K_sch under the constraint). External zone values are fixed from census data and are not tuned. **Inner calibration = direct-K convex scale solve (`solve_scales`, 2026-06-27):** the temporal fractions `f_res/f_biz/f_school` are **pinned at the NTS profile** (never tuned), so with `f` fixed each prediction is linear in `(K_res, K_biz, K_sch)` and the inner objective (Gaussian WLS + Poisson identity-link deviance + scale-share prior) is **convex**, solved by a damped-Newton + line-search step — **monotone, no K-collapse, no best-iterate hack** (this replaced the old non-monotonic 5-block alternating minimisation over `(K, φ, f)`). The `--f-frozen` flag is retired (now the default; deprecated no-op). `run_assignment` calls `model.constrained_od_flows` and scatters via the probit routing incidence. **Observed-link scatter restriction (tuner-only):** the objective reads modelled flow on only the ~230 observed links, so `run_assignment` scatters just the incidence entries landing on those links (≈32% of the ~62M), precomputed once into a compact observed-link space — bit-identical results, ~3× faster per eval (`build_assignment.py` keeps the full scatter for the map). **Performance:** ~1.3 s/eval (`--fast`, run_assignment-dominated) ⇒ ~7–10 min per run. `CALIBRATE_PROBE=1` is an env-gated diagnostic that reports the post-calibrate residual global scale λ. |
 | `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` and `reports/slot_pulls_{id}.png`. History `slot_prior` entries carry 5 values: `[mean_f_agg, std_f, mean_f_res, mean_f_biz, mean_f_school]`. Old entries with 4 values handled gracefully. Note: report still attempts to print external city delta table — will be a no-op for new-format runs. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. New-format param dicts no longer contain external zone keys. |
 | `simulation/reset_gravity_params.py` | Reset only the gravity params (K, W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz) in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`. |
@@ -257,40 +257,37 @@ Each component has its own temporal profile and scale (K_res, K_biz, K_sch).
 Predicted count for observation i in slot s:
 `pred_i = K_res·flow_res·(T/3600)·f_res[s] + K_biz·flow_biz·(T/3600)·f_biz[s] + K_sch·flow_school·(T/3600)·f_school[s]`
 
-### Five-block analytical calibration
-At each optimizer evaluation, (K, phi_biz, phi_sch, f_res, f_biz, f_school) are calibrated via
-alternating minimisation (max_iter 40; `--fast` 20).
-K_res = K·(1−phi_biz−phi_sch), K_biz = K·phi_biz, K_sch = K·phi_sch.
+### Direct-K convex scale solve (replaced the 5-block alternation, 2026-06-27)
+At each optimizer evaluation the three component scales **(K_res, K_biz, K_sch)** are calibrated
+**directly** by `solve_scales` (no `(K, φ)` reparam, no `f`-steps, no alternation). The temporal
+fractions `f_res/f_biz/f_school` are **pinned at the NTS profile** (`hourly_fractions.csv`
+`mean_fraction_*`) and never tuned — so every observation prediction is **linear in the scales**:
+`pred_i = K_res·a_i + K_biz·b_i + K_sch·d_i` with `a_i = m_res_i·Th_i·f_res[s_i]` constant (b, d
+analogously). The inner objective — Gaussian WLS over the 216 official obs + Poisson **identity-link**
+deviance `2·Σ(n·log(n/pred)+pred−n)` over the 674 walking obs + a scale-share prior — is therefore
+**convex over K ≥ 0**, and is solved by a **damped (Levenberg) Newton step with a backtracking line
+search on the full objective**: monotone by construction, so there is **no K-collapse and no
+best-iterate bookkeeping** (the old 5-block alternation's load-bearing failure mode is gone).
+`CALIBRATE_PROBE=1` reports the residual global scale λ at the start params (≈1 ⇒ K at its optimum;
+the convex solver gives λ≈1.000).
 
-**Non-monotonic — returns the best-seen iterate (fix 2026-06-25, commit af90de7).** The K-step's
-Poisson (walking) Newton correction and the per-slot f-steps' Poisson corrections are *single*
-Newton steps that do **not** guarantee descent, so the alternation is non-monotonic and under the
-production-constrained flow magnitudes can **collapse K toward the 1e-30 floor** at some iteration
-counts. `calibrate_Ks_and_fracs` therefore evaluates the full regularized objective
-(Gaussian + Poisson deviance + f-prior/coupling penalty) each iteration and **returns the
-lowest-objective (K, φ, f) state seen**, not the last iterate; it runs to `max_iter` with no early
-break (the objective oscillates, so a premature stop can miss the good basin). Before this fix the
-prior run stopped at a partially-collapsed point, leaving every modelled flow ~6× too small (a
-uniform global scale λ≈6.2 halved χ²). `CALIBRATE_PROBE=1` runs calibrate at the start params for
-several `max_iter` values and reports the residual global scale λ (≈1 ⇒ K at its optimum).
-**TODO (cleaner follow-up):** harden the Poisson Newton steps (line-search / clamp) so the
-alternation is monotone and best-iterate tracking becomes belt-and-braces rather than load-bearing.
+**Scale-share prior (degeneracy break).** `φ_biz = K_biz/ΣK`, `φ_sch = K_sch/ΣK` are computed as
+derived ratios and penalised `φ_biz ~ N(phi_biz_prior, phi_biz_std²)`,
+`φ_sch ~ N(phi_school_prior, phi_school_std²)` (from `tuner_config.json`). This breaks the
+`K_biz × W_BIZ` degeneracy (stops Powell driving `K_biz→0` via `W_BIZ→∞`). It regularises the inner
+K-solve only and is **not** part of the reported χ² (exactly as the old φ-prior was not). Walking
+obs mostly fall in slots with `f_school≈0`, so `K_sch` is pinned almost entirely by the official
+school-peak hours — the joint Poisson+Gaussian solve does not inflate the school share.
 
-**K-step:** 1D solve, using combined coefficient `(1−phi_b−phi_s)·c_r·f_r + phi_b·c_b·f_b + phi_s·c_s·f_s`.
+**Why this is sound.** With `f` fixed the K-problem is genuinely convex (Poisson identity-link
+deviance is convex in the mean), so a single small Newton solve reaches the global inner optimum the
+old alternation only approximated — generally improving the fit. Freezing `f` at NTS is justified by
+the NTS-vs-official hourly shape match (Pearson r > 0.97 at all three sites; only a smooth ~4–6%
+overnight/midday bias). The `--f-frozen` flag is retired (now the default; accepted as a deprecated
+no-op). `gamma_coupling_scale` and the per-slot f-prior std terms are no longer used.
 
-**phi_biz-step / phi_sch-step:** sequential 1D solves with Gaussian priors.
-phi_biz ~ N(phi_biz_prior, phi_biz_std²); phi_sch ~ N(phi_school_prior, phi_school_std²) from `tuner_config.json`.
-These priors prevent degeneracy K_biz→0 or K_sch→0. Applied sequentially (fix one, solve for the other).
-
-**f_res / f_biz / f_school steps:** per-slot analytical update, anchored by NTS-derived priors from
-`hourly_fractions.csv` columns `mean_fraction_res` / `mean_fraction_biz` / `mean_fraction_school`.
-School profile: sharp weekday double-peak (h08/h15), near-zero weekends.
-
-**Aggregate coupling:** each slot carries γ·(f_res + f_biz + f_school − f_agg)² where
-γ = `gamma_coupling_scale` / std_f_agg². Updated in all three f-steps.
-
-Slot key: (day_type, hour), day_type = 0 (weekday), 1 (Saturday), 2 (Sunday).
-Prior std from `hourly_fractions.csv` via law of total variance.
+Slot key: (day_type, hour), day_type = 0 (weekday), 1 (Saturday), 2 (Sunday). The pinned NTS school
+profile is a sharp weekday double-peak (h08/h15), near-zero weekends.
 
 ### Observations
 All 890 observations are in count space with per-obs weights:
@@ -299,9 +296,13 @@ All 890 observations are in count space with per-obs weights:
 - **Walking** (343 obs): from `data/link_aadt.json`; Poisson error; weight = 1/n_eff.
 
 ### Goodness of fit
-`χ²/N` (mean squared z-score; N=890 obs, N_eff = N − 3·N_slots = 890 − 216 = 674).
-Three df lost per slot (one each for f_s_res, f_s_biz, f_s_school). With coupling enabled,
-chi²/N includes coupling penalty terms; pure data-fit chi²/N is lower.
+`χ²/N` (mean squared z-score; N=890 obs). **N_eff = N = 890** since the temporal fractions are
+pinned at NTS and not fitted — no per-slot temporal df are consumed (changed 2026-06-27; the few
+global df — gravity shape params + 3 scales — are not subtracted, per the prior convention that only
+counted per-slot temporal df). This **supersedes** the old `N_eff = N − 3·N_slots = 674`, which
+subtracted df for fractions the `--f-frozen` path never actually fit; the χ²/N **basis therefore
+changed** and is not comparable to pre-2026-06-27 runs. The tuner's χ²/N is now pure data-fit
+(Gaussian + Poisson deviance) — the f-prior/coupling penalty is identically zero with `f` pinned.
 
 `build_assignment.py` uses the two-component `compute_chi2()` when K_res/K_biz are present in tuned_params.json. This gives a **data-only** chi²/N (pure sum of squared z-scores) — it excludes the f-prior penalties `(f_r−mfr)²/std_f²` and the aggregate coupling penalty that the tuner includes in its chi²/N. Expect the build_assignment chi²/N to be somewhat lower than the tuner's; the two are directionally comparable but not numerically equal. The legacy Woodbury path is used only for old single-K param files.
 
@@ -376,6 +377,21 @@ into super-nodes — via `EXCLUDE_LINKS`. The live observation count is printed 
 | 2026-06-19 | full | 559 | 31 | **1.3146** | three-component full tune; phi_biz=25.6%, phi_sch=1.4%; school params at ref |
 
 **Note on comparability:** runs from 2026-06-17 onward use the two-component model with coupling penalty terms in chi²/N; not directly comparable to earlier single-component runs. From 2026-06-19 three-component model: N_eff = 559 − 3×72 = 343 (one extra df per slot for f_school). After 2026-06-23 data addition: N_eff = 890 − 3×72 = 674. **Runs from the big-world architecture are not directly comparable to earlier runs** — external zone representation has fundamentally changed (census-derived vs hand-crafted; many more external nodes; OSRM-based connectivity vs offscreen Euclidean leg).
+
+**Direct-K convex scale solve + f pinned at NTS (2026-06-27).** The inner calibration was replaced
+by `solve_scales` (direct `K_res/K_biz/K_sch`, convex damped-Newton; see "Direct-K convex scale
+solve") and `f` is now always pinned at the NTS profile. **N_eff convention changed to N = 890** (no
+per-slot temporal df are fitted), so χ²/N is **not comparable to pre-2026-06-27 runs**;
+`CALIBRATE_PROBE` opt_λ ≈ 1.000 (convex solver at its optimum; no K-collapse, monotone).
+Authoritative full re-tune (id da99e465): **χ²/N = 4.46** (vs ~6.74 on the prior big-world run, old
+basis), with `phi_school_std` tightened 0.08→0.04 and `gravity_lambda[ALPHA/ALPHA_biz/ALPHA_school]`
+0.5→2.0. **Open caveat — the data resists the regularization:** even from the ref start and with the
+tighter anchors, the spatial params return to extremes (ALPHA≈12.5, ALPHA_biz≈27, ALPHA_school≈582;
+P_school≈10 min) and the **school share sits at φ_sch≈0.226** (vs 0.10 prior) — school acts as an
+AM/PM-peak fitter and the kernel wants a sharp distance cutoff. λ=2.0 cannot overcome the likelihood
+gradient (raising it further just degrades χ² for cosmetic param values), so reining these in is a
+**model-structure question** (kernel tail shape / school component / school-peak count data), not a
+prior-strength one.
 
 Last pre-big-world best: chi²/N = **1.3146** (559 obs, N_eff=343; three-component with probit cache, run f09a003e).
 K_res=1.23e-04, K_biz=4.31e-05, K_sch=2.40e-06. phi_biz=25.6%, phi_sch=1.4%.

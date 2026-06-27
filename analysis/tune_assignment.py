@@ -61,26 +61,26 @@ OFFICIAL_HOURLY   = "data/official_hourly.json"
 
 note     = None
 fast     = False
-f_frozen = False
 argv  = sys.argv[1:]
 i = 0
 while i < len(argv):
     if argv[i] == "--fast":
         fast = True
     elif argv[i] == "--f-frozen":
-        f_frozen = True
+        # Deprecated no-op: temporal fractions are now ALWAYS pinned at the NTS
+        # profile (f is never tuned), so this flag is the default behaviour.
+        print("note: --f-frozen is deprecated and now the default "
+              "(temporal fractions are always pinned at the NTS profile); ignoring.")
     elif argv[i] == "--note" and i + 1 < len(argv):
         i += 1
         note = argv[i]
     i += 1
 
-# --f-frozen pins the per-slot temporal fractions at the NTS profile (f_res=
-# mean_fraction_res, etc.) — the f-steps are skipped — so every residual is purely
-# spatial (no temporal absorption of spatial misfit). K and phi still calibrate.
-# tuned_params.json and history ARE written (history carries an f_frozen marker/note).
-_FREEZE_F = f_frozen
-if _FREEZE_F:
-    print("--f-frozen: temporal fractions pinned at NTS profile (f-steps skipped)")
+# Temporal fractions f_res/f_biz/f_school are pinned at the NTS profile
+# (mean_fraction_*) and never tuned — every residual is purely spatial. The inner
+# calibration therefore solves only the three component scales (K_res, K_biz, K_sch)
+# directly via a convex Newton solve (see solve_scales); no φ reparam, no f-steps,
+# no alternation, no best-iterate bookkeeping.
 
 run_id = secrets.token_hex(4)
 
@@ -481,9 +481,14 @@ slot_list = list(slot_groups.items())
 n_slots   = len(slot_list)
 n_walking = n_obs - n_official_hourly
 n_slotted = sum(len(idxs) for _, idxs in slot_list)
-# df per slot: 2 (two-component) or 3 (three-component with school)
-_n_df_per_slot = 3 if _has_school else 2
-n_eff = n_obs - _n_df_per_slot * n_slots
+# Temporal fractions are pinned at the NTS profile (never fitted), so NO per-slot
+# temporal degrees of freedom are consumed — N_eff counts all observations. (The
+# few global df — gravity shape params + 3 scales — are not subtracted, consistent
+# with the prior convention that only ever counted per-slot temporal df.) This
+# corrects the old `n_obs − 3·n_slots`, which subtracted df for fractions the
+# --f-frozen path never actually fit; the χ²/N basis therefore changes and is NOT
+# comparable to pre-2026-06-27 history.
+n_eff = n_obs
 print(f"  {n_obs} observations ({n_official_hourly} official hourly, {n_walking} walking"
       f" in {n_slots} time slot(s))  N_eff={n_eff}")
 print("  Objective: Gaussian chi² for official hourly; Poisson deviance for walking obs."
@@ -492,7 +497,7 @@ for sk, idxs in sorted(slot_list):
     if len(idxs) > 3:
         print(f"  Slot {sk}: {len(idxs)} observations")
 
-# Per-slot data for calibrate_Ks_and_fracs and chi²
+# Per-slot data: builds the constant NTS f vectors (below) and the chi² weight arrays
 # Each entry: (slot_key, ia, weights, rhs, Ths,
 #              mean_f_res, inv_var_res, mean_f_biz, inv_var_biz,
 #              mean_f_school, inv_var_school, mean_f_agg, gamma)
@@ -533,7 +538,7 @@ _walk_slotted[n_official_hourly:] = _slot_w_arr[n_official_hourly:] > 0
 _gauss_w_arr = _slot_w_arr.copy()
 _gauss_w_arr[n_official_hourly:] = 0.0
 
-# Precomputed arrays for vectorised calibrate_Ks_and_fracs.
+# Precomputed per-obs arrays (slot id, weights) used by solve_scales / the objective.
 # _obs_slot_id[i] = slot index in slot_list (0..n_slots-1) if slotted, n_slots if not.
 _obs_slot_id = np.full(n_obs, n_slots, dtype=np.int32)
 for _si, (_, _sidxs) in enumerate(slot_list):
@@ -552,6 +557,24 @@ _slot_ivs = np.array([e[10] for e in _slot_data], dtype=np.float64)
 _slot_mfa = np.array([e[11] for e in _slot_data], dtype=np.float64)
 _slot_gam = np.array([e[12] for e in _slot_data], dtype=np.float64)
 
+# ── Frozen temporal fractions (NTS profile) ───────────────────────────────────
+# f is pinned at the NTS profile (mean_fraction_res/biz/school) and never tuned.
+# Build the constant per-obs fraction vectors ONCE (the per-eval f-steps are gone).
+# Unslotted obs map to the sentinel slot index n_slots → fraction 0; they carry
+# zero objective weight anyway (_gauss_w_arr / _walk_slotted are 0 there).
+_f_r_by_slot = np.append(_slot_mfr, 0.0)
+_f_b_by_slot = np.append(_slot_mfb, 0.0)
+_f_s_by_slot = np.append(_slot_mfs, 0.0)
+_obs_f_r = _f_r_by_slot[_obs_slot_id]
+_obs_f_b = _f_b_by_slot[_obs_slot_id]
+_obs_f_s = _f_s_by_slot[_obs_slot_id]
+
+# Constant NTS slot-fraction dicts, returned by solve_scales for persistence to
+# tuned_params.json / tuning_history.jsonl (downstream consumers unchanged).
+slot_fracs_res_nts    = {sk: float(_slot_mfr[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_biz_nts    = {sk: float(_slot_mfb[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_school_nts = {sk: float(_slot_mfs[si]) for si, (sk, _) in enumerate(slot_list)}
+
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
 def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
@@ -561,9 +584,8 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
 
     Each component is singly (production) constrained: T^c_ij = K_c·p^c_i·a^c_j·F_c/D^c_i
     (see model.constrained_od_flows). This returns the PRE-K per-link flows; the
-    K_res/K_biz/K_sch scaling and temporal fractions are applied analytically by
-    calibrate_Ks_and_fracs (D_i has no K, so flow stays linear in K — the inner
-    alternating-minimisation blocks are unchanged).
+    K_res/K_biz/K_sch scaling is applied analytically by solve_scales (D_i has no K,
+    so flow stays linear in K — with f pinned at NTS the scale solve is convex).
 
     flow_res    = pop→pop,              kernel (P, ALPHA, BETA).
     flow_biz    = symmetric pop↔biz split (per-origin normalised) + W_BIZ·(biz×biz),
@@ -607,201 +629,133 @@ def model_obs_3c(flow_res, flow_biz, flow_school):
     return m_r, m_b, m_s
 
 
-def calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=40):
-    """5-block alternating minimisation: (K, phi_biz, phi_sch, f_res, f_biz, f_school).
+def solve_scales(m_res, m_biz, m_school):
+    """Direct convex solve for the three component scales (K_res, K_biz, K_sch).
 
-    Reparameterised as K_total, phi_biz = K_biz/K, phi_sch = K_school/K.
-    Sequential 1D phi-steps (fix the other, solve for each in turn).
-    Per-slot f-steps are per-slot analytical via bincount.
-    Coupling: γ·(f_res + f_biz + f_school − f_agg)² per slot.
+    Temporal fractions f are pinned at the NTS profile (never tuned), so each
+    observation prediction is LINEAR in the scales:
 
-    Returns (K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school).
+        pred_i = K_res·a_i + K_biz·b_i + K_sch·d_i
+        a_i = m_res_i·Th_i·f_res[s_i]   (b, d analogously) — f_* constant (_obs_f_*).
+
+    The objective is therefore CONVEX over K ≥ 0:
+      • Gaussian WLS over the official-hourly obs (convex quadratic),
+      • Poisson identity-link deviance 2·Σ(n·log(n/pred)+pred−n) over the slotted
+        walking obs (convex in the mean pred>0),
+      • a scale-share prior on φ_biz = K_biz/ΣK (and φ_sch) carried over from the
+        old φ-steps — it breaks the K_biz×W_BIZ degeneracy by anchoring the
+        business/school share (it regularises the inner K-solve only and is NOT
+        part of the reported χ², exactly as the old φ-prior was not).
+
+    Solved by damped (Levenberg) Newton with a backtracking line search on the
+    full objective — monotone by construction, so there is no K-collapse and no
+    best-iterate bookkeeping. Replaces the old 5-block alternating minimisation.
+
+    Returns (K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school)
+    — the slot_fracs are the constant NTS profile dicts (for persistence).
     """
-    PHI_BIZ_PRIOR = phi_prior
-    PHI_BIZ_STD   = phi_std
-    PHI_SCH_PRIOR = phi_school_prior
-    PHI_SCH_STD   = phi_school_std
-    INV_PHI_BIZ_V = 1.0 / (PHI_BIZ_STD ** 2)
-    INV_PHI_SCH_V = 1.0 / (PHI_SCH_STD ** 2)
+    a = m_res    * obs_Th * _obs_f_r
+    b = m_biz    * obs_Th * _obs_f_b
+    d = m_school * obs_Th * _obs_f_s
 
-    # Per-slot working arrays; index n_slots = sentinel for unslotted obs (weight=0).
-    f_r_s = np.empty(n_slots + 1)
-    f_b_s = np.empty(n_slots + 1)
-    f_s_s = np.empty(n_slots + 1)
-    f_r_s[:n_slots] = _slot_mfr
-    f_b_s[:n_slots] = _slot_mfb
-    f_s_s[:n_slots] = _slot_mfs
-    f_r_s[n_slots] = f_b_s[n_slots] = f_s_s[n_slots] = 0.0
+    C  = np.column_stack((a, b, d))          # (n_obs, 3): pred = C @ K
+    y  = obs_rhs_arr
+    wg = _gauss_w_arr                        # Gaussian weights (walking zeroed)
+    wm = _walk_slotted                       # slotted-walking (Poisson) mask
+    Cw = C[wm]
+    nw = _walk_sl_n
+    nw_pos = np.maximum(nw, 1e-300)
 
-    K       = 1.0
-    phi_biz = PHI_BIZ_PRIOR
-    phi_sch = PHI_SCH_PRIOR if _has_school else 0.0
+    mu_b, iv_b = phi_prior, 1.0 / (phi_std ** 2)
+    mu_s, iv_s = ((phi_school_prior, 1.0 / (phi_school_std ** 2))
+                  if _has_school else (0.0, 0.0))
+    active = np.array([True, True, _has_school])
 
-    cr = m_res    * obs_Th
-    cb = m_biz    * obs_Th
-    cs = m_school * obs_Th
+    def objval(K):
+        pred = C @ K
+        r  = pred - y
+        Lg = float((wg * r) @ r)
+        pw = np.maximum(pred[wm], 1e-30)
+        Lp = float(np.sum(2.0 * np.where(
+            nw > 0, nw * np.log(nw_pos / pw) + (pw - nw), pw)))
+        S  = K[0] + K[1] + K[2]
+        Lpr = 0.0
+        if S > 1e-300:
+            Lpr = iv_b * (K[1] / S - mu_b) ** 2
+            if _has_school:
+                Lpr += iv_s * (K[2] / S - mu_s) ** 2
+        return Lg + Lp + Lpr
 
-    _sid = _obs_slot_id
+    def grad_hess(K):
+        pred = C @ K
+        # Gaussian
+        g = 2.0 * (C.T @ (wg * (pred - y)))
+        H = 2.0 * ((C.T * wg) @ C)
+        # Poisson (identity link) over slotted walking obs
+        pw = np.maximum(pred[wm], 1e-30)
+        g += Cw.T @ (2.0 * (1.0 - nw / pw))
+        H += (Cw.T * (2.0 * nw / (pw * pw))) @ Cw
+        # Scale-share prior (Gauss-Newton PSD surrogate for its Hessian)
+        S = K[0] + K[1] + K[2]
+        if S > 1e-300:
+            S2 = S * S
+            jb = np.array([-K[1] / S2, (S - K[1]) / S2, -K[1] / S2])
+            g += 2.0 * iv_b * (K[1] / S - mu_b) * jb
+            H += 2.0 * iv_b * np.outer(jb, jb)
+            if _has_school:
+                js = np.array([-K[2] / S2, -K[2] / S2, (S - K[2]) / S2])
+                g += 2.0 * iv_s * (K[2] / S - mu_s) * js
+                H += 2.0 * iv_s * np.outer(js, js)
+        return g, H
 
-    _fr = np.empty(n_obs)
-    _fb = np.empty(n_obs)
-    _fs = np.empty(n_obs)
-    _NB = n_slots + 1
+    # ── Init: single global scale from a moment fit, split by the prior shares.
+    # K spans many orders of magnitude as the kernel params change, so a data-driven
+    # magnitude is essential to land in the right basin before Newton refines.
+    c     = a + b + d
+    den_g = float((wg * c) @ c)
+    num_g = float((wg * c) @ y)
+    if den_g > 0 and num_g > 0:
+        s0 = num_g / den_g                   # Gaussian (official) least-squares scale
+    else:
+        cw_sum = float(c[wm].sum())
+        s0 = (float(nw.sum()) / cw_sum) if cw_sum > 0 else 1.0   # Poisson moment
+    s0   = max(s0, 1e-30)
+    sh_s = mu_s if _has_school else 0.0
+    K = np.array([s0 * max(1.0 - mu_b - sh_s, 1e-6), s0 * mu_b, s0 * sh_s])
+    K = np.maximum(K, 1e-30)
+    if not _has_school:
+        K[2] = 0.0
 
-    # The alternating updates use single Newton steps for the Poisson (walking)
-    # blocks, which do NOT guarantee descent — under the production-constrained
-    # flow magnitudes the iteration is non-monotonic and can collapse K toward the
-    # 1e-30 floor at some iteration counts (validated). So we evaluate the full
-    # regularized objective each iteration and RETURN THE BEST-SEEN state, not the
-    # last iterate (the iteration is run to max_iter; no early break, since the
-    # objective oscillates and a premature stop can miss the good basin).
-    _best_obj = float("inf")
-    _best     = None
+    f_cur = objval(K)
+    for _ in range(60):
+        g, H = grad_hess(K)
+        gi = g[active]
+        Hi = H[np.ix_(active, active)]
+        lam_lm = 1e-9 * (np.trace(Hi) / max(gi.size, 1) + 1.0)   # Levenberg damping
+        try:
+            step_i = np.linalg.solve(Hi + lam_lm * np.eye(gi.size), -gi)
+        except np.linalg.LinAlgError:
+            step_i = -gi
+        step = np.zeros(3)
+        step[active] = step_i
+        # Backtracking line search on the FULL objective → guaranteed descent.
+        t, improved = 1.0, False
+        for _ls in range(40):
+            Kn = np.maximum(K + t * step, 1e-30)
+            if not _has_school:
+                Kn[2] = 0.0
+            fn = objval(Kn)
+            if fn < f_cur - 1e-12 * abs(f_cur):
+                K, f_cur, improved = Kn, fn, True
+                break
+            t *= 0.5
+        if not improved:
+            break
+        if np.max(np.abs(t * step_i)) < 1e-10 * (np.max(np.abs(K[active])) + 1e-30):
+            break
 
-    for _ in range(max_iter):
-        K_old = K
-
-        _fr[:] = f_r_s[_sid]
-        _fb[:] = f_b_s[_sid]
-        _fs[:] = f_s_s[_sid]
-
-        # ── K-step ───────────────────────────────────────────────────────────
-        # Gaussian solve on official hourly obs, then one Newton correction for
-        # Poisson walking obs.  Walking obs are zeroed in _gauss_w_arr.
-        coeff = (1 - phi_biz - phi_sch) * cr * _fr + phi_biz * cb * _fb + phi_sch * cs * _fs
-        wc_g  = _gauss_w_arr * coeff
-        A_g   = float(wc_g @ coeff)
-        B_g   = float(wc_g @ obs_rhs_arr)
-        K     = max(B_g / A_g, 1e-30) if A_g > 0 else K
-
-        # Newton correction: grad = Σ coeff_i*(1 - n_i/(K*coeff_i)), hess = Σ n_i/K²
-        walk_c    = coeff[_walk_slotted]
-        safe_pred = np.maximum(K * walk_c, 1e-30)
-        pois_grad = float(np.sum(walk_c * (1.0 - _walk_sl_n / safe_pred)))
-        pois_hess = float(np.sum(_walk_sl_n)) / K ** 2
-        total_h   = A_g + pois_hess
-        if total_h > 1e-60:
-            K = max(K - pois_grad / total_h, 1e-30)
-
-        # ── phi_biz-step: fix phi_sch ────────────────────────────────────────
-        # Gaussian (official) obs only; walking obs contribute via K and f_s.
-        _base_b = (1 - phi_sch) * cr * _fr + phi_sch * cs * _fs
-        _delt_b = cb * _fb - cr * _fr
-        wd_b    = _gauss_w_arr * _delt_b
-        A_b     = float(wd_b @ _delt_b) * K ** 2 + INV_PHI_BIZ_V
-        B_b     = float(wd_b @ (obs_rhs_arr - K * _base_b)) * K + PHI_BIZ_PRIOR * INV_PHI_BIZ_V
-        phi_biz = max(0.01, min(0.98 - phi_sch, B_b / A_b)) if A_b > 0 else phi_biz
-
-        # ── phi_sch-step: fix phi_biz ────────────────────────────────────────
-        if _has_school:
-            _base_s = (1 - phi_biz) * cr * _fr + phi_biz * cb * _fb
-            _delt_s = cs * _fs - cr * _fr
-            wd_s    = _gauss_w_arr * _delt_s
-            A_s     = float(wd_s @ _delt_s) * K ** 2 + INV_PHI_SCH_V
-            B_s     = float(wd_s @ (obs_rhs_arr - K * _base_s)) * K + PHI_SCH_PRIOR * INV_PHI_SCH_V
-            phi_sch = max(0.01, min(0.98 - phi_biz, B_s / A_s)) if A_s > 0 else phi_sch
-
-        K_res = K * (1 - phi_biz - phi_sch)
-        K_biz = K * phi_biz
-        K_sch = K * phi_sch
-
-        # pred for slotted walking obs at current f values (needed by all three f-steps).
-        _pred_walk = np.maximum(
-            K_res * cr[_walk_slotted] * _fr[_walk_slotted]
-            + K_biz * cb[_walk_slotted] * _fb[_walk_slotted]
-            + K_sch * cs[_walk_slotted] * _fs[_walk_slotted],
-            1e-30)
-        _ratio_walk = _walk_sl_n / _pred_walk   # n_i / pred_i
-
-        # ── f_res-step ───────────────────────────────────────────────────────
-        h_r    = obs_rhs_arr - K_biz * cb * _fb - K_sch * cs * _fs
-        wcr_g  = _gauss_w_arr * cr
-        s_num  = np.bincount(_sid, weights=wcr_g * h_r, minlength=_NB)[:n_slots]
-        s_den  = np.bincount(_sid, weights=wcr_g * cr,  minlength=_NB)[:n_slots]
-        # Poisson correction: Σ cr_i*(1 − n_i/pred_i) per slot, subtracted from numerator.
-        walk_corr_r = np.bincount(_walk_sl_sid,
-                                   weights=cr[_walk_slotted] * (1.0 - _ratio_walk),
-                                   minlength=_NB)[:n_slots]
-        num   = (K_res * s_num - K_res * walk_corr_r
-                 + _slot_mfr * _slot_ivr
-                 + _slot_gam * (_slot_mfa - f_b_s[:n_slots] - f_s_s[:n_slots]))
-        den   = K_res ** 2 * s_den + _slot_ivr + _slot_gam
-        if not _FREEZE_F:
-            f_r_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfr)
-        _fr[:] = f_r_s[_sid]
-
-        # Update pred after f_res change before next f-step.
-        _pred_walk = np.maximum(
-            K_res * cr[_walk_slotted] * _fr[_walk_slotted]
-            + K_biz * cb[_walk_slotted] * _fb[_walk_slotted]
-            + K_sch * cs[_walk_slotted] * _fs[_walk_slotted],
-            1e-30)
-        _ratio_walk = _walk_sl_n / _pred_walk
-
-        # ── f_biz-step ───────────────────────────────────────────────────────
-        h_b    = obs_rhs_arr - K_res * cr * _fr - K_sch * cs * _fs
-        wcb_g  = _gauss_w_arr * cb
-        s_num  = np.bincount(_sid, weights=wcb_g * h_b, minlength=_NB)[:n_slots]
-        s_den  = np.bincount(_sid, weights=wcb_g * cb,  minlength=_NB)[:n_slots]
-        walk_corr_b = np.bincount(_walk_sl_sid,
-                                   weights=cb[_walk_slotted] * (1.0 - _ratio_walk),
-                                   minlength=_NB)[:n_slots]
-        num   = (K_biz * s_num - K_biz * walk_corr_b
-                 + _slot_mfb * _slot_ivb
-                 + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_s_s[:n_slots]))
-        den   = K_biz ** 2 * s_den + _slot_ivb + _slot_gam
-        if not _FREEZE_F:
-            f_b_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfb)
-        _fb[:] = f_b_s[_sid]
-
-        # ── f_school-step ────────────────────────────────────────────────────
-        if _has_school:
-            _pred_walk = np.maximum(
-                K_res * cr[_walk_slotted] * _fr[_walk_slotted]
-                + K_biz * cb[_walk_slotted] * _fb[_walk_slotted]
-                + K_sch * cs[_walk_slotted] * _fs[_walk_slotted],
-                1e-30)
-            _ratio_walk = _walk_sl_n / _pred_walk
-            h_s    = obs_rhs_arr - K_res * cr * _fr - K_biz * cb * _fb
-            wcs_g  = _gauss_w_arr * cs
-            s_num  = np.bincount(_sid, weights=wcs_g * h_s, minlength=_NB)[:n_slots]
-            s_den  = np.bincount(_sid, weights=wcs_g * cs,  minlength=_NB)[:n_slots]
-            walk_corr_s = np.bincount(_walk_sl_sid,
-                                       weights=cs[_walk_slotted] * (1.0 - _ratio_walk),
-                                       minlength=_NB)[:n_slots]
-            num   = (K_sch * s_num - K_sch * walk_corr_s
-                     + _slot_mfs * _slot_ivs
-                     + _slot_gam * (_slot_mfa - f_r_s[:n_slots] - f_b_s[:n_slots]))
-            den   = K_sch ** 2 * s_den + _slot_ivs + _slot_gam
-            if not _FREEZE_F:
-                f_s_s[:n_slots] = np.where(den > 0, np.maximum(num / den, 1e-12), _slot_mfs)
-
-        # ── Track the best-seen (K, f) state by the full regularized objective ──
-        _fr[:] = f_r_s[_sid]; _fb[:] = f_b_s[_sid]; _fs[:] = f_s_s[_sid]
-        _pred = K_res * cr * _fr + K_biz * cb * _fb + K_sch * cs * _fs
-        _resd = _pred - obs_rhs_arr
-        _obj  = float((_gauss_w_arr * _resd) @ _resd)          # Gaussian (official)
-        _pw   = np.maximum(_pred[_walk_slotted], 1e-30)        # Poisson (walking)
-        _n    = _walk_sl_n
-        _pos  = np.maximum(_n, 1e-300)
-        _obj += float(np.sum(2.0 * np.where(_n > 0, _n * np.log(_pos / _pw) + (_pw - _n), _pw)))
-        _frs = f_r_s[:n_slots]; _fbs = f_b_s[:n_slots]; _fss = f_s_s[:n_slots]
-        _obj += float(np.sum((_frs - _slot_mfr) ** 2 * _slot_ivr
-                             + (_fbs - _slot_mfb) ** 2 * _slot_ivb
-                             + (_fss - _slot_mfs) ** 2 * _slot_ivs
-                             + _slot_gam * (_frs + _fbs + _fss - _slot_mfa) ** 2))
-        if _obj < _best_obj:
-            _best_obj = _obj
-            _best     = (K_res, K_biz, K_sch, f_r_s.copy(), f_b_s.copy(), f_s_s.copy())
-
-    # Restore the best-seen state (guards against the non-monotonic collapse).
-    if _best is not None:
-        K_res, K_biz, K_sch, f_r_s, f_b_s, f_s_s = _best
-
-    slot_fracs_res    = {sk: float(f_r_s[si]) for si, (sk, _) in enumerate(slot_list)}
-    slot_fracs_biz    = {sk: float(f_b_s[si]) for si, (sk, _) in enumerate(slot_list)}
-    slot_fracs_school = {sk: float(f_s_s[si]) for si, (sk, _) in enumerate(slot_list)}
-    return K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school
+    return (float(K[0]), float(K[1]), float(K[2]),
+            slot_fracs_res_nts, slot_fracs_biz_nts, slot_fracs_school_nts)
 
 
 # ── Objective function ────────────────────────────────────────────────────────
@@ -836,17 +790,10 @@ def objective(log_params, log_ref=None):
         P_school, ALPHA_school,
         w_pop, w_biz, THETA)
     m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
-    K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
-        calibrate_Ks_and_fracs(m_res, m_biz, m_school, max_iter=20 if fast else 40)
-    _obs_f_r = np.empty(n_obs, dtype=np.float64)
-    _obs_f_b = np.empty(n_obs, dtype=np.float64)
-    _obs_f_s = np.empty(n_obs, dtype=np.float64)
-    chi2_pen = 0.0
-    for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfs, ivs, mfa, gam in _slot_data:
-        f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]; f_s = slot_fracs_school[sk]
-        _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b; _obs_f_s[ia] = f_s
-        chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb + (f_s - mfs)**2 * ivs
-                     + gam * (f_r + f_b + f_s - mfa)**2)
+    K_res, K_biz, K_sch = solve_scales(m_res, m_biz, m_school)[:3]
+    # f is pinned at the NTS profile, so the per-obs fraction vectors _obs_f_* are
+    # module-level constants and the old f-prior/coupling penalty is identically
+    # zero (f ≡ NTS prior and res+biz+sch = agg per slot); it is dropped.
     _pred = (K_res * m_res * obs_Th * _obs_f_r
              + K_biz * m_biz * obs_Th * _obs_f_b
              + K_sch * m_school * obs_Th * _obs_f_s)
@@ -862,7 +809,7 @@ def objective(log_params, log_ref=None):
         _walk_sl_n > 0,
         _walk_sl_n * np.log(_pos_n / _pred_w) + (_pred_w - _walk_sl_n),
         _pred_w)
-    chi2 = chi2_data + float(_pois_dev.sum()) + chi2_pen
+    chi2 = chi2_data + float(_pois_dev.sum())
 
     if np.any(log_grav_lam > 0):
         chi2 += float(np.dot(log_grav_lam, (log_params[:n_gravity] - log_grav_ref) ** 2))
@@ -943,9 +890,9 @@ else:
 print(f"Gravity: {len(log_p0)} params{_grav_note}")
 
 # ── Calibration convergence probe (CALIBRATE_PROBE=1) ─────────────────────────
-# Diagnostic only: at the start params, run calibrate_Ks_and_fracs at several
-# max_iter values and report the residual global scale λ that would further reduce
-# the data χ² (λ≈1 ⇒ K is at its optimum). No optimization, no writes.
+# Diagnostic only: at the start params, run the direct-K solve and report the
+# residual global scale λ that would further reduce the data χ² (λ≈1 ⇒ K is at its
+# optimum — the convex solver has converged). No optimization, no writes.
 if os.environ.get("CALIBRATE_PROBE"):
     print("\n=== CALIBRATE PROBE (no optimization, no writes) ===")
     _W=math.exp(log_p0[0]);_P=math.exp(log_p0[1]);_A=math.exp(log_p0[2]);_B=math.exp(log_p0[3])
@@ -969,11 +916,10 @@ if os.environ.get("CALIBRATE_PROBE"):
         ls=np.logspace(-1,2,2000); cs=[ch(l) for l in ls]; lo=ls[int(np.argmin(cs))]
         return ch(1.0),lo,ch(lo)
     print(f"  params: W_BIZ={_W:.3f} P={_P:.1f} ALPHA={_A:.3f} BETA={_B:.3f} P_biz={_Pb:.1f} ALPHA_biz={_Ab:.3f}")
-    for mi in [10,30,100,300]:
-        Kr,Kb,Ks,sfr,sfb,sfs=calibrate_Ks_and_fracs(_mr,_mb,_ms,max_iter=mi)
-        c1,lo,clo=_probe_eval(Kr,Kb,Ks,sfr,sfb,sfs)
-        print(f"  max_iter={mi:4d}  K_res={Kr:.4e} K_biz={Kb:.4e} K_sch={Ks:.4e}"
-              f"  data χ²/N={c1/n_obs:7.3f}  opt_λ={lo:6.3f}  χ²/N@optλ={clo/n_obs:7.3f}")
+    Kr,Kb,Ks,sfr,sfb,sfs=solve_scales(_mr,_mb,_ms)
+    c1,lo,clo=_probe_eval(Kr,Kb,Ks,sfr,sfb,sfs)
+    print(f"  direct solve  K_res={Kr:.4e} K_biz={Kb:.4e} K_sch={Ks:.4e}"
+          f"  data χ²/N={c1/n_obs:7.3f}  opt_λ={lo:6.3f}  χ²/N@optλ={clo/n_obs:7.3f}")
     sys.exit(0)
 
 # ── Run optimization ──────────────────────────────────────────────────────────
@@ -1024,17 +970,10 @@ flow_res, flow_biz, flow_school = run_assignment(
     w_pop_f, w_biz_f, THETA)
 m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
 K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
-    calibrate_Ks_and_fracs(m_res, m_biz, m_school)
+    solve_scales(m_res, m_biz, m_school)
 K = K_res + K_biz + K_sch   # total scale (for display and backward compat)
-_obs_f_r = np.empty(n_obs, dtype=np.float64)
-_obs_f_b = np.empty(n_obs, dtype=np.float64)
-_obs_f_s = np.empty(n_obs, dtype=np.float64)
-chi2_pen = 0.0
-for sk, ia, w, rhs, Ths, mfr, ivr, mfb, ivb, mfs, ivs, mfa, gam in _slot_data:
-    f_r = slot_fracs_res[sk]; f_b = slot_fracs_biz[sk]; f_s = slot_fracs_school[sk]
-    _obs_f_r[ia] = f_r; _obs_f_b[ia] = f_b; _obs_f_s[ia] = f_s
-    chi2_pen += ((f_r - mfr)**2 * ivr + (f_b - mfb)**2 * ivb + (f_s - mfs)**2 * ivs
-                 + gam * (f_r + f_b + f_s - mfa)**2)
+# f pinned at the NTS profile → constant fraction vectors; the f-prior/coupling
+# penalty is identically zero and is dropped (see objective()).
 _pred = (K_res * m_res * obs_Th * _obs_f_r
          + K_biz * m_biz * obs_Th * _obs_f_b
          + K_sch * m_school * obs_Th * _obs_f_s)
@@ -1046,7 +985,7 @@ _pois_dev = 2.0 * np.where(
     _walk_sl_n > 0,
     _walk_sl_n * np.log(_pos_n / _pred_w) + (_pred_w - _walk_sl_n),
     _pred_w)
-chi2 = chi2_data + float(_pois_dev.sum()) + chi2_pen
+chi2 = chi2_data + float(_pois_dev.sum())
 chi2_per_n = chi2 / n_obs
 
 # Build per-obs residuals for the fit table.
@@ -1170,13 +1109,13 @@ tuned = {
     "n_slots":    n_slots,
     "n_eff":      n_eff,
     "stage":      "gravity",
+    # f is always pinned at the NTS profile now (never tuned); kept for clarity.
+    "temporal_profile": "nts_pinned",
 }
 
-if _FREEZE_F:
-    tuned["f_frozen"] = True
 with open(TUNED_PARAMS, "w") as f:
     json.dump(tuned, f, indent=2)
-print(f"\nSaved → {TUNED_PARAMS}" + ("  (f-frozen)" if _FREEZE_F else ""))
+print(f"\nSaved → {TUNED_PARAMS}")
 
 # ── Gravity model kernel plot ─────────────────────────────────────────────────
 
@@ -1258,14 +1197,16 @@ history_entry = {
     "chi2_per_n": round(chi2_per_n, 4),
     "params":    params,
     "tuner_hyperparams": {
+        # phi_* priors anchor the scale-share inside solve_scales (degeneracy break).
+        # gamma_coupling_scale is no longer used (f is pinned, no per-slot coupling).
         "phi_biz_prior":        phi_prior,
         "phi_biz_std":          phi_std,
         "phi_school_prior":     phi_school_prior,
         "phi_school_std":       phi_school_std,
-        "gamma_coupling_scale": gamma_coupling_scale,
         "gravity_lambda":       grav_lam_raw,
         "lambda":               lam,
         "fast":                 fast,
+        "temporal_profile":     "nts_pinned",
     },
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
@@ -1288,13 +1229,10 @@ history_entry = {
     ],
 }
 history_entry["objective"] = "poisson_deviance_walking"
-if _FREEZE_F:
-    history_entry["f_frozen"] = True
-    _frozen_note = "f-frozen (temporal fractions pinned at NTS profile)"
-    history_entry["note"] = f"{note}; {_frozen_note}" if note else _frozen_note
-elif note:
+history_entry["temporal_profile"] = "nts_pinned"
+if note:
     history_entry["note"] = note
 
 with open(HISTORY_FILE, "a") as f:
     f.write(json.dumps(history_entry) + "\n")
-print(f"Appended → {HISTORY_FILE}" + ("  (f-frozen)" if _FREEZE_F else ""))
+print(f"Appended → {HISTORY_FILE}")
