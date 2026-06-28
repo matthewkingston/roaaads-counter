@@ -550,6 +550,53 @@ def compute_chi2(link_flow_dict, label_fn=None,
     return _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links)
 
 
+def walking_session_residual(m_r, m_b, m_s, sess,
+                             slot_fracs_res, slot_fracs_biz, slot_fracs_school):
+    """Per-session walking-count residual for the production-constrained model.
+
+    Single source of truth for the per-observation arithmetic used by both
+    _compute_chi2_2c/_3c and the map's residuals layer. Two-component callers
+    pass m_s=0 and slot_fracs_school={} (or None).
+
+    Returns None if the session is unusable (no time slot or non-positive
+    duration), else a dict:
+      sk       — (day_type, hour) slot key
+      z        — Poisson Pearson residual (pred_count − n_eff)/√n_eff
+      deviance — Poisson deviance contribution to chi²
+      obs_disp — observed effective AADT (display)
+      sig_disp — observed AADT uncertainty (display)
+      mod_disp — model combined AADT (= m_r + m_b + m_s)
+    """
+    ts   = sess.get("time_slot")
+    neff = float(sess.get("n_eff", 0.5))
+    dur  = float(sess.get("duration_s", 0.0))
+    if ts is None or dur <= 0:
+        return None
+    sk  = (_DOW_TO_TYPE[ts[0]], ts[1])
+    f_r = (slot_fracs_res    or {}).get(sk, 1.0 / 24)
+    f_b = (slot_fracs_biz    or {}).get(sk, 1.0 / 24)
+    f_s = (slot_fracs_school or {}).get(sk, 0.0)
+    Th        = dur / 3600.0
+    pred      = (m_r * f_r + m_b * f_b + m_s * f_s) * Th
+    z         = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
+    n_actual  = neff - 0.5
+    pred_safe = max(pred, 1e-30)
+    if n_actual > 0:
+        deviance = 2.0 * (pred_safe - n_actual + n_actual * math.log(n_actual / pred_safe))
+    else:
+        deviance = 2.0 * pred_safe
+    m_tot = m_r + m_b + m_s + 1e-30
+    f_eff = (m_r * f_r + m_b * f_b + m_s * f_s) / m_tot
+    if f_eff > 0 and Th > 0:
+        obs_disp = neff / (Th * f_eff)
+        sig_disp = math.sqrt(neff) / (Th * f_eff)
+        mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b + m_s)
+    else:
+        obs_disp = sig_disp = mod_disp = 0.0
+    return {"sk": sk, "z": z, "deviance": deviance,
+            "obs_disp": obs_disp, "sig_disp": sig_disp, "mod_disp": mod_disp}
+
+
 def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                      slot_fracs_res, slot_fracs_biz,
                      label_fn, link_aadt_file, exclude_links,
@@ -601,33 +648,14 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
             m_r  = flow_res_dict.get((u, v), 0.0)
             m_b  = flow_biz_dict.get((u, v), 0.0)
             for sess in entry.get("observations", []):
-                ts   = sess.get("time_slot")
-                neff = float(sess.get("n_eff", 0.5))
-                dur  = float(sess.get("duration_s", 0.0))
-                if ts is None or dur <= 0:
+                res = walking_session_residual(m_r, m_b, 0.0, sess,
+                                               slot_fracs_res, slot_fracs_biz, None)
+                if res is None:
                     continue
-                sk       = (_DOW_TO_TYPE[ts[0]], ts[1])
-                f_r, f_b = _fracs(sk)
-                Th       = dur / 3600.0
-                pred     = (m_r * f_r + m_b * f_b) * Th
-                z        = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
-                n_actual  = neff - 0.5
-                pred_safe = max(pred, 1e-30)
-                if n_actual > 0:
-                    chi2 += 2.0 * (pred_safe - n_actual + n_actual * math.log(n_actual / pred_safe))
-                else:
-                    chi2 += 2.0 * pred_safe
-                n_slots_seen.add(sk)
-                # display in AADT-space: divide by effective f_s
-                m_tot = m_r + m_b + 1e-30
-                f_eff = (m_r * f_r + m_b * f_b) / m_tot
-                if f_eff > 0 and Th > 0:
-                    obs_disp = neff / (Th * f_eff)
-                    sig_disp = math.sqrt(neff) / (Th * f_eff)
-                    mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b)
-                else:
-                    obs_disp = sig_disp = mod_disp = 0.0
-                rows.append((lbl, format_slot_time(*sk), obs_disp, sig_disp, mod_disp, z, link))
+                chi2 += res["deviance"]
+                n_slots_seen.add(res["sk"])
+                rows.append((lbl, format_slot_time(*res["sk"]), res["obs_disp"],
+                             res["sig_disp"], res["mod_disp"], res["z"], link))
 
     n_obs   = len(rows)
     # N_eff: 2 df per slot (f_res and f_biz each).
@@ -690,32 +718,15 @@ def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
             m_b  = flow_biz_dict.get((u, v), 0.0)
             m_s  = flow_school_dict.get((u, v), 0.0)
             for sess in entry.get("observations", []):
-                ts   = sess.get("time_slot")
-                neff = float(sess.get("n_eff", 0.5))
-                dur  = float(sess.get("duration_s", 0.0))
-                if ts is None or dur <= 0:
+                res = walking_session_residual(m_r, m_b, m_s, sess,
+                                               slot_fracs_res, slot_fracs_biz,
+                                               slot_fracs_school)
+                if res is None:
                     continue
-                sk       = (_DOW_TO_TYPE[ts[0]], ts[1])
-                f_r, f_b, f_s = _fracs(sk)
-                Th       = dur / 3600.0
-                pred     = (m_r * f_r + m_b * f_b + m_s * f_s) * Th
-                z        = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
-                n_actual  = neff - 0.5
-                pred_safe = max(pred, 1e-30)
-                if n_actual > 0:
-                    chi2 += 2.0 * (pred_safe - n_actual + n_actual * math.log(n_actual / pred_safe))
-                else:
-                    chi2 += 2.0 * pred_safe
-                n_slots_seen.add(sk)
-                m_tot = m_r + m_b + m_s + 1e-30
-                f_eff = (m_r * f_r + m_b * f_b + m_s * f_s) / m_tot
-                if f_eff > 0 and Th > 0:
-                    obs_disp = neff / (Th * f_eff)
-                    sig_disp = math.sqrt(neff) / (Th * f_eff)
-                    mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b + m_s)
-                else:
-                    obs_disp = sig_disp = mod_disp = 0.0
-                rows.append((lbl, format_slot_time(*sk), obs_disp, sig_disp, mod_disp, z, link))
+                chi2 += res["deviance"]
+                n_slots_seen.add(res["sk"])
+                rows.append((lbl, format_slot_time(*res["sk"]), res["obs_disp"],
+                             res["sig_disp"], res["mod_disp"], res["z"], link))
 
     n_obs = len(rows)
     if n_official:

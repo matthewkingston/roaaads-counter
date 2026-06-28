@@ -27,6 +27,8 @@ from demographics_config import (
     CENSUS_ZONES_FILE, EXCLUDE_AMENITY, SCHOOL_ENROLL_FALLBACK,
     HIGHWAY_STYLE, ROAD_TYPE_LABELS, PROJECTED_CRS,
 )
+from model import walking_session_residual, EXCLUDE_LINKS
+import branca.colormap as bcm
 
 _SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
 
@@ -530,6 +532,136 @@ if os.path.exists(_flows_path):
         print(f"Added flow layers from {_flows_path} ({_layer_str}, {len(_link_flow)} links)")
     else:
         print(f"Added flow layer from {_flows_path} ({len(_link_flow)} links)")
+
+    # ── Residuals layer (observed vs modelled; tuner-faithful per-session z) ──
+    # Colours each observed directed link by the signed RMS of the exact per-session
+    # Poisson z's the calibration minimises (model.walking_session_residual), so the
+    # map and the objective agree by construction. Two directions of a street render
+    # as side-by-side offset lines.
+    _TUNED_PARAMS = f"{OUT_DIR}/tuned_params.json"
+    _LINK_AADT    = "data/link_aadt.json"
+    if not _has_components:
+        pass  # res/biz component flows required
+    elif not (os.path.exists(_TUNED_PARAMS) and os.path.exists(_LINK_AADT)):
+        print("Residuals layer skipped: tuned_params.json or link_aadt.json not found")
+    else:
+        with open(_TUNED_PARAMS) as _f:
+            _tp = json.load(_f)
+
+        def _parse_sf(key):
+            return {tuple(int(x) for x in k.split(",")): v
+                    for k, v in _tp.get(key, {}).items()}
+
+        _sf_res = _parse_sf("slot_fracs_res")
+        _sf_biz = _parse_sf("slot_fracs_biz")
+        _sf_sch = _parse_sf("slot_fracs_school")
+
+        if not (_sf_res and _sf_biz):
+            print("Residuals layer skipped: slot_fracs_res/biz missing from tuned_params.json")
+        else:
+            with open(_LINK_AADT) as _f:
+                _link_aadt = json.load(_f)["links"]
+
+            _ZMAX = 4.0
+
+            def _resid_color(z):
+                # diverging: blue = model over-predicts (z>0), red = under-predicts (z<0)
+                t = max(-1.0, min(1.0, z / _ZMAX))
+                if t >= 0:
+                    r, g, b = 220, int(220 * (1 - t)), int(220 * (1 - t))
+                else:
+                    s = -t
+                    r, g, b = int(220 * (1 - s)), int(220 * (1 - s)), 220
+                return f"#{r:02x}{g:02x}{b:02x}"
+
+            def _resid_coords(u, v, data):
+                """Edge polyline (lat,lon) offset ~6 m to the right of u→v travel,
+                so (u,v) and (v,u) sit side by side."""
+                OFFSET_M = 6.0
+                geom = data.get("geometry") if data else None
+                if geom is not None and hasattr(geom, "coords"):
+                    pts = [(x, y) for x, y in geom.coords]
+                else:
+                    ud, vd = G_cons.nodes[u], G_cons.nodes[v]
+                    pts = [(float(ud["x"]), float(ud["y"])), (float(vd["x"]), float(vd["y"]))]
+                out = []
+                n = len(pts)
+                for i, (x, y) in enumerate(pts):
+                    if i < n - 1:
+                        dx, dy = pts[i + 1][0] - x, pts[i + 1][1] - y
+                    else:
+                        dx, dy = x - pts[i - 1][0], y - pts[i - 1][1]
+                    L = math.hypot(dx, dy) or 1.0
+                    nx, ny = dy / L, -dx / L          # right-hand normal of travel
+                    ox, oy = x + OFFSET_M * nx, y + OFFSET_M * ny
+                    lon, lat = _tr_flow.transform(ox, oy)
+                    out.append((lat, lon))
+                return out
+
+            resid_fg = folium.FeatureGroup(name="Residuals (obs vs model)", show=False)
+            _n_drawn = _n_excl = _n_skip = 0
+            for _key, _entry in _link_aadt.items():
+                _u, _v = (int(x) for x in _key.split(","))
+                if G_cons.has_edge(_u, _v):
+                    _data = G_cons.get_edge_data(_u, _v)[0]
+                elif G_cons.has_edge(_v, _u):
+                    _data = G_cons.get_edge_data(_v, _u)[0]
+                elif _u in G_cons.nodes and _v in G_cons.nodes:
+                    _data = None
+                else:
+                    _n_skip += 1
+                    continue
+                _lbl = (_data or {}).get("name", "")
+                if isinstance(_lbl, list):
+                    _lbl = _lbl[0]
+                _coords = _resid_coords(_u, _v, _data)
+                if (_u, _v) in EXCLUDE_LINKS:
+                    folium.PolyLine(
+                        _coords, color="#999999", weight=3, opacity=0.7,
+                        tooltip=f"{_lbl or 'link'} ({_u}→{_v})<br>excluded from calibration",
+                    ).add_to(resid_fg)
+                    _n_excl += 1
+                    continue
+                _m_r = _link_flow_res.get((_u, _v), 0.0)
+                _m_b = _link_flow_biz.get((_u, _v), 0.0)
+                _m_s = _link_flow_school.get((_u, _v), 0.0) if _has_school_layer else 0.0
+                _zs = []
+                for _sess in _entry.get("observations", []):
+                    _r = walking_session_residual(_m_r, _m_b, _m_s, _sess,
+                                                  _sf_res, _sf_biz, _sf_sch)
+                    if _r is not None:
+                        _zs.append(_r["z"])
+                if not _zs:
+                    _n_skip += 1
+                    continue
+                _mean_z = sum(_zs) / len(_zs)
+                _rms    = math.sqrt(sum(z * z for z in _zs) / len(_zs))
+                _signed = math.copysign(_rms, _mean_z) if _mean_z != 0 else 0.0
+                _model_aadt = _m_r + _m_b + _m_s
+                _obs_aadt   = _entry.get("aadt", 0)
+                _obs_sig    = _entry.get("aadt_uncertainty", 0)
+                _nobs       = _entry.get("n_observations", len(_zs))
+                _tip = (
+                    f"<b>{_lbl or 'link'}</b> ({_u}→{_v})<br>"
+                    f"model AADT: {_model_aadt:,.0f}<br>"
+                    f"observed AADT: {_obs_aadt:,.0f} ± {_obs_sig:,.0f}<br>"
+                    f"signed RMS z: {_signed:+.2f}<br>"
+                    f"observations: {_nobs}"
+                )
+                folium.PolyLine(
+                    _coords, color=_resid_color(_signed), weight=4, opacity=0.9,
+                    tooltip=_tip,
+                ).add_to(resid_fg)
+                _n_drawn += 1
+            resid_fg.add_to(m)
+
+            _cmap = bcm.LinearColormap(
+                ["#1414dc", "#ffffff", "#dc1414"], vmin=-_ZMAX, vmax=_ZMAX,
+                caption="Residual signed RMS z (blue = model over-predicts, red = under-predicts)",
+            )
+            _cmap.add_to(m)
+            print(f"Added residuals layer ({_n_drawn} links, {_n_excl} excluded, "
+                  f"{_n_skip} skipped)")
 else:
     print(f"No flow data found at {_flows_path} — skipping flow layer")
 
