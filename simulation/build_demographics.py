@@ -2,7 +2,7 @@
 Fetch NISRA Census 2021 Data Zone population data, filter to the Newtownards
 study area, and compute per-node demand weights:
   - residential population (OSM-building-snapped; road-length fallback per DZ)
-  - business demand (workplace population × POI proxy + car-park area)
+  - business demand (workplace population, POI-distributed + retail parking spaces)
   - school demand (OSM school POIs)
   - boundary-node detection + external-zone weights from census data
 
@@ -30,9 +30,10 @@ import pyproj
 from demographics_config import (
     CENTRE, OUT_DIR, NETWORK_MARGIN_M, POPULATION_API, DZ_BOUNDARY_FILE,
     GRAPH_PATH, WORKPLACE_DATA_FILE, POPULATION_CACHE, POI_CACHE,
-    BUILDING_CACHE, PARKING_CACHE, CENSUS_ZONES_FILE, TUNER_CONFIG_FILE,
+    BUILDING_CACHE, PARKING_ISLAND_CACHE, CENSUS_ZONES_FILE, TUNER_CONFIG_FILE,
     EXCLUDE_AMENITY, POI_WEIGHTS, SCHOOL_ENROLL_FALLBACK, PROJECTED_CRS,
 )
+from parking_demand import parking_spaces
 
 _SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
 
@@ -42,8 +43,8 @@ _ap = argparse.ArgumentParser(
 _ap.add_argument(
     "--zones-only", action="store_true",
     help="Patch only external-zone weights in node_weights.json (fast). "
-         "Use after editing ext_biz_scale in tuner_config.json; not when the "
-         "core polygon or internal demographics change.")
+         "Use after re-running build_census_zones.py (external retail/census); "
+         "not when the core polygon or internal demographics change.")
 args = _ap.parse_args()
 
 # ── Config (constants live in demographics_config.py) ──────────────────────────
@@ -63,12 +64,10 @@ if os.path.exists(CENSUS_ZONES_FILE):
 if _census_zones is not None:
     RADIUS_M = round(_census_zones["max_core_vertex_dist_m"]) + NETWORK_MARGIN_M
 
-_ext_biz_scale    = 1.0
 _ext_school_per_pop = None
 if os.path.exists(TUNER_CONFIG_FILE):
     with open(TUNER_CONFIG_FILE) as _f:
         _tc = json.load(_f)
-    _ext_biz_scale      = _tc.get("ext_biz_scale", 1.0)
     _ext_school_per_pop = _tc.get("ext_school_per_pop")
 
 if _ext_school_per_pop is None:
@@ -79,7 +78,7 @@ if _ext_school_per_pop is None:
 
 # ── Fast path: --zones-only ────────────────────────────────────────────────────
 # Patches only external-zone entries in node_weights.json. Skips all internal
-# population processing. Use after editing ext_biz_scale in tuner_config.json
+# population processing. Use after re-running build_census_zones.py
 # (not when the core polygon or internal demographics have changed).
 
 if args.zones_only:
@@ -89,16 +88,20 @@ if args.zones_only:
     weights_path = f"{OUT_DIR}/node_weights.json"
     with open(weights_path) as f:
         w = json.load(f)
-    print(f"Updating external zone weights from census data (ext_biz_scale={_ext_biz_scale:.4f}) …")
+    print("Updating external zone weights from census data …")
     ext_nodes = _census_zones["external_nodes"]
+    w.setdefault("node_retail_spaces", {})
     for ext in ext_nodes:
         nid = ext["id"]
+        _retail = float(ext.get("retail_spaces", 0.0))
         w["node_population"][str(nid)]      = float(ext["population"])
-        w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) * _ext_biz_scale
+        w["node_retail_spaces"][str(nid)]   = _retail
+        w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) + _retail
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = float(ext["population"]) * _ext_school_per_pop
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
+              f"retail_sp={_retail:>8,.0f}  "
               f"biz={w['node_business_demand'][str(nid)]:>10,.1f}  "
               f"school={w['node_school_demand'][str(nid)]:>8,.1f}")
     with open(weights_path, "w") as f:
@@ -502,66 +505,58 @@ else:
     total_biz = sum(node_business_demand.values())
     print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
 
-    # ── Car park area → additional business demand ────────────────────────────────
-    # OSM parking polygons proxy vehicle trip attraction (visitor/customer demand).
-    # Public: area/25 ≈ equivalent persons.  Private (access=private): area/50 (half weight).
+    # ── Car-park retail demand (estimated parking spaces) ─────────────────────────
+    # OSM parking polygons proxy retail/customer vehicle-trip attraction. Each lot is
+    # turned into an estimate of retail parking *spaces* by parking_demand.parking_spaces
+    # (access filter + capacity plausibility gate + area fallback; see CLAUDE.md /
+    # plan_parking_retail) — replacing the old area/25-/50 "equivalent persons" hack.
+    # Spaces are the retail attractor's currency (the tuner's K absorbs spaces→trips).
+    # Sourced from the island-wide cache (build_parking.py) so internal and external
+    # zones use one estimator with identical tag handling.
 
-    if os.path.exists(PARKING_CACHE):
-        print(f"Loading OSM parking from cache ({PARKING_CACHE}) …")
-        _park_raw = gpd.read_file(PARKING_CACHE)
-    else:
-        print("Downloading OSM parking polygons …")
-        _park_raw = ox.features_from_point(
-            CENTRE,
-            tags={"amenity": "parking", "landuse": "parking"},
-            dist=RADIUS_M,
-        )
-        _park_raw = _park_raw[_park_raw.geometry.notna()].copy()
-        _save_park_cols = [c for c in ["amenity", "landuse", "access", "name"] if c in _park_raw.columns]
-        _park_raw[_save_park_cols + ["geometry"]].to_crs("EPSG:4326").to_file(PARKING_CACHE, driver="GeoJSON")
-        print(f"  Cached → {PARKING_CACHE}")
+    if not os.path.exists(PARKING_ISLAND_CACHE):
+        print(f"ERROR: {PARKING_ISLAND_CACHE} not found. "
+              f"Run: python3 simulation/build_parking.py")
+        sys.exit(1)
+    print(f"Loading island parking from cache ({PARKING_ISLAND_CACHE}) …")
+    _park_raw = gpd.read_file(PARKING_ISLAND_CACHE)
 
-    # Polygon features only — excludes point-tagged parking_entrance, parking_space nodes
+    # Polygon features only; clip to the core polygon (internal retail attractor).
     _park_utm = _park_raw.to_crs(PROJECTED_CRS).copy()
     _park_utm = _park_utm[_park_utm.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     _park_utm["area_m2"] = _park_utm.geometry.area
     _park_utm["centroid_geom"] = _park_utm.geometry.centroid
-    # Keep only car parks whose centroid is inside the core polygon.
     _park_utm = _park_utm[_park_utm["centroid_geom"].within(core_poly_utm)].copy()
-    _park_utm["is_private"] = (
-        _park_utm["access"].isin(["private"]) if "access" in _park_utm.columns
-        else pd.Series(False, index=_park_utm.index)
-    )
 
-    # Snap each parking centroid to nearest road edge; split equiv between endpoints by t
-    PARKING_SCALE_PUBLIC  = 25.0
-    PARKING_SCALE_PRIVATE = 50.0
-    node_parking_equiv = {}
+    # Estimate each lot's retail spaces, snap to the nearest road edge, split by t.
+    _park_tag_cols = [c for c in _park_utm.columns
+                      if c not in ("geometry", "centroid_geom", "area_m2")]
+    node_retail_spaces = {}
+    _total_spaces = 0.0
+    _n_kept = 0
     for _, _row in _park_utm.iterrows():
+        _spaces = parking_spaces({c: _row[c] for c in _park_tag_cols}, _row["area_m2"])
+        if _spaces <= 0:
+            continue
+        _n_kept += 1
+        _total_spaces += _spaces
         _pt = _row["centroid_geom"]
         _eidx = _edge_strtree.nearest(_pt)
-        _scale = PARKING_SCALE_PRIVATE if _row["is_private"] else PARKING_SCALE_PUBLIC
-        _equiv = _row["area_m2"] / _scale
         if _eidx in _ghost_junction:
             _junc = _ghost_junction[_eidx]
-            node_business_demand[_junc] = node_business_demand.get(_junc, 0.0) + _equiv
-            node_parking_equiv[_junc]   = node_parking_equiv.get(_junc, 0.0) + _equiv
+            node_business_demand[_junc] = node_business_demand.get(_junc, 0.0) + _spaces
+            node_retail_spaces[_junc]   = node_retail_spaces.get(_junc, 0.0) + _spaces
         else:
             _eu, _ev = _edge_keys[_eidx]
             _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
-            _eu_share, _ev_share = (1.0 - _t) * _equiv, _t * _equiv
+            _eu_share, _ev_share = (1.0 - _t) * _spaces, _t * _spaces
             node_business_demand[_eu] = node_business_demand.get(_eu, 0.0) + _eu_share
             node_business_demand[_ev] = node_business_demand.get(_ev, 0.0) + _ev_share
-            node_parking_equiv[_eu]   = node_parking_equiv.get(_eu, 0.0) + _eu_share
-            node_parking_equiv[_ev]   = node_parking_equiv.get(_ev, 0.0) + _ev_share
+            node_retail_spaces[_eu]   = node_retail_spaces.get(_eu, 0.0) + _eu_share
+            node_retail_spaces[_ev]   = node_retail_spaces.get(_ev, 0.0) + _ev_share
 
-    _n_priv  = int(_park_utm["is_private"].sum())
-    _n_pub   = len(_park_utm) - _n_priv
-    _eq_pub  = _park_utm[~_park_utm["is_private"]]["area_m2"].sum() / PARKING_SCALE_PUBLIC
-    _eq_priv = _park_utm[_park_utm["is_private"]]["area_m2"].sum()  / PARKING_SCALE_PRIVATE
-    print(f"  {len(_park_utm)} parking polygons "
-          f"({_n_pub} public +{_eq_pub:.0f} eq-persons, "
-          f"{_n_priv} private +{_eq_priv:.0f} eq-persons)")
+    print(f"  {len(_park_utm)} parking polygons in core → "
+          f"{_n_kept} retail lots, {_total_spaces:.0f} estimated spaces")
 
     # ── School demand layer ───────────────────────────────────────────────────────
     # Snap school POIs to road edges; accumulate enrollment (pupils) per node.
@@ -645,13 +640,21 @@ else:
     # ── Add external node weights from census data ────────────────────────────
     if _census_zones is not None:
         ext_nodes = _census_zones["external_nodes"]
-        print(f"Adding {len(ext_nodes)} external node weights from census data "
-              f"(ext_biz_scale={_ext_biz_scale:.4f}) …")
+        print(f"Adding {len(ext_nodes)} external node weights from census data …")
+        _missing_retail = 0
         for ext in ext_nodes:
             nid = ext["id"]
+            _retail = float(ext.get("retail_spaces", 0.0))
+            if "retail_spaces" not in ext:
+                _missing_retail += 1
             node_population[nid]      = float(ext["population"])
-            node_business_demand[nid] = float(ext["workplace_pop"]) * _ext_biz_scale
+            node_retail_spaces[nid]   = _retail
+            node_business_demand[nid] = float(ext["workplace_pop"]) + _retail
             node_school_demand[nid]   = float(ext["population"]) * _ext_school_per_pop
+        if _missing_retail:
+            print(f"  WARNING: {_missing_retail}/{len(ext_nodes)} external nodes lack "
+                  f"'retail_spaces' — re-run build_parking.py then build_census_zones.py. "
+                  f"Treated as 0 (commute-only) for now.")
     else:
         ext_nodes = []
 
@@ -662,7 +665,7 @@ else:
             "node_population":      {str(k): v for k, v in node_population.items()},
             "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
-            "node_parking_equiv":   {str(k): v for k, v in node_parking_equiv.items()},
+            "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
             "boundary_node_ids":      sorted(_boundary_ids),
             "boundary_node_ids_cons": sorted(_boundary_ids_cons),
             "internal_node_ids":      sorted(_internal_ids),

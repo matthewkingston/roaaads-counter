@@ -106,7 +106,7 @@ def main():
     pop = nw["node_population"]
     biz = nw["node_business_demand"]
     sch = nw["node_school_demand"]
-    park = nw.get("node_parking_equiv", {})
+    park = nw.get("node_retail_spaces", {})
 
     def w(d, n):
         return float(d.get(str(n), 0.0))
@@ -220,7 +220,7 @@ def main():
     nw_out = {k: dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v
               for k, v in nw.items()}
     pop_o, biz_o, sch_o, park_o = (nw_out["node_population"], nw_out["node_business_demand"],
-                                   nw_out["node_school_demand"], nw_out.get("node_parking_equiv", {}))
+                                   nw_out["node_school_demand"], nw_out.get("node_retail_spaces", {}))
     internal = set(int(x) for x in nw_out.get("internal_node_ids", []))
 
     deadend_map = {}

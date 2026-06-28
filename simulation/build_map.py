@@ -61,7 +61,7 @@ with open(f"{OUT_DIR}/node_weights.json") as _f:
 _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_population      = {_pnid(k): v for k, v in _w["node_population"].items()}
 node_business_demand = {_pnid(k): v for k, v in _w["node_business_demand"].items()}
-node_parking_equiv   = {_pnid(k): v for k, v in _w.get("node_parking_equiv", {}).items()}
+node_retail_spaces   = {_pnid(k): v for k, v in _w.get("node_retail_spaces", {}).items()}
 node_school_demand   = {_pnid(k): v for k, v in _w.get("node_school_demand", {}).items()}
 _boundary_ids        = set(int(x) for x in _w.get("boundary_node_ids", []))
 _boundary_ids_cons   = set(int(x) for x in _w.get("boundary_node_ids_cons", _w.get("boundary_node_ids", [])))
@@ -195,15 +195,15 @@ for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
     biz = node_business_demand.get(node_id, 0)
     if biz <= 0:
         continue
-    park_eq   = node_parking_equiv.get(node_id, 0)
-    wp_demand = biz - park_eq
+    retail_sp = node_retail_spaces.get(node_id, 0)
+    wp_demand = biz - retail_sp
     folium.CircleMarker(
         location=[nlat, nlon], radius=_scaled_radius(biz, max_biz_internal),
         color="#7b2d8b", fill=True, fill_color="#b05ec0", fill_opacity=0.65, weight=1,
         tooltip=(
             f"<b>Node {node_id}</b><br>"
             f"workplace population: {wp_demand:,.1f}<br>"
-            f"parking equivalent: {park_eq:,.1f}<br>"
+            f"retail parking spaces: {retail_sp:,.1f}<br>"
             f"business demand: {biz:,.1f}"
         ),
     ).add_to(biz_fg)

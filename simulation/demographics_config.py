@@ -47,7 +47,8 @@ WORKPLACE_DATA_FILE  = "data/census-2021-apwp001.xlsx"
 POPULATION_CACHE     = "data/cache_nisra_population.csv"
 POI_CACHE            = "data/cache_osm_pois.geojson"
 BUILDING_CACHE       = "data/cache_osm_buildings.geojson"
-PARKING_CACHE        = "data/cache_osm_parking.geojson"
+PARKING_CACHE        = "data/cache_osm_parking.geojson"          # legacy per-CENTRE Overpass cache (unused)
+PARKING_ISLAND_CACHE = "data/cache_osm_parking_island.geojson"   # island-wide parking (build_parking.py)
 CENSUS_ZONES_FILE    = "data/census_zones.json"
 TUNER_CONFIG_FILE    = "simulation/tuner_config.json"
 NODE_WEIGHTS_FILE    = "simulation/node_weights.json"
@@ -94,6 +95,26 @@ SCHOOL_ENROLL_FALLBACK = {
     "college":          2000,
     "university":       3000,
 }
+
+# ── Parking → retail-spaces estimator ────────────────────────────────────────────
+# Used by simulation/parking_demand.py (shared by build_demographics.py for internal
+# core nodes and build_census_zones.py for external census zones) to turn an OSM
+# parking polygon into an estimate of retail parking *spaces* (a count, not the old
+# "equivalent persons"). The retail demand component's magnitude is then carried by
+# spaces; K_retail (tuner) absorbs the spaces→trips scale, so these constants only
+# need to be physically sane and jurisdiction-uniform — NOT branched on NI vs RoI.
+#
+# Validation (this session, island-wide OSM): destination car parks converge to
+# ~30 m²/space in BOTH jurisdictions once mis-tagged residential micro-parking is
+# excluded (raw NI 24 / RoI 14.7 was a tagging artefact); public on-street bays run
+# ~13.9 m²/space (parallel parking, the carriageway is the aisle).
+PARKING_M2_PER_SPACE_OFFSTREET = 30.0    # surface lots incl. aisles/landscaping
+PARKING_M2_PER_SPACE_ONSTREET  = 13.0    # parallel on-street bays (no aisle)
+PARKING_GATE_LO = 8.0     # implied m²/space below this ⇒ capacity= tag implausible
+PARKING_GATE_HI = 80.0    # implied m²/space above this ⇒ capacity= tag implausible
+PARKING_EXCLUDE_ACCESS = {"private", "no", "permit"}   # residential/staff, not retail
+PARKING_DECK_TYPES     = {"multi-storey", "underground", "rooftop"}  # capacity > footprint
+PARKING_ONSTREET_TYPES = {"street_side", "lane"}        # denser m²/space than a lot
 
 # ── Map styling ─────────────────────────────────────────────────────────────────
 HIGHWAY_STYLE = {

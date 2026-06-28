@@ -40,7 +40,8 @@ from shapely.ops import unary_union
 import shapely.ops as sops
 
 from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
-from demographics_config import PROJECTED_CRS
+from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE
+from parking_demand import parking_spaces
 from ingest_ni_census import load_ni_census
 from ingest_roi_census import load_roi_census
 
@@ -131,6 +132,7 @@ def weighted_centroid_wgs(geometries, weights):
 # ── Build external node list ─────────────────────────────────────────────────
 
 external_nodes = []
+zone_geom = {}   # external node id → its census polygon (ITM), for parking aggregation
 print("\nBuilding external node list …")
 
 # 1. Intermediate external nodes (SDZ/ED): in broken outer zones with no core SAs
@@ -147,6 +149,7 @@ for _, row in sdz_external.iterrows():
     wp  = child_sa["workplace_pop"].sum()
     lat, lon, utm_x, utm_y = weighted_centroid_wgs(
         child_sa.geometry.values, child_sa["population"].values)
+    zone_geom[int_code] = child_sa.geometry.unary_union
     external_nodes.append({
         "id":             int_code,
         "level":          row["level"],
@@ -172,6 +175,7 @@ n_int_start = len(external_nodes)
 for _, row in orphan_sa.iterrows():
     cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
     lon, lat = to_wgs.transform(cx, cy)
+    zone_geom[row["area_code"]] = row.geometry
     external_nodes.append({
         "id":             row["area_code"],
         "level":          row["level"],
@@ -203,6 +207,7 @@ for _, row in dea_external.iterrows():
     else:
         lat, lon, utm_x, utm_y = weighted_centroid_wgs(
             child_sa.geometry.values, child_sa["population"].values)
+    zone_geom[outer_code] = (child_sa.geometry.unary_union if len(child_sa) else row.geometry)
     external_nodes.append({
         "id":             outer_code,
         "level":          row["level"],
@@ -217,6 +222,57 @@ print(f"  {len(external_nodes) - n_outer_start} outer external nodes (DEA/LEA)")
 print(f"  {len(external_nodes)} external nodes total")
 print(f"  Total external pop: {sum(n['population'] for n in external_nodes):,}")
 print(f"  Total external wp:  {sum(n['workplace_pop'] for n in external_nodes):,}")
+
+# ── External retail demand: estimated parking spaces per zone ─────────────────
+# Sum parking_demand.parking_spaces over every parking polygon whose centroid falls
+# inside each external zone's census polygon — the SAME estimator build_demographics.py
+# applies to internal core nodes, so internal and external retail are on one scale
+# (this is what lets ext_biz_scale be removed). Island-wide parking from build_parking.py.
+print("\nExternal retail demand (parking spaces per zone) …")
+if not os.path.exists(PARKING_ISLAND_CACHE):
+    raise SystemExit(f"ERROR: {PARKING_ISLAND_CACHE} not found. "
+                     f"Run: python3 simulation/build_parking.py")
+_park = gpd.read_file(PARKING_ISLAND_CACHE).to_crs(PROJECTED_CRS)
+_park = _park[_park.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+_park_tag_cols = [c for c in _park.columns if c != "geometry"]
+_park["spaces"] = [
+    parking_spaces({c: r[c] for c in _park_tag_cols}, g.area)
+    for r, g in zip(_park.to_dict("records"), _park.geometry)
+]
+_park = _park[_park["spaces"] > 0].copy()
+_park["geometry"] = _park.geometry.centroid          # assign lots by centroid
+
+# Spatial join parking centroids → zone polygons, sum spaces per zone.
+_zones_gdf = gpd.GeoDataFrame(
+    {"id": list(zone_geom.keys())},
+    geometry=list(zone_geom.values()), crs=PROJECTED_CRS)
+_joined = gpd.sjoin(_park[["spaces", "geometry"]], _zones_gdf,
+                    how="inner", predicate="within")
+_spaces_by_zone = _joined.groupby("id")["spaces"].sum().to_dict()
+
+# Workplace-derived fallback for zones with no mapped parking: scale the zone's
+# workplace_pop by the island-wide median spaces-per-workplace ratio (over matched
+# zones). Loud-logged, never a silent 0 (some small zones genuinely lack OSM parking).
+_ratios = [_spaces_by_zone[n["id"]] / n["workplace_pop"]
+           for n in external_nodes
+           if _spaces_by_zone.get(n["id"], 0) > 0 and n["workplace_pop"] > 0]
+_fallback_ratio = float(np.median(_ratios)) if _ratios else 0.0
+_fallback_ids = []
+for n in external_nodes:
+    sp = _spaces_by_zone.get(n["id"], 0.0)
+    if sp <= 0:
+        sp = n["workplace_pop"] * _fallback_ratio
+        if sp > 0:
+            _fallback_ids.append(n["id"])
+    n["retail_spaces"] = round(float(sp), 1)
+
+print(f"  {len(_park)} retail lots, {sum(_spaces_by_zone.values()):,.0f} spaces "
+      f"matched into {len(_spaces_by_zone)} zones")
+print(f"  median spaces/workplace ratio = {_fallback_ratio:.3f}")
+if _fallback_ids:
+    print(f"  {len(_fallback_ids)} zones had NO mapped parking → workplace-derived "
+          f"fallback: {', '.join(map(str, _fallback_ids))}")
+print(f"  Total external retail spaces: {sum(n['retail_spaces'] for n in external_nodes):,.0f}")
 
 # ── Serialise core polygon to WGS84 ─────────────────────────────────────────
 
