@@ -40,7 +40,7 @@ from shapely.ops import unary_union
 import shapely.ops as sops
 
 from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
-from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE
+from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE, SCHOOL_ISLAND_CACHE
 from parking_demand import parking_spaces
 from ingest_ni_census import load_ni_census
 from ingest_roi_census import load_roi_census
@@ -273,6 +273,27 @@ if _fallback_ids:
     print(f"  {len(_fallback_ids)} zones had NO mapped parking → workplace-derived "
           f"fallback: {', '.join(map(str, _fallback_ids))}")
 print(f"  Total external retail spaces: {sum(n['retail_spaces'] for n in external_nodes):,.0f}")
+
+# ── External school demand: enrolment per zone ────────────────────────────────
+# Sum the per-POI enrolment from the island school cache (build_schools.py — already
+# primary/secondary jurisdiction-aware, curated universities, etc.) over each external
+# zone's census polygon. Same estimator as internal core nodes → ext_school_per_pop
+# removed. Zones with no mapped school get 0 (a village with no school genuinely
+# attracts no school trips; its school-age population's trips distribute to other zones).
+print("\nExternal school demand (enrolment per zone) …")
+if not os.path.exists(SCHOOL_ISLAND_CACHE):
+    raise SystemExit(f"ERROR: {SCHOOL_ISLAND_CACHE} not found. "
+                     f"Run: python3 simulation/build_schools.py")
+_sch = gpd.read_file(SCHOOL_ISLAND_CACHE).to_crs(PROJECTED_CRS)
+_sch["geometry"] = _sch.geometry.centroid
+_sjoin = gpd.sjoin(_sch[["enrolment", "geometry"]], _zones_gdf, how="inner", predicate="within")
+_school_by_zone = _sjoin.groupby("id")["enrolment"].sum().to_dict()
+for n in external_nodes:
+    n["school_demand"] = round(float(_school_by_zone.get(n["id"], 0.0)), 1)
+print(f"  {len(_sch)} school POIs, {sum(_school_by_zone.values()):,.0f} pupils "
+      f"matched into {len(_school_by_zone)} zones")
+print(f"  {sum(1 for n in external_nodes if n['school_demand'] == 0)} zones with no mapped school (school_demand=0)")
+print(f"  Total external school demand: {sum(n['school_demand'] for n in external_nodes):,.0f} pupils")
 
 # ── Serialise core polygon to WGS84 ─────────────────────────────────────────
 

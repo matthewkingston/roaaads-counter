@@ -24,13 +24,13 @@ import odf.opendocument, odf.table, odf.text
 
 from demographics_config import (
     CENTRE, OUT_DIR, GRAPH_PATH, POI_CACHE, PARKING_CACHE,
-    CENSUS_ZONES_FILE, EXCLUDE_AMENITY, SCHOOL_ENROLL_FALLBACK,
+    CENSUS_ZONES_FILE, EXCLUDE_AMENITY, SCHOOL_ISLAND_CACHE,
     HIGHWAY_STYLE, ROAD_TYPE_LABELS, PROJECTED_CRS,
 )
 from model import walking_session_residual, EXCLUDE_LINKS
 import branca.colormap as bcm
 
-_SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
+_SCHOOL_TAGS = {"school", "college", "university", "kindergarten"}
 
 argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -337,40 +337,31 @@ if _poi_wgs is not None:
     poi_fg.add_to(m)
     print(f"Added businesses layer ({len(_biz_pois_wgs)} non-school POIs: orange=amenity, green=shop, blue=office)")
 
-    # ── Schools — school POIs with enrollment, OFF by default ─────────────────
-    if len(_school_pois_wgs) > 0:
-        school_poi_fg = folium.FeatureGroup(name="Schools", show=False)
-        for _, _row in _school_pois_wgs.iterrows():
-            _amenity = _row.get("amenity") if "amenity" in _school_pois_wgs.columns else None
-            _name = ""
-            if "name" in _school_pois_wgs.columns and pd.notna(_row.get("name")):
-                _name = str(_row["name"])
-            # Resolve enrollment: OSM capacity if present and numeric, else fallback
-            _cap_raw = _row.get("capacity") if "capacity" in _school_pois_wgs.columns else None
-            if pd.notna(_cap_raw):
-                try:
-                    _enroll = int(float(_cap_raw))
-                    _enroll_src = "OSM capacity"
-                except (ValueError, TypeError):
-                    _enroll = SCHOOL_ENROLL_FALLBACK.get(_amenity, 300)
-                    _enroll_src = "fallback"
-            else:
-                _enroll = SCHOOL_ENROLL_FALLBACK.get(_amenity, 300)
-                _enroll_src = "fallback"
-            _label = _name or str(_amenity or "school")
-            _tip = (
-                f"<b>{_label}</b><br>"
-                f"type: {_amenity}<br>"
-                f"enrollment: {_enroll} pupils ({_enroll_src})"
-            )
-            folium.CircleMarker(
-                location=[_row.geometry.y, _row.geometry.x],
-                radius=7,
-                color="#1a7a3c", fill=True, fill_color="#2ecc71", fill_opacity=0.85, weight=1.5,
-                tooltip=folium.Tooltip(_tip),
-            ).add_to(school_poi_fg)
-        school_poi_fg.add_to(m)
-        print(f"Added schools layer ({len(_school_pois_wgs)} schools)")
+    # ── Schools — markers from the island school cache (per-POI enrolment), OFF by default ──
+    # Uses the same enrolment build_schools.py / school_demand.py compute for the model,
+    # clipped to the core polygon, so the map matches node_school_demand.
+    if os.path.exists(SCHOOL_ISLAND_CACHE) and _census_zones is not None:
+        from shapely.geometry import Polygon as _Poly
+        _core_wgs = _Poly(_census_zones["core_polygon"])
+        _sch = gpd.read_file(SCHOOL_ISLAND_CACHE)
+        _sch = _sch[_sch.geometry.within(_core_wgs)].copy()
+        if len(_sch) > 0:
+            school_poi_fg = folium.FeatureGroup(name="Schools", show=False)
+            for _, _row in _sch.iterrows():
+                _amenity = _row.get("amenity")
+                _name = str(_row["name"]) if pd.notna(_row.get("name")) else ""
+                _enroll = float(_row.get("enrolment") or 0.0)
+                _label = _name or str(_amenity or "school")
+                _tip = (f"<b>{_label}</b><br>type: {_amenity}<br>"
+                        f"enrolment: {_enroll:,.0f} pupils")
+                folium.CircleMarker(
+                    location=[_row.geometry.y, _row.geometry.x],
+                    radius=7,
+                    color="#1a7a3c", fill=True, fill_color="#2ecc71", fill_opacity=0.85, weight=1.5,
+                    tooltip=folium.Tooltip(_tip),
+                ).add_to(school_poi_fg)
+            school_poi_fg.add_to(m)
+            print(f"Added schools layer ({len(_sch)} schools from island cache)")
 
 # ── Optional flow layers (loaded from newtownards_flows.json if it exists) ────
 _flows_path = f"{OUT_DIR}/newtownards_flows.json"

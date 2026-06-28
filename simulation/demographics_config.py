@@ -49,6 +49,7 @@ POI_CACHE            = "data/cache_osm_pois.geojson"
 BUILDING_CACHE       = "data/cache_osm_buildings.geojson"
 PARKING_CACHE        = "data/cache_osm_parking.geojson"          # legacy per-CENTRE Overpass cache (unused)
 PARKING_ISLAND_CACHE = "data/cache_osm_parking_island.geojson"   # island-wide parking (build_parking.py)
+SCHOOL_ISLAND_CACHE  = "data/cache_osm_schools_island.geojson"   # island-wide schools + enrolment (build_schools.py)
 CENSUS_ZONES_FILE    = "data/census_zones.json"
 TUNER_CONFIG_FILE    = "simulation/tuner_config.json"
 NODE_WEIGHTS_FILE    = "simulation/node_weights.json"
@@ -81,19 +82,6 @@ POI_WEIGHTS = {
     # shop tag → weight
     "supermarket":     1.5,
     # any office tag → 2.0 (applied inline; not listed here as the value covers all subtypes)
-}
-
-# Fallback enrollment estimates (pupils/students) for school demand when OSM
-# capacity tag is absent. Used as the control total per school POI — units of
-# node_school_demand are then pupils, making W_SCHOOL interpretable as a
-# trip-production ratio relative to residential population.
-# Sources: DE NI school census 2023/24 (primary ~234, post-primary ~854 per school);
-# FE college and university figures are rough estimates.
-SCHOOL_ENROLL_FALLBACK = {
-    "school":           300,   # generic tag — may be primary or secondary; use midpoint
-    "secondary_school": 900,
-    "college":          2000,
-    "university":       3000,
 }
 
 # ── Parking → retail-spaces estimator ────────────────────────────────────────────

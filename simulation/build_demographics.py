@@ -30,12 +30,10 @@ import pyproj
 from demographics_config import (
     CENTRE, OUT_DIR, NETWORK_MARGIN_M, POPULATION_API, DZ_BOUNDARY_FILE,
     GRAPH_PATH, WORKPLACE_DATA_FILE, POPULATION_CACHE, POI_CACHE,
-    BUILDING_CACHE, PARKING_ISLAND_CACHE, CENSUS_ZONES_FILE, TUNER_CONFIG_FILE,
-    EXCLUDE_AMENITY, POI_WEIGHTS, SCHOOL_ENROLL_FALLBACK, PROJECTED_CRS,
+    BUILDING_CACHE, PARKING_ISLAND_CACHE, SCHOOL_ISLAND_CACHE, CENSUS_ZONES_FILE,
+    EXCLUDE_AMENITY, POI_WEIGHTS, PROJECTED_CRS,
 )
 from parking_demand import parking_spaces
-
-_SCHOOL_TAGS = set(SCHOOL_ENROLL_FALLBACK)
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 _ap = argparse.ArgumentParser(
@@ -64,17 +62,9 @@ if os.path.exists(CENSUS_ZONES_FILE):
 if _census_zones is not None:
     RADIUS_M = round(_census_zones["max_core_vertex_dist_m"]) + NETWORK_MARGIN_M
 
-_ext_school_per_pop = None
-if os.path.exists(TUNER_CONFIG_FILE):
-    with open(TUNER_CONFIG_FILE) as _f:
-        _tc = json.load(_f)
-    _ext_school_per_pop = _tc.get("ext_school_per_pop")
-
-if _ext_school_per_pop is None:
-    print("ERROR: 'ext_school_per_pop' missing from tuner_config.json.")
-    print("  Run: python3 simulation/compute_ext_school_scale.py")
-    print("  Then add the printed value to tuner_config.json.")
-    sys.exit(1)
+# External school demand is now measured per zone (retail_spaces-style) from the island
+# school cache and written into census_zones.json by build_census_zones.py — the old
+# population × ext_school_per_pop approximation is removed (2026-06-28).
 
 # ── Fast path: --zones-only ────────────────────────────────────────────────────
 # Patches only external-zone entries in node_weights.json. Skips all internal
@@ -98,7 +88,7 @@ if args.zones_only:
         w["node_retail_spaces"][str(nid)]   = _retail
         w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) + _retail
         if "node_school_demand" in w:
-            w["node_school_demand"][str(nid)] = float(ext["population"]) * _ext_school_per_pop
+            w["node_school_demand"][str(nid)] = float(ext.get("school_demand", 0.0))
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
               f"retail_sp={_retail:>8,.0f}  "
@@ -558,47 +548,44 @@ else:
     print(f"  {len(_park_utm)} parking polygons in core → "
           f"{_n_kept} retail lots, {_total_spaces:.0f} estimated spaces")
 
-    # ── School demand layer ───────────────────────────────────────────────────────
-    # Snap school POIs to road edges; accumulate enrollment (pupils) per node.
-    # Enrollment = OSM capacity tag where present, else type-based fallback from
-    # SCHOOL_ENROLL_FALLBACK.  Units of node_school_demand are pupils, so W_SCHOOL
-    # is interpretable as a trip-production ratio relative to residential population.
+    # ── School demand layer (estimated enrolment) ─────────────────────────────────
+    # Per-POI enrolment — primary/secondary (jurisdiction-aware sourced averages),
+    # curated/sourced universities split across their POIs, kindergarten, SEN — is
+    # precomputed island-wide by build_schools.py (school_demand.assign_enrolments).
+    # Here we clip to the core polygon and snap each school's enrolment to a road edge.
+
+    if not os.path.exists(SCHOOL_ISLAND_CACHE):
+        print(f"ERROR: {SCHOOL_ISLAND_CACHE} not found. "
+              f"Run: python3 simulation/build_schools.py")
+        sys.exit(1)
+    print(f"Loading island schools from cache ({SCHOOL_ISLAND_CACHE}) …")
+    _sch_utm = gpd.read_file(SCHOOL_ISLAND_CACHE).to_crs(PROJECTED_CRS).copy()
+    _sch_utm["centroid_geom"] = _sch_utm.geometry.centroid
+    _sch_utm = _sch_utm[_sch_utm["centroid_geom"].within(core_poly_utm)].copy()
 
     node_school_demand = {}
     _n_school = 0
-    _n_capacity_used = 0
-    for _, _poi_row in pois_utm.iterrows():
-        _amenity = _poi_row.get("amenity") if "amenity" in pois_utm.columns else None
-        if not (pd.notna(_amenity) and _amenity in _SCHOOL_TAGS):
+    for _, _row in _sch_utm.iterrows():
+        _enrollment = float(_row["enrolment"])
+        if _enrollment <= 0:
             continue
-        # Use OSM capacity if present and numeric, else fall back to type estimate
-        _cap_raw = _poi_row.get("capacity") if "capacity" in pois_utm.columns else None
-        if pd.notna(_cap_raw):
-            try:
-                _enrollment = float(_cap_raw)
-                _n_capacity_used += 1
-            except (ValueError, TypeError):
-                _enrollment = SCHOOL_ENROLL_FALLBACK[_amenity]
-        else:
-            _enrollment = SCHOOL_ENROLL_FALLBACK[_amenity]
-        _eidx = _edge_strtree.nearest(_poi_row.geometry)
+        _pt = _row["centroid_geom"]
+        _eidx = _edge_strtree.nearest(_pt)
         if _eidx in _ghost_junction:
             _junc = _ghost_junction[_eidx]
             node_school_demand[_junc] = node_school_demand.get(_junc, 0.0) + _enrollment
         else:
             _eu, _ev = _edge_keys[_eidx]
-            _t = _edge_geom_list[_eidx].project(_poi_row.geometry, normalized=True)
+            _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
             node_school_demand[_eu] = node_school_demand.get(_eu, 0.0) + _enrollment * (1.0 - _t)
             node_school_demand[_ev] = node_school_demand.get(_ev, 0.0) + _enrollment * _t
         _n_school += 1
 
-    # External zone nodes have no school demand (schools are internal features).
-    # Their school_demand entries will be set to 0 in the external node weight block below.
-
+    # External zone nodes get their school demand from census_zones.json (set in the
+    # external node weight block below); internal core schools are snapped above.
     _tot_sch = sum(node_school_demand.values())
-    print(f"  {_n_school} school POIs → {len(node_school_demand)} nodes"
-          f"  total enrollment={_tot_sch:.0f} pupils"
-          f"  ({_n_capacity_used} from OSM capacity, {_n_school - _n_capacity_used} from fallback)")
+    print(f"  {_n_school} school POIs in core → {len(node_school_demand)} nodes  "
+          f"total enrolment={_tot_sch:.0f} pupils")
 
     # ── Auto-detect boundary nodes from core polygon ──────────────────────────
     # Uses the raw (pre-consolidation) graph for OSM node IDs (OSRM-compatible).
@@ -650,7 +637,7 @@ else:
             node_population[nid]      = float(ext["population"])
             node_retail_spaces[nid]   = _retail
             node_business_demand[nid] = float(ext["workplace_pop"]) + _retail
-            node_school_demand[nid]   = float(ext["population"]) * _ext_school_per_pop
+            node_school_demand[nid]   = float(ext.get("school_demand", 0.0))
         if _missing_retail:
             print(f"  WARNING: {_missing_retail}/{len(ext_nodes)} external nodes lack "
                   f"'retail_spaces' — re-run build_parking.py then build_census_zones.py. "
