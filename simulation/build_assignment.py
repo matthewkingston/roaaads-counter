@@ -52,6 +52,7 @@ _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_population      = {_pnid(k): v for k, v in weights["node_population"].items()}
 node_business_demand = {_pnid(k): v for k, v in weights["node_business_demand"].items()}
 node_school_demand   = {_pnid(k): v for k, v in weights.get("node_school_demand", {}).items()}
+node_school_producers = {_pnid(k): v for k, v in weights.get("node_school_producers", {}).items()}
 
 THETA          = None
 K_res          = None
@@ -145,6 +146,9 @@ else:
 w_pop    = np.array([node_population.get(nid, 0)      for nid in node_ids_arr], dtype=np.float64)
 w_biz    = np.array([node_business_demand.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
 w_school = np.array([node_school_demand.get(nid, 0)   for nid in node_ids_arr], dtype=np.float64)
+w_school_prod = np.array([node_school_producers.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
+if w_school_prod.sum() == 0:
+    w_school_prod = None   # fall back to population producer (legacy weights)
 print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
 
 N_links  = len(link_u)
@@ -166,7 +170,8 @@ if _use_2c or _use_3c:
         od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, w_school,
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
         P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_3c,
-        self_src=self_src, self_dist=self_dist, self_w=self_w)
+        self_src=self_src, self_dist=self_dist, self_w=self_w,
+        w_school_prod=w_school_prod)
     raw_res = scatter_od_to_links(t_res, pair_idx, link_idx, link_weight, N_links)
     raw_biz = scatter_od_to_links(t_biz, pair_idx, link_idx, link_weight, N_links)
     raw_sch = (scatter_od_to_links(t_sch, pair_idx, link_idx, link_weight, N_links)

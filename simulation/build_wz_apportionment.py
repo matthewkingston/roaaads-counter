@@ -16,7 +16,7 @@ data/ireland_data/cache_sa_workplace.csv   (sa_code, workplace_pop)
 Run once.  Re-run only when:
   - WZ boundaries change  (Workplace_Zones_ITM.shp)
   - SA boundaries change  (Small_Area_National_Statistical_Boundaries_2022_*.geojson)
-  - WZ SAPS headcounts change  (T1_T column already in the shapefile)
+  - WZ SAPS headcounts change  (T11_C1 "total workers" column in the shapefile)
   - OSM POI data is significantly stale
 
 Caches
@@ -192,10 +192,14 @@ def main():
 
     # ── Load WZ shapefile (already in EPSG:2157) ─────────────────────────────
     print(f"Loading WZ boundaries ({WZ_FILE}) …")
-    wz = gpd.read_file(WZ_FILE)[["WORKPLACE", "T1_T", "geometry"]]
+    # T11_C1 = "Total workers in workplace zone" (place-of-work jobs, ≈ RoI workforce).
+    # NOT T1_T, which is the WZ's "(Age) Total" = total daytime/resident population (≈ RoI
+    # population, ~2.4× the workforce). T11_C1 is the workplace attractor, matching NI's
+    # APWP001 place-of-work count.
+    wz = gpd.read_file(WZ_FILE)[["WORKPLACE", "T11_C1", "geometry"]]
     wz = wz.to_crs(PROJECTED_CRS)   # already ITM; this is a no-op but defensive
-    wz_total = wz["T1_T"].sum()
-    print(f"  {len(wz):,} WZs  |  total T1_T: {wz_total:,.0f}")
+    wz_total = wz["T11_C1"].sum()
+    print(f"  {len(wz):,} WZs  |  total workers (T11_C1): {wz_total:,.0f}")
 
     # ── Load SA boundaries (only the code + geometry needed for overlay) ──────
     sa_files = glob.glob(SA_BOUNDARY_GLOB)
@@ -253,7 +257,7 @@ def main():
     )
 
     # ── Apportion and aggregate ────────────────────────────────────────────────
-    pieces["sa_wp_contrib"] = pieces["T1_T"] * pieces["split_w"]
+    pieces["sa_wp_contrib"] = pieces["T11_C1"] * pieces["split_w"]
     sa_workplace = (
         pieces.groupby("SA_PUB2022")["sa_wp_contrib"]
         .sum()
@@ -263,7 +267,7 @@ def main():
 
     apportioned_total = sa_workplace["workplace_pop"].sum()
     print(f"\nConservation check:")
-    print(f"  WZ total T1_T:           {wz_total:>12,.0f}")
+    print(f"  WZ total workers (T11_C1): {wz_total:>12,.0f}")
     print(f"  SA apportioned total:     {apportioned_total:>12,.0f}")
     diff = abs(wz_total - apportioned_total)
     if diff > 1.0:

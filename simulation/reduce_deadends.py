@@ -107,6 +107,8 @@ def main():
     biz = nw["node_business_demand"]
     sch = nw["node_school_demand"]
     park = nw.get("node_retail_spaces", {})
+    cprod = nw.get("node_commute_producers", {})
+    sprod = nw.get("node_school_producers", {})
 
     def w(d, n):
         return float(d.get(str(n), 0.0))
@@ -221,6 +223,8 @@ def main():
               for k, v in nw.items()}
     pop_o, biz_o, sch_o, park_o = (nw_out["node_population"], nw_out["node_business_demand"],
                                    nw_out["node_school_demand"], nw_out.get("node_retail_spaces", {}))
+    cprod_o = nw_out.get("node_commute_producers", {})
+    sprod_o = nw_out.get("node_school_producers", {})
     internal = set(int(x) for x in nw_out.get("internal_node_ids", []))
 
     deadend_map = {}
@@ -244,12 +248,14 @@ def main():
         absorbed_orig = []
         rbiz_sum = rsch_sum = rpark_sum = 0.0
         rpop_sum = 0.0
+        rcprod_sum = rsprod_sum = 0.0
         for n in region_nodes:
             o = G.nodes[n].get("osmid_original", str(n))
             absorbed_orig.append(str(o))
             rpop_sum += w(pop, n); rbiz_sum += w(biz, n)
             rsch_sum += w(sch, n); rpark_sum += w(park, n)
-            for d in (pop_o, biz_o, sch_o, park_o):
+            rcprod_sum += w(cprod, n); rsprod_sum += w(sprod, n)
+            for d in (pop_o, biz_o, sch_o, park_o, cprod_o, sprod_o):
                 d.pop(str(n), None)
             internal.discard(n)
             G.remove_node(n)
@@ -263,6 +269,8 @@ def main():
         sch_o[str(S)] = rsch_sum
         if park_o is not None:
             park_o[str(S)] = rpark_sum
+        cprod_o[str(S)] = rcprod_sum
+        sprod_o[str(S)] = rsprod_sum
 
         # synthetic directed links E<->S reproducing t_fwd / t_rev after osmnx re-augment
         def synth_len(t):

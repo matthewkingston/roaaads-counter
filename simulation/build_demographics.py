@@ -34,6 +34,7 @@ from demographics_config import (
     EXCLUDE_AMENITY, POI_WEIGHTS, PROJECTED_CRS,
 )
 from parking_demand import parking_spaces
+from census_supply import load_supply
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 _ap = argparse.ArgumentParser(
@@ -89,6 +90,8 @@ if args.zones_only:
         w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) + _retail
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = float(ext.get("school_demand", 0.0))
+        w.setdefault("node_commute_producers", {})[str(nid)] = float(ext.get("commute_producers", 0.0))
+        w.setdefault("node_school_producers", {})[str(nid)]  = float(ext.get("school_producers", 0.0))
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
               f"retail_sp={_retail:>8,.0f}  "
@@ -495,6 +498,24 @@ else:
     total_biz = sum(node_business_demand.values())
     print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
 
+    # ── Trip producers (commute, school) — census per-DZ counts distributed to nodes ──
+    # Residents → distribute each DZ's producer totals across its nodes by population share.
+    # Stored as separate layers; the school component uses node_school_producers as its
+    # producing weight, node_commute_producers feeds the commute component (business split).
+    _supply = load_supply()
+    node_commute_producers = {}
+    node_school_producers  = {}
+    for dz_code, nodes_in_dz in dz_to_nodes.items():
+        s = _supply.get(dz_code, {"commute": 0.0, "school": 0.0})
+        pops = {n: node_population.get(n, 0.0) for n in nodes_in_dz}
+        tot = sum(pops.values())
+        for n in nodes_in_dz:
+            frac = (pops[n] / tot) if tot > 0 else (1.0 / len(nodes_in_dz))
+            node_commute_producers[n] = node_commute_producers.get(n, 0.0) + s["commute"] * frac
+            node_school_producers[n]  = node_school_producers.get(n, 0.0) + s["school"] * frac
+    print(f"  internal producers: commute {sum(node_commute_producers.values()):.0f}, "
+          f"school {sum(node_school_producers.values()):.0f}")
+
     # ── Car-park retail demand (estimated parking spaces) ─────────────────────────
     # OSM parking polygons proxy retail/customer vehicle-trip attraction. Each lot is
     # turned into an estimate of retail parking *spaces* by parking_demand.parking_spaces
@@ -638,6 +659,8 @@ else:
             node_retail_spaces[nid]   = _retail
             node_business_demand[nid] = float(ext["workplace_pop"]) + _retail
             node_school_demand[nid]   = float(ext.get("school_demand", 0.0))
+            node_commute_producers[nid] = float(ext.get("commute_producers", 0.0))
+            node_school_producers[nid]  = float(ext.get("school_producers", 0.0))
         if _missing_retail:
             print(f"  WARNING: {_missing_retail}/{len(ext_nodes)} external nodes lack "
                   f"'retail_spaces' — re-run build_parking.py then build_census_zones.py. "
@@ -653,6 +676,8 @@ else:
             "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
+            "node_commute_producers": {str(k): v for k, v in node_commute_producers.items()},
+            "node_school_producers":  {str(k): v for k, v in node_school_producers.items()},
             "boundary_node_ids":      sorted(_boundary_ids),
             "boundary_node_ids_cons": sorted(_boundary_ids_cons),
             "internal_node_ids":      sorted(_internal_ids),

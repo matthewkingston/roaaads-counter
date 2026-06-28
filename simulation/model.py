@@ -313,7 +313,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_pop, w_biz, w_school,
                          W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
                          P_school=None, ALPHA_school=None, with_school=False,
-                         self_src=None, self_dist=None, self_w=None):
+                         self_src=None, self_dist=None, self_w=None,
+                         w_school_prod=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
     Returns (t_res, t_biz, t_sch), each a float64 array parallel to od_src/od_dst.
@@ -380,9 +381,12 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         sch_s = w_school[src]; sch_d = w_school[dst]
         iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop,    F_sch_self)   # school-cross leg school→pop: attraction = pop
         iD_sch_sch = _inv_denom(sch_d, F_sch, w_school, F_sch_self)   # school-cross leg pop→school: attraction = school
+        # Home→school producer = resident students (node_school_producers) when supplied,
+        # else falls back to population (legacy behaviour).
+        schprod_s = (w_school_prod[src] if w_school_prod is not None else pop_s)
         t_sch = F_sch * (
-            pop_s * sch_d * iD_sch_sch[src]       # pop i → school j  (attraction school)
-            + sch_s * pop_d * iD_sch_pop[src]     # school i → pop j  (attraction pop)
+            schprod_s * sch_d * iD_sch_sch[src]   # students i → school j  (attraction school)
+            + sch_s * pop_d * iD_sch_pop[src]     # school i → pop j        (attraction pop)
         )
     else:
         t_sch = np.zeros(len(src), dtype=np.float64)

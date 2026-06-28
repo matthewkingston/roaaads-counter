@@ -53,6 +53,9 @@ def load_roi_census():
     print(f"  {len(sa)} SAs loaded")
 
     # ── Population (SAPS 2022) ───────────────────────────────────────────────
+    # (SAPS T1_1AGETT *column* sums to ~2× the national population because the file
+    # carries a "State" aggregate row equal to the sum of all SAs; that row has no
+    # SA_PUB2022 match, so the per-SA join below yields the correct 1× population.)
     print("RoI: loading SA population (SAPS 2022) …")
     saps = pd.read_csv(SAPS_CSV, usecols=["GEOGID", "T1_1AGETT"])
     # GEOGID is int64 without leading zero; SA_PUB2022 is a 9-digit string.

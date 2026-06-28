@@ -192,11 +192,15 @@ _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_pop_full    = {_pnid(k): v for k, v in wdata["node_population"].items()}
 node_biz_full    = {_pnid(k): v for k, v in wdata["node_business_demand"].items()}
 node_school_full = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
+node_school_prod_full = {_pnid(k): v for k, v in wdata.get("node_school_producers", {}).items()}
 
 # Precomputed base weight arrays (from census + OSM demand; external zones fixed)
 base_w_pop    = np.array([node_pop_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_biz    = np.array([node_biz_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_school = np.array([node_school_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+base_w_school_prod = np.array([node_school_prod_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+if base_w_school_prod.sum() == 0:
+    base_w_school_prod = None   # fall back to population producer (legacy weights)
 
 _has_school = base_w_school.sum() > 0
 if not _has_school:
@@ -610,7 +614,8 @@ def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
         od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, base_w_school,
         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
         P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school,
-        self_src=_self_src, self_dist=_self_dist, self_w=_self_w)
+        self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
+        w_school_prod=base_w_school_prod)
     # Scatter only onto observed links (compact space) — see the observed-link
     # scatter-restriction block above. flow_* are indexed by COMPACT link id
     # (0.._N_obs_links-1); model_obs_3c reads them via the compact remap.
