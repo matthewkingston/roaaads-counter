@@ -47,6 +47,7 @@ sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
                    constrained_od_flows, scatter_od_to_links, load_self_terms,
+                   load_generation_rates, compute_generation_scales,
                    print_chi2_table, assert_paths_cache_fresh,
                    format_slot_time, nice_official)
 
@@ -213,6 +214,13 @@ if base_w_school_prod.sum() == 0:
 _has_school = base_w_school.sum() > 0
 if not _has_school:
     print("  Warning: no node_school_demand in weights — school component disabled")
+
+# Generation pinning: per-leg producer scales (NTS0409a vehicle-driver trips/day) so
+# each K_c should land at ≈ 1.0.  Island per-capita anchors are summed from wdata (the
+# external nodes tile the whole island).  Absent rates file ⇒ None ⇒ unpinned (legacy).
+_gen_rates = load_generation_rates()
+_GEN_SCALE = (compute_generation_scales(wdata, _gen_rates, verbose=True)
+              if _gen_rates is not None else None)
 
 # ── Load street names from consolidated GraphML (sequential node IDs) ─────────
 
@@ -631,7 +639,8 @@ def run_assignment(P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_ret
         P_commute, ALPHA_commute, P_retail, ALPHA_retail,
         P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
-        w_commute_prod=base_w_commute_prod, w_school_prod=base_w_school_prod)
+        w_commute_prod=base_w_commute_prod, w_school_prod=base_w_school_prod,
+        gen_scale=_GEN_SCALE)
     # Scatter only onto observed links (compact space) — see the observed-link
     # scatter-restriction block above. flow_* are indexed by COMPACT link id
     # (0.._N_obs_links-1); model_obs_4c reads them via the compact remap.

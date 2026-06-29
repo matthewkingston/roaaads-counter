@@ -19,6 +19,7 @@ from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
                    gravity_assign, constrained_od_flows, scatter_od_to_links,
                    load_self_terms, aadt_weights,
+                   load_generation_rates, compute_generation_scales,
                    site_flow, compute_chi2, print_chi2_table,
                    assert_paths_cache_fresh)
 
@@ -161,6 +162,13 @@ if w_school_prod.sum() == 0:
 print(f"  {len(node_ids_arr)} nodes  pop {w_pop.sum():,.0f}  workplace {w_workplace.sum():,.0f}"
       f"  retail {w_retail.sum():,.0f}")
 
+# Generation pinning: per-leg producer scales (NTS0409a vehicle-driver trips/day) so the
+# tuned K_c are interpreted against ≈ 1.0.  Island anchors summed from the weights dict.
+# Absent rates file ⇒ None ⇒ unpinned (legacy behaviour).
+_gen_rates = load_generation_rates()
+_GEN_SCALE = (compute_generation_scales(weights, _gen_rates, verbose=True)
+              if _gen_rates is not None else None)
+
 N_links  = len(link_u)
 N_nodes  = len(node_ids_arr)
 # External intra-zonal self-term (denominator-only; from build_intra_times.py).
@@ -183,7 +191,8 @@ if _use_4c:
         P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
         P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_school,
         self_src=self_src, self_dist=self_dist, self_w=self_w,
-        w_commute_prod=w_commute_prod, w_school_prod=w_school_prod)
+        w_commute_prod=w_commute_prod, w_school_prod=w_school_prod,
+        gen_scale=_GEN_SCALE)
     raw_res     = scatter_od_to_links(t_res,     pair_idx, link_idx, link_weight, N_links)
     raw_commute = scatter_od_to_links(t_commute, pair_idx, link_idx, link_weight, N_links)
     raw_retail  = scatter_od_to_links(t_retail,  pair_idx, link_idx, link_weight, N_links)

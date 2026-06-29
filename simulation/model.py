@@ -49,6 +49,7 @@ TUNED_PARAMS    = "simulation/tuned_params.json"
 LINK_AADT       = "data/link_aadt.json"
 OFFICIAL_HOURLY = "data/official_hourly.json"
 INTRA_TIMES     = "data/external_intra_times.json"
+GENERATION_RATES = "analysis/generation_rates.json"
 
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 
@@ -315,7 +316,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          P_commute, ALPHA_commute, P_retail, ALPHA_retail,
                          P_school=None, ALPHA_school=None, with_school=False,
                          self_src=None, self_dist=None, self_w=None,
-                         w_commute_prod=None, w_school_prod=None):
+                         w_commute_prod=None, w_school_prod=None,
+                         gen_scale=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
     Returns (t_res, t_commute, t_retail, t_sch), each a float64 array parallel to
@@ -350,6 +352,20 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     """
     src = od_src
     dst = od_dst
+
+    # Per-leg generation scales (vehicle-driver-trips/day pinning, see
+    # compute_generation_scales).  Multiply the PRODUCER term of each leg only —
+    # the same array's attractor use is scale-invariant (cancels in attr_j/D_i) so
+    # the denominators are untouched.  gen_scale=None ⇒ all 1.0 ⇒ exact prior flows.
+    gs = gen_scale or {}
+    gs_res     = gs.get("res",     1.0)
+    gs_com_out = gs.get("com_out", 1.0)
+    gs_com_ret = gs.get("com_ret", 1.0)
+    gs_ret_out = gs.get("ret_out", 1.0)
+    gs_ret_ret = gs.get("ret_ret", 1.0)
+    gs_sch_out = gs.get("sch_out", 1.0)
+    gs_sch_ret = gs.get("sch_ret", 1.0)
+
     F_res = _rational_kernel(od_dist, P,         ALPHA,         BETA)
     F_com = _rational_kernel(od_dist, P_commute, ALPHA_commute, BETA)
     F_ret = _rational_kernel(od_dist, P_retail,  ALPHA_retail,  BETA)
@@ -383,22 +399,22 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     iD_ret_ret  = _inv_denom(ret_d,  F_ret, w_retail,    F_ret_self)   # retail leg home→shop:  attraction = retail
     iD_ret_pop  = _inv_denom(pop_d,  F_ret, w_pop,       F_ret_self)   # retail leg shop→home:  attraction = pop
 
-    # res: pop_i·pop_j·F_res / D^res,pop_i
-    t_res = pop_s * pop_d * F_res * iD_res_pop[src]
+    # res: pop_i·pop_j·F_res / D^res,pop_i  (single leg covers both directions)
+    t_res = gs_res * pop_s * pop_d * F_res * iD_res_pop[src]
 
     # commute: symmetric split, each per-origin-normalised (no weight, no cross term).
     # Home→work producer = resident commuters (node_commute_producers) when supplied,
     # else falls back to population.
     commprod_s = (w_commute_prod[src] if w_commute_prod is not None else pop_s)
     t_commute = F_com * (
-        commprod_s * work_d * iD_com_work[src]   # commuters i → work j  (attraction workplace)
-        + work_s * pop_d * iD_com_pop[src]       # work i → home j        (attraction pop)
+        gs_com_out * commprod_s * work_d * iD_com_work[src]   # commuters i → work j  (attraction workplace)
+        + gs_com_ret * work_s * pop_d * iD_com_pop[src]       # work i → home j        (attraction pop)
     )
 
     # retail: symmetric pop↔retail split, each per-origin-normalised (no weight, no cross term).
     t_retail = F_ret * (
-        pop_s * ret_d * iD_ret_ret[src]          # home i → shop j        (attraction retail)
-        + ret_s * pop_d * iD_ret_pop[src]        # shop i → home j        (attraction pop)
+        gs_ret_out * pop_s * ret_d * iD_ret_ret[src]          # home i → shop j        (attraction retail)
+        + gs_ret_ret * ret_s * pop_d * iD_ret_pop[src]        # shop i → home j        (attraction pop)
     )
 
     if with_school and w_school is not None and w_school.sum() > 0:
@@ -411,13 +427,76 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         # else falls back to population (legacy behaviour).
         schprod_s = (w_school_prod[src] if w_school_prod is not None else pop_s)
         t_sch = F_sch * (
-            schprod_s * sch_d * iD_sch_sch[src]   # students i → school j  (attraction school)
-            + sch_s * pop_d * iD_sch_pop[src]     # school i → pop j        (attraction pop)
+            gs_sch_out * schprod_s * sch_d * iD_sch_sch[src]   # students i → school j  (attraction school)
+            + gs_sch_ret * sch_s * pop_d * iD_sch_pop[src]     # school i → pop j        (attraction pop)
         )
     else:
         t_sch = np.zeros(len(src), dtype=np.float64)
 
     return t_res, t_commute, t_retail, t_sch
+
+
+def load_generation_rates(path=GENERATION_RATES):
+    """Per-component vehicle-driver trips/person/day from analysis/generation_rates.json
+    (written by analysis/derive_generation_rates.py).  Returns {commute,retail,school,res}
+    or None if the file is absent (⇒ caller skips generation pinning, K_c unpinned)."""
+    if not os.path.exists(path):
+        print(f"  [gen-rates] {path} not found — generation NOT pinned (run "
+              f"analysis/derive_generation_rates.py)")
+        return None
+    with open(path) as f:
+        return json.load(f)["rates"]
+
+
+def compute_generation_scales(node_weights, rates, verbose=False):
+    """Per-leg producer-scale coefficients that put each component's production in
+    absolute vehicle-driver trips/day, so the tuned K_c should land at ≈ 1.0.
+
+    node_weights : the loaded node_weights(_reduced).json dict.  The producer layers
+        are summed island-wide (the external census nodes tile the whole island), so
+        the per-capita anchors recompute automatically for any CENTRE.
+    rates        : {commute,retail,school,res} per-person/day (load_generation_rates()).
+
+    Returns the gen_scale dict consumed by constrained_od_flows:
+        {res, com_out, com_ret, ret_out, ret_ret, sch_out, sch_ret}.
+    Two-leg directions carry ρ_c/2; res is single-leg (full ρ_res, both directions are
+    separate OD pairs).  Per-producer rate r = (ρ_c·share)/k with island anchor
+    k = Σ(producer layer)/Σ(population) over all nodes (k=1 when producer = population).
+    """
+    def _sum(layer):
+        return float(sum(node_weights.get(layer, {}).values()))
+
+    pop_tot = _sum("node_population")
+    if pop_tot <= 0:
+        raise ValueError("compute_generation_scales: Σ node_population is zero")
+
+    anchors = {
+        "k_commuters": _sum("node_commute_producers") / pop_tot,
+        "k_jobs":      _sum("node_workplace")         / pop_tot,
+        "k_retail":    _sum("node_retail_spaces")     / pop_tot,
+        "k_students":  _sum("node_school_producers")  / pop_tot,
+        "k_enrolment": _sum("node_school_demand")     / pop_tot,
+    }
+    for name, k in anchors.items():
+        if k <= 0:
+            raise ValueError(f"compute_generation_scales: island anchor {name} ≤ 0 "
+                             f"(producer layer missing/empty across all nodes)")
+
+    gen_scale = {
+        "res":     rates["res"],                              # single leg, k=1
+        "com_out": (rates["commute"] / 2) / anchors["k_commuters"],
+        "com_ret": (rates["commute"] / 2) / anchors["k_jobs"],
+        "ret_out": (rates["retail"]  / 2),                    # producer = population, k=1
+        "ret_ret": (rates["retail"]  / 2) / anchors["k_retail"],
+        "sch_out": (rates["school"]  / 2) / anchors["k_students"],
+        "sch_ret": (rates["school"]  / 2) / anchors["k_enrolment"],
+    }
+    if verbose:
+        print(f"  [gen-scale] island pop {pop_tot:,.0f}; anchors "
+              + ", ".join(f"{n}={v:.4f}" for n, v in anchors.items()))
+        print("  [gen-scale] producer rates (trips/day per producer): "
+              + ", ".join(f"{k}={v:.4g}" for k, v in gen_scale.items()))
+    return gen_scale
 
 
 def scatter_od_to_links(t_pair, pair_idx, link_idx, link_weight, N_links):

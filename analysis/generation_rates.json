@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "source": "data/nts0409.ods",
+    "sheet": "NTS0409a_trips",
+    "years": [
+      2023,
+      2024
+    ],
+    "vehicle_modes": [
+      "Car or van driver",
+      "Motorcycle",
+      "Taxi or minicab"
+    ],
+    "leisure_retail_frac": 0.5,
+    "units": "vehicle-driver trips per person per day",
+    "judgment_allocations": [
+      "Business -> retail (not commute)",
+      "Personal business -> retail",
+      "Leisure split 0.5 retail / 0.5 res"
+    ]
+  },
+  "rates": {
+    "commute": 0.17796309271922361,
+    "retail": 0.4949988738299632,
+    "school": 0.08196683755904172,
+    "res": 0.2621813508820894
+  }
+}
