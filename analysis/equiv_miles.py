@@ -19,9 +19,11 @@ One log + one exp -> cheap enough for the tuning/eval hot loop, and it vectorise
 over a numpy array of OD times. Monotone increasing across the whole realistic
 domain (d ln(mi)/d ln(t) = C1 + 2*C2*ln t stays > 0), so no clamp is needed.
 
-The module constants below are the authoritative source of truth: the imported
-`equiv_miles` does no file I/O. Re-derive them with `--fit` after the Google cache
-changes (it prints the refreshed constants to paste back in).
+The module constants below are the *single* authoritative source of truth: the
+imported `equiv_miles` does no file I/O. Re-derive them with `--fit` after the
+Google cache changes — it prints the refreshed constants to paste back in (and
+draws the plot); it deliberately writes no coefficients file, so there is nothing
+that can drift out of sync with the constants here.
 """
 
 import numpy as np
@@ -80,10 +82,7 @@ def _load_google_points(results_path):
     return pts
 
 
-def _fit(results_path, plot_path, json_path):
-    import datetime
-    import json
-
+def _fit(results_path, plot_path):
     pts = _load_google_points(results_path)
     t = np.array([p[0] for p in pts])
     miles = np.array([p[1] for p in pts])
@@ -120,40 +119,16 @@ def _fit(results_path, plot_path, json_path):
     print("log-log quadratic: ln(miles) = C0 + C1*ln t + C2*(ln t)^2")
     print(f"  _C0 = {c0:.4f}\n  _C1 = {c1:.4f}\n  _C2 = {c2:.5f}")
     print(f"power law:         miles = {a:.3e} * t**{b:.4f}  (_POW_A, _POW_B)\n")
-    med_quad = diagnostics("quadratic", quad)
+    diagnostics("quadratic", quad)
     diagnostics("power", powf)
     speeds = ", ".join(
         f"{float(quad(np.array([s]))[0]) / (s / 3600):.0f}"
         for s in (120, 300, 600, 1200, 2400, 4800, 8000)
     )
     print(f"\n  implied mph @120/300/600/1200/2400/4800/8000 s: {speeds}")
+    print("\n  -> paste the _C0/_C1/_C2 (and _POW_A/_POW_B) above into the module constants.")
 
-    # provenance record
-    import os
-
-    os.makedirs(os.path.dirname(json_path), exist_ok=True)
-    with open(json_path, "w") as fh:
-        json.dump(
-            {
-                "form": "ln(miles) = C0 + C1*ln(t_s) + C2*(ln t_s)^2",
-                "C0": float(c0),
-                "C1": float(c1),
-                "C2": float(c2),
-                "pow_a": a,
-                "pow_b": float(b),
-                "n_points": len(pts),
-                "t_span_s": [float(t.min()), float(t.max())],
-                "median_abs_log_ratio": med_quad,
-                "source": os.path.relpath(results_path),
-                "basis": "Google best route, TRAFFIC_UNAWARE free-flow",
-                "fitted": datetime.date.today().isoformat(),
-            },
-            fh,
-            indent=2,
-        )
-    print(f"\nwrote {json_path}")
-
-    # plot
+    # plot (a visualisation, not a source of truth — the module constants are authoritative)
     try:
         import matplotlib
 
@@ -188,11 +163,10 @@ def _main():
     ap.add_argument("--fit", action="store_true", help="re-derive coefficients + plot from the cache")
     ap.add_argument("--results", default=os.path.join(repo, "data/google_cache/results.jsonl"))
     ap.add_argument("--plot", default=os.path.join(repo, "reports/equiv_miles.png"))
-    ap.add_argument("--json", default=os.path.join(repo, "reports/equiv_miles_fit.json"))
     args = ap.parse_args()
 
     if args.fit:
-        _fit(args.results, args.plot, args.json)
+        _fit(args.results, args.plot)
     else:
         for s in (120, 300, 600, 1200, 2400, 4800, 8000):
             print(f"  equiv_miles({s:5d} s) = {float(equiv_miles(s)):6.2f} miles")
