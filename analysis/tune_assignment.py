@@ -17,10 +17,10 @@ Both types are in count space, unified in _slot_data with per-obs weights and rh
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
-Tunes 8 gravity params (with school): per-component Tanner kernel f(u)=u^BETA·exp(BETA·(1−u)),
-u=d/P_c — peak P_c + shape BETA_c per component: P, BETA (res), P_commute, BETA_commute,
-P_retail, BETA_retail, P_school, BETA_school (no shared BETA, no ALPHA power-law tail
-exponent).  Commute and retail are independent clones of the school component — each a symmetric two-leg,
+Tunes 4 gravity params (with school): per-component willingness TAU_c (= 1/γ, seconds) for the
+mode-substitution × willingness kernel f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c) — the
+mode-substitution rise + speed are shared/data-derived (model._modesub_kernel), only TAU_c is tuned.
+TAU (res), TAU_commute, TAU_retail, TAU_school.  Commute and retail are independent clones of the school component — each a symmetric two-leg,
 per-origin-normalised split with NO weight parameter and NO self/cross term (the old
 single business component's W_BIZ and biz×biz are gone).
 Production-constrained per component: each origin's trip production is fixed by its
@@ -287,14 +287,15 @@ phi_school_std    = config.get("phi_school_std",    0.08)
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam_raw = config.get("gravity_lambda", 0.0)
-# 8 gravity params (with school): per-component Tanner kernel (P_c peak, BETA_c shape),
-# f(u)=u^BETA·exp(BETA·(1−u)), u=d/P.  No shared BETA, no ALPHA (the power-law tail
-# exponent is gone — the Tanner tail is exponential).  W_BIZ is gone too.
-_grav_param_names = ["P", "BETA", "P_commute", "BETA_commute", "P_retail", "BETA_retail"]
+# 4 gravity params (with school): per-component willingness TAU_c (= 1/γ, seconds) for the
+# mode-substitution × willingness kernel f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c).
+# The mode-substitution rise + speed are shared/data-derived (model._modesub_kernel); only
+# TAU_c is tuned — no P/BETA (the peak emerges from driveShare × exp).
+_grav_param_names = ["TAU", "TAU_commute", "TAU_retail"]
 if _has_stoch:
     _grav_param_names.append("THETA")
 if _has_school:
-    _grav_param_names += ["P_school", "BETA_school"]
+    _grav_param_names += ["TAU_school"]
 # Derive the log-ref + lambda vectors from the param-name list + tuner_config, so the
 # three lists can't drift (missing ref defaults to 1.0).
 log_grav_ref = np.array([math.log(max(grav_ref.get(k, 1.0), 1e-4))
@@ -612,8 +613,7 @@ slot_fracs_school_nts  = {sk: float(_slot_mfs[si]) for si, (sk, _) in enumerate(
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
-                   P_school, BETA_school, THETA=None):
+def run_assignment(TAU, TAU_commute, TAU_retail, TAU_school, THETA=None):
     """Production-constrained gravity assignment.
 
     Returns (flow_res, flow_commute, flow_retail, flow_school).  Each component is
@@ -623,19 +623,19 @@ def run_assignment(P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
     (D_i has no K, so flow stays linear in K — with f pinned at NTS the scale solve
     is convex).
 
-    Each component uses its own Tanner kernel f(u)=u^BETA·exp(BETA·(1−u)), u=d/P_c:
-    flow_res = pop→pop (P, BETA); flow_commute = commuters↔workplace (P_commute,
-    BETA_commute); flow_retail = pop↔retail (P_retail, BETA_retail); flow_school =
-    students↔school (P_school, BETA_school).  No weight parameter, no self/cross term.
+    Each component uses the mode-substitution × willingness kernel
+    f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c) with its own willingness TAU_c:
+    flow_res = pop→pop (TAU); flow_commute = commuters↔workplace (TAU_commute);
+    flow_retail = pop↔retail (TAU_retail); flow_school = students↔school (TAU_school).
+    No weight parameter, no self/cross term.
 
     THETA is accepted but ignored (probit cache; the legacy k=3 logit scatter is retired).
     """
     t_res, t_commute, t_retail, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
         base_w_pop, base_w_workplace, base_w_retail, base_w_school,
-        P, BETA,
-        P_commute, BETA_commute, P_retail, BETA_retail,
-        P_school=P_school, BETA_school=BETA_school, with_school=_has_school,
+        TAU, TAU_commute, TAU_retail,
+        TAU_school=TAU_school, with_school=_has_school,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
         w_commute_prod=base_w_commute_prod, w_school_prod=base_w_school_prod,
         gen_scale=_GEN_SCALE)
@@ -814,33 +814,22 @@ t0         = time.time()
 def _unpack_gravity(log_params):
     """Unpack the gravity log-param vector → kernel scalars (single source of truth
     for index layout, shared by objective / probe / final eval)."""
-    P            = math.exp(log_params[0])
-    BETA         = math.exp(log_params[1])
-    P_commute    = math.exp(log_params[2])
-    BETA_commute = math.exp(log_params[3])
-    P_retail     = math.exp(log_params[4])
-    BETA_retail  = math.exp(log_params[5])
-    THETA        = math.exp(log_params[6]) if _has_stoch else None
-    _sch_off     = 7 if _has_stoch else 6
-    if _has_school:
-        P_school    = math.exp(log_params[_sch_off])
-        BETA_school = math.exp(log_params[_sch_off + 1])
-    else:
-        P_school = BETA_school = None
-    return (P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
-            P_school, BETA_school, THETA)
+    TAU          = math.exp(log_params[0])
+    TAU_commute  = math.exp(log_params[1])
+    TAU_retail   = math.exp(log_params[2])
+    THETA        = math.exp(log_params[3]) if _has_stoch else None
+    _sch_off     = 4 if _has_stoch else 3
+    TAU_school   = math.exp(log_params[_sch_off]) if _has_school else None
+    return (TAU, TAU_commute, TAU_retail, TAU_school, THETA)
 
 
 def objective(log_params, log_ref=None):
     log_params = np.clip(log_params, -100, 100)
-    (P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
-     P_school, BETA_school, THETA) = _unpack_gravity(log_params)
-    _ps = P_school    if _has_school else 1.0
-    _bs = BETA_school if _has_school else 1.0
+    (TAU, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_params)
+    _ts = TAU_school if _has_school else 1.0
 
     flow_res, flow_commute, flow_retail, flow_school = run_assignment(
-        P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
-        _ps, _bs, THETA)
+        TAU, TAU_commute, TAU_retail, _ts, THETA)
     m_res, m_commute, m_retail, m_school = model_obs_4c(
         flow_res, flow_commute, flow_retail, flow_school)
     K_res, K_commute, K_retail, K_sch = solve_scales(
@@ -923,10 +912,9 @@ print(f"Gravity: {len(log_p0)} params{_grav_note}")
 # optimum — the convex solver has converged). No optimization, no writes.
 if os.environ.get("CALIBRATE_PROBE"):
     print("\n=== CALIBRATE PROBE (no optimization, no writes) ===")
-    (_P,_B,_Pc,_Bc,_Pr,_Br,_Ps0,_Bs0,_TH) = _unpack_gravity(log_p0)
-    _Ps = _Ps0 if _has_school else 1.0
-    _Bs = _Bs0 if _has_school else 1.0
-    _fr,_fc,_ft,_fs = run_assignment(_P,_B,_Pc,_Bc,_Pr,_Br,_Ps,_Bs,None)
+    (_T,_Tc,_Tr,_Ts0,_TH) = _unpack_gravity(log_p0)
+    _Ts = _Ts0 if _has_school else 1.0
+    _fr,_fc,_ft,_fs = run_assignment(_T,_Tc,_Tr,_Ts,None)
     _mr,_mc,_mt,_ms = model_obs_4c(_fr,_fc,_ft,_fs)
     def _probe_eval(Kr,Kc,Kt,Ks):
         fr=np.array([slot_fracs_res_nts.get(sk,1/24)     if sk else 1/24 for sk in obs_slot_keys])
@@ -942,9 +930,8 @@ if os.environ.get("CALIBRATE_PROBE"):
             return cc
         ls=np.logspace(-1,2,2000); cs=[ch(l) for l in ls]; lo=ls[int(np.argmin(cs))]
         return ch(1.0),lo,ch(lo)
-    print(f"  params: P={_P:.1f} BETA={_B:.3f} "
-          f"P_commute={_Pc:.1f} BETA_commute={_Bc:.3f} "
-          f"P_retail={_Pr:.1f} BETA_retail={_Br:.3f}")
+    print(f"  params (willingness s): TAU={_T:.0f} TAU_commute={_Tc:.0f} TAU_retail={_Tr:.0f}"
+          + (f" TAU_school={_Ts0:.0f}" if _has_school else ""))
     Kr,Kc,Kt,Ks = solve_scales(_mr,_mc,_mt,_ms)[:4]
     c1,lo,clo=_probe_eval(Kr,Kc,Kt,Ks)
     print(f"  direct solve  K_res={Kr:.4e} K_commute={Kc:.4e} K_retail={Kt:.4e} K_sch={Ks:.4e}"
@@ -956,27 +943,26 @@ if os.environ.get("CALIBRATE_PROBE"):
 # cell, does NO optimization and NO writes, then sys.exit(0).  Like CALIBRATE_PROBE.
 #   Usage:  SWEEP=res python3 analysis/tune_assignment.py
 #
-# Varies ONLY the target component's (P_c, BETA_c) over a sane grid while the OTHER
+# Varies ONLY the target component's willingness TAU_c over a sane grid while the OTHER
 # three kernels stay FIXED at the start params (from tuned_params.json / refs), and
 # reports that component's solved K and the resulting χ²/N per cell.
 #
 # ⚠ READ WITH CARE — the K and χ²/N are CONDITIONAL on the other three components
 # being frozen at their start values.  They are NOT a joint best fit and must not be
 # quoted as an achievable χ²/N or as "the tuned result".  The sweep answers one
-# narrow question: does THIS component's K collapse to ~0 (is any sane kernel for it
-# tolerated), and which way does its preferred P/BETA lean?  For a real fit, run the
+# narrow question: does THIS component's K collapse to ~0 (is any sane willingness for
+# it tolerated), and which way does its preferred TAU_c lean?  For a real fit, run the
 # full tune (no SWEEP env var).
 _sweep_target = os.environ.get("SWEEP")
 if _sweep_target:
-    _COMP_IDX = {"res": (0, 1, 0), "commute": (2, 3, 1),
-                 "retail": (4, 5, 2), "school": (6, 7, 3)}
+    _COMP_IDX = {"res": 0, "commute": 1, "retail": 2, "school": 3}   # index into [TAU,TAUc,TAUr,TAUs]
     if _sweep_target not in _COMP_IDX:
         print(f"SWEEP={_sweep_target!r} unknown; use res|commute|retail|school"); sys.exit(1)
-    _pi, _bi, _ki = _COMP_IDX[_sweep_target]
-    print(f"\n=== SWEEP {_sweep_target} (vary its P/BETA, others fixed at start; no writes) ===")
-    _base = list(_unpack_gravity(log_p0))[:8]        # [P,B,Pc,Bc,Pr,Br,Ps,Bs]
+    _ki = _COMP_IDX[_sweep_target]
+    print(f"\n=== SWEEP {_sweep_target} (vary its TAU, others fixed at start; no writes) ===")
+    _base = list(_unpack_gravity(log_p0))[:4]        # [TAU, TAU_commute, TAU_retail, TAU_school]
     if not _has_school:
-        _base[6], _base[7] = 1.0, 1.0
+        _base[3] = 1.0
 
     def _sweep_chi(Ks4, ms4):
         fr = np.array([slot_fracs_res_nts.get(sk, 1/24)     if sk else 1/24 for sk in obs_slot_keys])
@@ -990,18 +976,16 @@ if _sweep_target:
         cc += float(np.sum(2*np.where(n > 0, n*np.log(pos/pw)+(pw-n), pw)))
         return cc
 
-    P_grid = [120, 180, 300, 480, 720, 1200]
-    B_grid = [0.5, 1.0, 1.5, 2.0, 3.0]
-    print(f"  start params: {[round(x,1) for x in _base]}  [P,B,Pc,Bc,Pr,Br,Ps,Bs]")
-    print(f"  {'P':>6} {'B':>6} {'K_'+_sweep_target:>11} {'phi':>8} {'chi2/N':>8}")
-    for Pv in P_grid:
-        for Bv in B_grid:
-            _args = list(_base); _args[_pi] = Pv; _args[_bi] = Bv
-            ms4 = model_obs_4c(*run_assignment(*_args, None))
-            Ks4 = solve_scales(*ms4)[:4]
-            tot = sum(Ks4)
-            phi = Ks4[_ki] / tot if tot > 0 else 0.0
-            print(f"  {Pv:6.0f} {Bv:6.2f} {Ks4[_ki]:11.4e} {phi:8.3f} {_sweep_chi(Ks4, ms4)/n_obs:8.3f}")
+    TAU_grid = [120, 240, 360, 480, 720, 1080, 1500, 2400, 3600]   # willingness time (s)
+    print(f"  start TAU (s): {[round(x) for x in _base]}  [res, commute, retail, school]")
+    print(f"  {'TAU_s':>6} {'TAU_min':>7} {'K_'+_sweep_target:>11} {'phi':>8} {'chi2/N':>8}")
+    for Tv in TAU_grid:
+        _args = list(_base); _args[_ki] = Tv
+        ms4 = model_obs_4c(*run_assignment(*_args, None))
+        Ks4 = solve_scales(*ms4)[:4]
+        tot = sum(Ks4)
+        phi = Ks4[_ki] / tot if tot > 0 else 0.0
+        print(f"  {Tv:6.0f} {Tv/60:7.1f} {Ks4[_ki]:11.4e} {phi:8.3f} {_sweep_chi(Ks4, ms4)/n_obs:8.3f}")
     sys.exit(0)
 
 # ── Run optimization ──────────────────────────────────────────────────────────
@@ -1026,15 +1010,12 @@ log_best = best["log_params"]
 
 # ── Unpack best params ────────────────────────────────────────────────────────
 
-(P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
- P_school, BETA_school, THETA) = _unpack_gravity(log_best)
+(TAU, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_best)
 
 # Final evaluation for clean chi2, the four K's, and slot_fracs (no L2 term)
-_ps_final = 1.0 if not _has_school else P_school
-_bs_final = 1.0 if not _has_school else BETA_school
+_ts_final = 1.0 if not _has_school else TAU_school
 flow_res, flow_commute, flow_retail, flow_school = run_assignment(
-    P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
-    _ps_final, _bs_final, THETA)
+    TAU, TAU_commute, TAU_retail, _ts_final, THETA)
 m_res, m_commute, m_retail, m_school = model_obs_4c(
     flow_res, flow_commute, flow_retail, flow_school)
 (K_res, K_commute, K_retail, K_sch,
@@ -1116,11 +1097,9 @@ phi_sch_out = K_sch     / K_tot if K_tot > 0 else 0.0
 print(f"  K_res={K_res:.4e}  K_commute={K_commute:.4e}  K_retail={K_retail:.4e}"
       f"  K_sch={K_sch:.4e}  (K={K:.4e})")
 print(f"  phi_commute={phi_com_out:.3f}  phi_retail={phi_ret_out:.3f}  phi_sch={phi_sch_out:.3f}")
-print(f"  P={P:.2f}s  BETA={BETA:.4f}"
-      f"  P_commute={P_commute:.2f}s  BETA_commute={BETA_commute:.4f}"
-      f"  P_retail={P_retail:.2f}s  BETA_retail={BETA_retail:.4f}{_theta_str}")
+print(f"  willingness TAU (s): res={TAU:.0f}  commute={TAU_commute:.0f}  retail={TAU_retail:.0f}{_theta_str}")
 if _has_school:
-    print(f"  P_school={P_school:.2f}s  BETA_school={BETA_school:.4f}  (school magnitude = K_sch)")
+    print(f"  TAU_school={TAU_school:.0f}s  (school magnitude = K_sch)")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -1162,21 +1141,17 @@ print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 
 tuned = {
-    "kernel":    "tanner",
+    "kernel":    "modesub",
     "K":         float(K),         # K_res+K_commute+K_retail+K_sch (compat); full precision
     "K_res":     float(K_res),     # K spans many orders of magnitude — round(x,6) zeroes sub-µ values
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),
-    "P":             round(P, 4),
-    "BETA":          round(BETA, 6),
-    "P_commute":     round(P_commute, 4),
-    "BETA_commute":  round(BETA_commute, 6),
-    "P_retail":      round(P_retail, 4),
-    "BETA_retail":   round(BETA_retail, 6),
+    "TAU":           round(TAU, 4),
+    "TAU_commute":   round(TAU_commute, 4),
+    "TAU_retail":    round(TAU_retail, 4),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    **( {"P_school":    round(P_school,    4),
-         "BETA_school": round(BETA_school, 6)} if _has_school else {} ),
+    **( {"TAU_school": round(TAU_school, 4)} if _has_school else {} ),
     "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
     "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
@@ -1202,34 +1177,30 @@ try:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    def _kern(K_c, P_c, B_c):
-        u = d_sec / P_c
-        return K_c * u**B_c * np.exp(B_c * (1.0 - u))
+    from model import _modesub_kernel
     d_sec    = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
     d_min    = d_sec / 60.0
-    k_res_c  = _kern(K_res, P, BETA)
-    k_com_c  = _kern(K_commute, P_commute, BETA_commute)
-    k_ret_c  = _kern(K_retail, P_retail, BETA_retail)
+    def _kern(K_c, tau_c):
+        return K_c * _modesub_kernel(d_sec, tau_c)
+    k_res_c  = _kern(K_res, TAU)
+    k_com_c  = _kern(K_commute, TAU_commute)
+    k_ret_c  = _kern(K_retail, TAU_retail)
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(d_min, k_res_c, linewidth=1.8,
-            label=f"Residential  P={P/60:.1f}min  BETA={BETA:.3f}  K_res={K_res:.3e}")
+            label=f"Residential  τ={TAU/60:.1f}min  K_res={K_res:.3e}")
     ax.plot(d_min, k_com_c, linewidth=1.8, linestyle="--",
-            label=f"Commute      P={P_commute/60:.1f}min  BETA={BETA_commute:.3f}  K_com={K_commute:.3e}")
+            label=f"Commute      τ={TAU_commute/60:.1f}min  K_com={K_commute:.3e}")
     ax.plot(d_min, k_ret_c, linewidth=1.8, linestyle="-.",
-            label=f"Retail       P={P_retail/60:.1f}min  BETA={BETA_retail:.3f}  K_ret={K_retail:.3e}")
-    ax.axvline(P         / 60.0, color="C0", linestyle=":", alpha=0.6)
-    ax.axvline(P_commute / 60.0, color="C1", linestyle=":", alpha=0.6)
-    ax.axvline(P_retail  / 60.0, color="C2", linestyle=":", alpha=0.6)
-    if _has_school and P_school is not None:
-        k_sch_c = _kern(K_sch, P_school, BETA_school)
+            label=f"Retail       τ={TAU_retail/60:.1f}min  K_ret={K_retail:.3e}")
+    if _has_school and TAU_school is not None:
+        k_sch_c = _kern(K_sch, TAU_school)
         ax.plot(d_min, k_sch_c, linewidth=1.8, linestyle=":",
-                label=f"School       P_sch={P_school/60:.1f}min  BETA_sch={BETA_school:.3f}  K_sch={K_sch:.3e}")
-        ax.axvline(P_school / 60.0, color="C3", linestyle=":", alpha=0.6)
+                label=f"School       τ={TAU_school/60:.1f}min  K_sch={K_sch:.3e}")
     ax.set_xlabel("Travel time (minutes)")
-    ax.set_ylabel("K_c · Tanner kernel(d; P_c, BETA_c)")
+    ax.set_ylabel("K_c · driveshare(equiv_miles(c))·exp(−c/τ_c)")
     ax.set_title(
-        f"Gravity kernels (Tanner)\n"
+        f"Gravity kernels (mode-substitution × willingness)\n"
         f"χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
     )
     ax.set_xscale("log")
@@ -1247,21 +1218,17 @@ except Exception as _e:
 # ── Append to tuning history ──────────────────────────────────────────────────
 
 params = {
-    "kernel":    "tanner",
+    "kernel":    "modesub",
     "K":         float(K),
     "K_res":     float(K_res),
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),
-    "P":             round(P, 4),
-    "BETA":          round(BETA, 6),
-    "P_commute":     round(P_commute, 4),
-    "BETA_commute":  round(BETA_commute, 6),
-    "P_retail":      round(P_retail, 4),
-    "BETA_retail":   round(BETA_retail, 6),
+    "TAU":           round(TAU, 4),
+    "TAU_commute":   round(TAU_commute, 4),
+    "TAU_retail":    round(TAU_retail, 4),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    **( {"P_school":    round(P_school,    4),
-         "BETA_school": round(BETA_school, 6)} if _has_school else {} ),
+    **( {"TAU_school": round(TAU_school, 4)} if _has_school else {} ),
     "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
     "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},

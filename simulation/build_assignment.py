@@ -62,12 +62,10 @@ K_res          = None
 K_commute      = None
 K_retail       = None
 K_sch          = None
-P_commute      = None
-BETA_commute   = None
-P_retail       = None
-BETA_retail    = None
-P_school       = None
-BETA_school    = None
+TAU            = None
+TAU_commute    = None
+TAU_retail     = None
+TAU_school     = None
 slot_fracs_res     = {}
 slot_fracs_commute = {}
 slot_fracs_retail  = {}
@@ -81,12 +79,10 @@ if os.path.exists(TUNED_PARAMS):
     ALPHA         = _tp.get("ALPHA",         ALPHA)
     BETA          = _tp.get("BETA",          BETA)
     THETA         = _tp.get("THETA",         None)
-    P_commute     = _tp.get("P_commute",     None)
-    BETA_commute  = _tp.get("BETA_commute",  None)
-    P_retail      = _tp.get("P_retail",      None)
-    BETA_retail   = _tp.get("BETA_retail",   None)
-    P_school      = _tp.get("P_school",      None)
-    BETA_school   = _tp.get("BETA_school",   None)
+    TAU           = _tp.get("TAU",           None)
+    TAU_commute   = _tp.get("TAU_commute",   None)
+    TAU_retail    = _tp.get("TAU_retail",    None)
+    TAU_school    = _tp.get("TAU_school",    None)
     if "K_res" in _tp and "K_commute" in _tp and "K_retail" in _tp:
         K_res     = _tp["K_res"]
         K_commute = _tp["K_commute"]
@@ -175,11 +171,11 @@ N_nodes  = len(node_ids_arr)
 self_src, self_dist, self_w = load_self_terms(list(node_ids_arr))
 # Four-component mode requires the four K's and the commute/retail kernels.
 _use_4c  = (K_res is not None and K_commute is not None and K_retail is not None
-            and P_commute is not None and P_retail is not None)
+            and TAU_commute is not None and TAU_retail is not None)
 # School sub-component is active when K_sch>0, the school kernel is present, and there
 # is school demand.
 _use_school = (_use_4c and K_sch is not None and K_sch > 0
-               and P_school is not None and w_school.sum() > 0)
+               and TAU_school is not None and w_school.sum() > 0)
 
 if _use_4c:
     # Production-constrained assignment (singly-constrained per component).
@@ -188,8 +184,8 @@ if _use_4c:
     t_res, t_commute, t_retail, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
         w_pop, w_workplace, w_retail, w_school,
-        P, BETA, P_commute, BETA_commute, P_retail, BETA_retail,
-        P_school=P_school, BETA_school=BETA_school, with_school=_use_school,
+        TAU, TAU_commute, TAU_retail,
+        TAU_school=TAU_school, with_school=_use_school,
         self_src=self_src, self_dist=self_dist, self_w=self_w,
         w_commute_prod=w_commute_prod, w_school_prod=w_school_prod,
         gen_scale=_GEN_SCALE)
@@ -323,12 +319,11 @@ flows_path = f"{OUT_DIR}/newtownards_flows.json"
 # Serialise TRUE AADT (component-weighted) flows — consumed by build_map.py as AADT.
 _out_flow = aadt_combined if _use_4c else link_flow
 out = {
-    "kernel": "tanner" if _use_4c else "rational",
-    "P": P, "BETA": BETA, "K": K,
+    "kernel": "modesub" if _use_4c else "rational",
+    "K": K,
+    **({"TAU": TAU} if _use_4c else {"P": P, "BETA": BETA, "ALPHA": ALPHA}),
     "flows": {f"{u},{v}": flow for (u, v), flow in _out_flow.items()},
 }
-if not _use_4c:
-    out["ALPHA"] = ALPHA   # legacy rational-kernel tail exponent (gravity_assign path)
 if _use_4c:
     out["K_res"]     = K_res
     out["K_commute"] = K_commute
@@ -348,7 +343,7 @@ _comp_str = ("+ res/commute/retail/school" if _use_school
              else ("+ res/commute/retail" if _use_4c else ""))
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
       + (f"  ({_comp_str} components)" if _comp_str else ""))
-print(f"Parameters: K={K}  P={P}  BETA={BETA}"
-      + (f"  P_commute={P_commute}  BETA_commute={BETA_commute}"
-         f"  P_retail={P_retail}  BETA_retail={BETA_retail}" if _use_4c
-         else f"  ALPHA={ALPHA}"))
+print(f"Parameters: K={K}"
+      + (f"  willingness TAU (s): res={TAU} commute={TAU_commute} retail={TAU_retail}"
+         + (f" school={TAU_school}" if _use_school else "") if _use_4c
+         else f"  P={P}  ALPHA={ALPHA}  BETA={BETA}  (legacy rational)"))

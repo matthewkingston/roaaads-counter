@@ -9,7 +9,14 @@ implementations in sync.
 import json
 import math
 import os
+import sys
 import numpy as np
+
+# The kernel's mode-substitution + speed factors live in analysis/ (shared with the
+# NTS derivation tooling).  model.py is in simulation/, so put analysis/ on the path.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis"))
+from equiv_miles import equiv_miles      # OSRM seconds → equivalent trip length (miles)
+from driveshare import driveshare        # vehicle-driver share by trip length (miles)
 
 # ── Official AADT count sites ─────────────────────────────────────────────────
 # AADT totals retained for the quick site-level sanity check in build_assignment.py.
@@ -323,11 +330,24 @@ def _tanner_kernel(d, P, BETA):
         return u ** BETA * np.exp(BETA * (1.0 - u))
 
 
+def _modesub_kernel(d, TAU):
+    """The production-constrained deterrence: an empirical mode-substitution rise ×
+    an exponential willingness decay (decoupled — see analysis/driveshare.py and the
+    project-tanner-kernel-tld memory):
+        f(c) = driveshare(equiv_miles(c)) · exp(−c / TAU),   c in OSRM seconds.
+    `driveshare(equiv_miles(c))` is the shared, empirical car-mode share by trip
+    length (short trips walked ⇒ f→0 at the origin); `exp(−c/TAU)` is the per-component
+    willingness, TAU = 1/γ the characteristic willingness time (seconds).  The
+    driveshare PLATEAU is a shared constant that cancels in the production constraint.
+    f(0)=0 (equiv_miles→0 ⇒ driveshare 0); finite everywhere."""
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        return driveshare(equiv_miles(d)) * np.exp(-d / TAU)
+
+
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_pop, w_workplace, w_retail, w_school,
-                         P, BETA,
-                         P_commute, BETA_commute, P_retail, BETA_retail,
-                         P_school=None, BETA_school=None, with_school=False,
+                         TAU, TAU_commute, TAU_retail,
+                         TAU_school=None, with_school=False,
                          self_src=None, self_dist=None, self_w=None,
                          w_commute_prod=None, w_school_prod=None,
                          gen_scale=None):
@@ -342,9 +362,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
     split with its OWN kernel — NO weight parameter and NO self/cross term
     (the old single business component's W_BIZ and biz×biz term are gone):
-      commute (Tanner kernel P_commute/BETA_commute): producer = resident commuters
+      commute (modesub kernel, willingness TAU_commute): producer = resident commuters
         (w_commute_prod), attractor = workplace jobs (w_workplace).
-      retail  (Tanner kernel P_retail/BETA_retail):   producer = population,
+      retail  (modesub kernel, willingness TAU_retail):   producer = population,
         attractor = retail parking spaces (w_retail).
 
     Denominators are summed over the FULL destination set of each origin (all od
@@ -379,9 +399,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     gs_sch_out = gs.get("sch_out", 1.0)
     gs_sch_ret = gs.get("sch_ret", 1.0)
 
-    F_res = _tanner_kernel(od_dist, P,         BETA)
-    F_com = _tanner_kernel(od_dist, P_commute, BETA_commute)
-    F_ret = _tanner_kernel(od_dist, P_retail,  BETA_retail)
+    F_res = _modesub_kernel(od_dist, TAU)
+    F_com = _modesub_kernel(od_dist, TAU_commute)
+    F_ret = _modesub_kernel(od_dist, TAU_retail)
 
     pop_s  = w_pop[src];       pop_d  = w_pop[dst]
     work_s = w_workplace[src]; work_d = w_workplace[dst]
@@ -389,9 +409,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
 
     _has_self = self_src is not None and len(self_src) > 0
     if _has_self:
-        F_res_self = _tanner_kernel(self_dist, P,         BETA)
-        F_com_self = _tanner_kernel(self_dist, P_commute, BETA_commute)
-        F_ret_self = _tanner_kernel(self_dist, P_retail,  BETA_retail)
+        F_res_self = _modesub_kernel(self_dist, TAU)
+        F_com_self = _modesub_kernel(self_dist, TAU_commute)
+        F_ret_self = _modesub_kernel(self_dist, TAU_retail)
     else:
         F_res_self = F_com_self = F_ret_self = None
 
@@ -431,8 +451,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     )
 
     if with_school and w_school is not None and w_school.sum() > 0:
-        F_sch = _tanner_kernel(od_dist, P_school, BETA_school)
-        F_sch_self = _tanner_kernel(self_dist, P_school, BETA_school) if _has_self else None
+        F_sch = _modesub_kernel(od_dist, TAU_school)
+        F_sch_self = _modesub_kernel(self_dist, TAU_school) if _has_self else None
         sch_s = w_school[src]; sch_d = w_school[dst]
         iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop,    F_sch_self)   # school-cross leg school→pop: attraction = pop
         iD_sch_sch = _inv_denom(sch_d, F_sch, w_school, F_sch_self)   # school-cross leg pop→school: attraction = school

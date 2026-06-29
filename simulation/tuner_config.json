@@ -8,25 +8,17 @@
   "phi_school_prior": 0.10,
   "phi_school_std":   0.04,
   "gravity_lambda": {
-    "P":            2.0,
-    "BETA":         1.0,
-    "P_commute":    2.0,
-    "BETA_commute": 1.0,
-    "P_retail":     2.0,
-    "BETA_retail":  1.0,
-    "THETA":        0.5,
-    "P_school":     2.0,
-    "BETA_school":  1.0
+    "TAU":         1.0,
+    "TAU_commute": 1.0,
+    "TAU_retail":  1.0,
+    "THETA":       0.5,
+    "TAU_school":  1.0
   },
   "gravity_ref": {
-    "P":            300.0,
-    "BETA":         1.5,
-    "P_commute":    480.0,
-    "BETA_commute": 1.5,
-    "P_retail":     300.0,
-    "BETA_retail":  1.5,
-    "THETA":        1.0,
-    "P_school":     240.0,
-    "BETA_school":  1.5
+    "TAU":         480.0,
+    "TAU_commute": 1500.0,
+    "TAU_retail":  720.0,
+    "THETA":       1.0,
+    "TAU_school":  480.0
   }
 }
