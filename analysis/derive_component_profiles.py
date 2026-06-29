@@ -20,12 +20,15 @@ Both files downloaded from:
 
 Purpose classification
 ----------------------
-The gravity model's business demand nodes represent workplaces, retail POIs,
-and car parks (public and private).  Trips attracted to these nodes are:
+The gravity model splits work-/shopping-related travel into two independent
+components — commute (attractor = workplace jobs) and retail (attractor = retail
+parking spaces) — each with its own temporal profile.  Trips are classified:
 
-  Business ("biz"):
+  Commute ("commute"):
     - Commuting              — direct work trips
     - Employer's business    — trips made during/for work (deliveries, etc.)
+
+  Retail ("retail"):
     - Shopping               — trips to retail; shops dominate OSM POIs and
                                car parks
 
@@ -51,12 +54,14 @@ We therefore downweight the Education contribution by EDU_FACTOR = 1/5
 in the school numerator, and reduce the denominator by the same amount
 so that shares of all remaining purposes are proportionally increased.
 
-  biz_numerator    = commuting + employer_business + shopping
-  school_numerator = education*EDU_FACTOR + escort_education
-  adjusted_total   = all_purposes - education*(1 - EDU_FACTOR)
-  biz_share        = biz_numerator    / adjusted_total
-  school_share     = school_numerator / adjusted_total
-  res_share        = 1 - biz_share - school_share
+  commute_numerator = commuting + employer_business
+  retail_numerator  = shopping
+  school_numerator  = education*EDU_FACTOR + escort_education
+  adjusted_total    = all_purposes - education*(1 - EDU_FACTOR)
+  commute_share     = commute_numerator / adjusted_total
+  retail_share      = retail_numerator  / adjusted_total
+  school_share      = school_numerator  / adjusted_total
+  res_share         = 1 - commute_share - retail_share - school_share
 
 For NTS0504b weekends, "Just walk" trips are additionally removed from
 the denominator before this reweighting, because the aggregate traffic
@@ -70,29 +75,32 @@ post-pandemic year; the 2-year rolling average gives a more stable estimate.
 
 Weekday approach (NTS0502a)
 ---------------------------
-For each hour h, biz_share(h) is computed from the 2023–2024 per-hour
-purpose percentages with the education downweighting applied.  This gives
-a distinct share for every hour of the day.
+For each hour h, commute_share(h) and retail_share(h) are computed from the
+2023–2024 per-hour purpose percentages with the education downweighting applied.
+This gives distinct shares for every hour of the day.
 
 Weekend approach (NTS0504b)
 ---------------------------
 NTS0502a covers Monday–Friday only.  NTS0504b provides absolute trip rates
 per person per year for each day of the week, including Saturday and Sunday.
 We extract the Saturday and Sunday rows from the 2023–2024 rolling average,
-remove "Just walk", apply the education downweighting, and compute a single
-flat business share for each weekend day.  The temporal SHAPE within each
+remove "Just walk", apply the education downweighting, and compute flat
+commute/retail shares for each weekend day.  The temporal SHAPE within each
 weekend day is inherited from the aggregate mean_fraction profile (which
 already captures the Saturday vs. Sunday difference in volume pattern);
-only the overall business / residential split is estimated from NTS0504b.
+only the overall component split is estimated from NTS0504b.
 
 Constraint
 ----------
-The tuner requires mean_fraction_res + mean_fraction_biz + mean_fraction_school
-= mean_fraction at every (day_of_week, hour) slot.  This is enforced exactly:
+The tuner requires
+  mean_fraction_res + mean_fraction_commute + mean_fraction_retail
+    + mean_fraction_school = mean_fraction
+at every (day_of_week, hour) slot.  This is enforced exactly:
 
-  mean_fraction_biz    = mean_fraction × biz_share
-  mean_fraction_school = mean_fraction × school_share
-  mean_fraction_res    = mean_fraction × (1 − biz_share − school_share)
+  mean_fraction_commute = mean_fraction × commute_share
+  mean_fraction_retail  = mean_fraction × retail_share
+  mean_fraction_school  = mean_fraction × school_share
+  mean_fraction_res     = mean_fraction × (1 − commute − retail − school shares)
 
 Each component is directly interpretable as the fraction of AADT attributable
 to that traffic type at that slot.  The global scale K absorbs normalisation.
@@ -101,8 +109,9 @@ Usage
 -----
   python3 analysis/derive_component_profiles.py
 
-Overwrites the mean_fraction_res, mean_fraction_biz, and mean_fraction_school
-columns in analysis/hourly_fractions.csv.  All other columns are preserved.
+Overwrites the mean_fraction_res, mean_fraction_commute, mean_fraction_retail,
+and mean_fraction_school columns in analysis/hourly_fractions.csv.  All other
+columns are preserved.
 Re-run whenever the NTS files change or the purpose classification is revised.
 """
 
@@ -147,21 +156,25 @@ for c in [C_COMM, C_BIZ_E, C_EDU, C_ESCORT, C_SHOP, C_ALL]:
     yr502[c] = pd.to_numeric(yr502[c], errors="coerce").fillna(0.0)
 
 # Education downweighting: remove (1-EDU_FACTOR) × education from denominator
-yr502["adj_total"]    = yr502[C_ALL] - yr502[C_EDU] * (1 - EDU_FACTOR)
-yr502["biz_num"]      = yr502[C_COMM] + yr502[C_BIZ_E] + yr502[C_SHOP]
-yr502["school_num"]   = yr502[C_EDU] * EDU_FACTOR + yr502[C_ESCORT]
-yr502["biz_share"]    = yr502["biz_num"]    / yr502["adj_total"]
-yr502["school_share"] = yr502["school_num"] / yr502["adj_total"]
+yr502["adj_total"]     = yr502[C_ALL] - yr502[C_EDU] * (1 - EDU_FACTOR)
+yr502["commute_num"]   = yr502[C_COMM] + yr502[C_BIZ_E]
+yr502["retail_num"]    = yr502[C_SHOP]
+yr502["school_num"]    = yr502[C_EDU] * EDU_FACTOR + yr502[C_ESCORT]
+yr502["commute_share"] = yr502["commute_num"] / yr502["adj_total"]
+yr502["retail_share"]  = yr502["retail_num"]  / yr502["adj_total"]
+yr502["school_share"]  = yr502["school_num"]  / yr502["adj_total"]
 
-biz_share_weekday    = dict(zip(yr502["hour"], yr502["biz_share"]))
-school_share_weekday = dict(zip(yr502["hour"], yr502["school_share"]))
+commute_share_weekday = dict(zip(yr502["hour"], yr502["commute_share"]))
+retail_share_weekday  = dict(zip(yr502["hour"], yr502["retail_share"]))
+school_share_weekday  = dict(zip(yr502["hour"], yr502["school_share"]))
 
 print(f"\nNTS {NTS_YEAR} weekday component shares by hour  (education × {EDU_FACTOR})")
-print(f"  {'Hour':>4}  {'biz%':>6}  {'sch%':>6}  {'res%':>6}")
+print(f"  {'Hour':>4}  {'com%':>6}  {'ret%':>6}  {'sch%':>6}  {'res%':>6}")
 for h in range(24):
-    bs = biz_share_weekday[h]
+    cs = commute_share_weekday[h]
+    ts = retail_share_weekday[h]
     ss = school_share_weekday[h]
-    print(f"  h{h:02d}    {100*bs:5.1f}%  {100*ss:5.1f}%  {100*(1-bs-ss):5.1f}%")
+    print(f"  h{h:02d}    {100*cs:5.1f}%  {100*ts:5.1f}%  {100*ss:5.1f}%  {100*(1-cs-ts-ss):5.1f}%")
 
 # ── Load NTS0504b (day-of-week purpose rates, trips/person/year) ──────────────
 
@@ -190,10 +203,12 @@ for c in [C504_COMM, C504_BIZ_E, C504_EDU, C504_ESCORT,
           C504_SHOP, C504_WALK, C504_ALL]:
     yr504[c] = pd.to_numeric(yr504[c], errors="coerce").fillna(0.0)
 
-biz_share_weekend    = {}
-school_share_weekend = {}
+commute_share_weekend = {}
+retail_share_weekend  = {}
+school_share_weekend  = {}
 print(f"\nNTS {NTS_YEAR} weekend component shares from NTS0504b  (education × {EDU_FACTOR}, walk removed)")
-print(f"  {'Day':<10}  {'biz_trips':>9}  {'sch_trips':>9}  {'adj_total':>9}  {'biz%':>6}  {'sch%':>6}  {'res%':>6}")
+print(f"  {'Day':<10}  {'com_trips':>9}  {'ret_trips':>9}  {'sch_trips':>9}  {'adj_total':>9}"
+      f"  {'com%':>6}  {'ret%':>6}  {'sch%':>6}  {'res%':>6}")
 
 for day in ["Saturday", "Sunday"]:
     row = yr504[yr504[1] == day]
@@ -211,18 +226,21 @@ for day in ["Saturday", "Sunday"]:
     all_p   = float(row[C504_ALL])
 
     # Remove walking trips (not in vehicle counts), then downweight education
-    no_walk    = all_p - walk
-    adj_total  = no_walk - edu * (1 - EDU_FACTOR)
-    biz_num    = comm + biz_e + shop
-    school_num = edu * EDU_FACTOR + escort
+    no_walk     = all_p - walk
+    adj_total   = no_walk - edu * (1 - EDU_FACTOR)
+    commute_num = comm + biz_e
+    retail_num  = shop
+    school_num  = edu * EDU_FACTOR + escort
 
-    bs = biz_num    / adj_total
-    ss = school_num / adj_total
-    biz_share_weekend[day]    = bs
-    school_share_weekend[day] = ss
+    cs = commute_num / adj_total
+    ts = retail_num  / adj_total
+    ss = school_num  / adj_total
+    commute_share_weekend[day] = cs
+    retail_share_weekend[day]  = ts
+    school_share_weekend[day]  = ss
 
-    print(f"  {day:<10}  {biz_num:9.3f}  {school_num:9.3f}  {adj_total:9.3f}"
-          f"  {100*bs:5.1f}%  {100*ss:5.1f}%  {100*(1-bs-ss):5.1f}%")
+    print(f"  {day:<10}  {commute_num:9.3f}  {retail_num:9.3f}  {school_num:9.3f}  {adj_total:9.3f}"
+          f"  {100*cs:5.1f}%  {100*ts:5.1f}%  {100*ss:5.1f}%  {100*(1-cs-ts-ss):5.1f}%")
 
 # ── Load hourly fractions CSV ─────────────────────────────────────────────────
 
@@ -244,20 +262,25 @@ for row in rows:
     mfa = float(row["mean_fraction"])
 
     if dow <= 4:
-        bs = biz_share_weekday[h]
+        cs = commute_share_weekday[h]
+        ts = retail_share_weekday[h]
         ss = school_share_weekday[h]
     else:
-        bs = biz_share_weekend[DOW_TO_DAY[dow]]
+        cs = commute_share_weekend[DOW_TO_DAY[dow]]
+        ts = retail_share_weekend[DOW_TO_DAY[dow]]
         ss = school_share_weekend[DOW_TO_DAY[dow]]
 
-    row["mean_fraction_biz"]    = f"{mfa * bs:.10f}"
-    row["mean_fraction_school"] = f"{mfa * ss:.10f}"
-    row["mean_fraction_res"]    = f"{mfa * (1 - bs - ss):.10f}"
+    row["mean_fraction_commute"] = f"{mfa * cs:.10f}"
+    row["mean_fraction_retail"]  = f"{mfa * ts:.10f}"
+    row["mean_fraction_school"]  = f"{mfa * ss:.10f}"
+    row["mean_fraction_res"]     = f"{mfa * (1 - cs - ts - ss):.10f}"
 
-base_cols = [c for c in fieldnames
-             if c not in ("mean_fraction_res", "mean_fraction_biz",
-                          "mean_fraction_school")]
-out_cols = base_cols + ["mean_fraction_res", "mean_fraction_biz", "mean_fraction_school"]
+_comp_cols = ("mean_fraction_res", "mean_fraction_commute",
+              "mean_fraction_retail", "mean_fraction_school",
+              "mean_fraction_biz")   # drop legacy biz column if present
+base_cols = [c for c in fieldnames if c not in _comp_cols]
+out_cols = base_cols + ["mean_fraction_res", "mean_fraction_commute",
+                        "mean_fraction_retail", "mean_fraction_school"]
 
 with open(FRACS_FILE, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=out_cols, extrasaction="ignore")
@@ -274,19 +297,20 @@ errors = 0
 for row in rows:
     mfa = float(row["mean_fraction"])
     mfr = float(row["mean_fraction_res"])
-    mfb = float(row["mean_fraction_biz"])
+    mfc = float(row["mean_fraction_commute"])
+    mft = float(row["mean_fraction_retail"])
     mfs = float(row["mean_fraction_school"])
-    diff = abs(mfr + mfb + mfs - mfa)
+    diff = abs(mfr + mfc + mft + mfs - mfa)
     if diff > 1e-9:
         print(f"  FAIL: dow={row['day_of_week']} h={row['hour']} "
-              f"res+biz+sch={mfr+mfb+mfs:.10f} vs mfa={mfa:.10f} (Δ={diff:.2e})")
+              f"res+com+ret+sch={mfr+mfc+mft+mfs:.10f} vs mfa={mfa:.10f} (Δ={diff:.2e})")
         errors += 1
 if errors == 0:
-    print("  ✓  res + biz + school = agg for all 168 rows")
+    print("  ✓  res + commute + retail + school = agg for all 168 rows")
 
 neg = [(r["day_of_week"], r["hour"]) for r in rows
-       if (float(r["mean_fraction_res"]) < 0 or float(r["mean_fraction_biz"]) < 0
-           or float(r["mean_fraction_school"]) < 0)]
+       if (float(r["mean_fraction_res"]) < 0 or float(r["mean_fraction_commute"]) < 0
+           or float(r["mean_fraction_retail"]) < 0 or float(r["mean_fraction_school"]) < 0)]
 if neg:
     print(f"  FAIL: negative fractions at {neg}")
 else:
@@ -298,16 +322,21 @@ wkday_rows = sorted([r for r in rows if int(r["day_of_week"]) == 0],
 for r in wkday_rows:
     h   = int(r["hour"].split(":")[0])
     mfa = float(r["mean_fraction"])
-    mfb = float(r["mean_fraction_biz"])
+    mfc = float(r["mean_fraction_commute"])
+    mft = float(r["mean_fraction_retail"])
     mfs = float(r["mean_fraction_school"])
-    bs  = mfb / mfa if mfa > 0 else 0
+    cs  = mfc / mfa if mfa > 0 else 0
+    ts  = mft / mfa if mfa > 0 else 0
     ss  = mfs / mfa if mfa > 0 else 0
-    bar_b = "█" * int(bs * 30)
+    bar_c = "█" * int(cs * 30)
+    bar_t = "▓" * int(ts * 30)
     bar_s = "░" * int(ss * 30)
-    print(f"  h{h:02d}  biz={100*bs:4.1f}%  sch={100*ss:4.1f}%  {bar_b}{bar_s}")
+    print(f"  h{h:02d}  com={100*cs:4.1f}%  ret={100*ts:4.1f}%  sch={100*ss:4.1f}%  {bar_c}{bar_t}{bar_s}")
 
 print("\n  Weekend flat shares applied:")
 for dow, day in DOW_TO_DAY.items():
-    bs = biz_share_weekend[day]
+    cs = commute_share_weekend[day]
+    ts = retail_share_weekend[day]
     ss = school_share_weekend[day]
-    print(f"  {day}: biz={100*bs:.1f}%  sch={100*ss:.1f}%  res={100*(1-bs-ss):.1f}%")
+    print(f"  {day}: com={100*cs:.1f}%  ret={100*ts:.1f}%  sch={100*ss:.1f}%  "
+          f"res={100*(1-cs-ts-ss):.1f}%")

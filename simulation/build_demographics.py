@@ -82,12 +82,13 @@ if args.zones_only:
     print("Updating external zone weights from census data …")
     ext_nodes = _census_zones["external_nodes"]
     w.setdefault("node_retail_spaces", {})
+    w.setdefault("node_workplace", {})
     for ext in ext_nodes:
         nid = ext["id"]
         _retail = float(ext.get("retail_spaces", 0.0))
-        w["node_population"][str(nid)]      = float(ext["population"])
-        w["node_retail_spaces"][str(nid)]   = _retail
-        w["node_business_demand"][str(nid)] = float(ext["workplace_pop"]) + _retail
+        w["node_population"][str(nid)]    = float(ext["population"])
+        w["node_retail_spaces"][str(nid)] = _retail
+        w["node_workplace"][str(nid)]     = float(ext["workplace_pop"])
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = float(ext.get("school_demand", 0.0))
         w.setdefault("node_commute_producers", {})[str(nid)] = float(ext.get("commute_producers", 0.0))
@@ -95,7 +96,6 @@ if args.zones_only:
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
               f"retail_sp={_retail:>8,.0f}  "
-              f"biz={w['node_business_demand'][str(nid)]:>10,.1f}  "
               f"school={w['node_school_demand'][str(nid)]:>8,.1f}")
     with open(weights_path, "w") as f:
         json.dump(w, f)
@@ -482,21 +482,24 @@ else:
             node_poi_weight[_eu] = node_poi_weight.get(_eu, 0.0) + _w * (1.0 - _t)
             node_poi_weight[_ev] = node_poi_weight.get(_ev, 0.0) + _w * _t
 
-    # Allocate workplace population to nodes within each DZ by edge-snapped POI weight
-    node_business_demand = {}
+    # Allocate workplace population to nodes within each DZ by edge-snapped POI weight.
+    # node_workplace is the clean place-of-work jobs layer (the commute component's
+    # attractor) — retail parking spaces are kept separately in node_retail_spaces and
+    # are NOT folded in here.
+    node_workplace = {}
     for dz_code, nodes_in_dz in dz_to_nodes.items():
         dz_wp = float(wp_lookup.get(dz_code, 0) or 0)
         poi_weights_dz = {n: node_poi_weight.get(n, 0.0) for n in nodes_in_dz}
         total_weight = sum(poi_weights_dz.values())
         for n in nodes_in_dz:
             if total_weight > 0:
-                node_business_demand[n] = dz_wp * poi_weights_dz[n] / total_weight
+                node_workplace[n] = dz_wp * poi_weights_dz[n] / total_weight
             else:
-                node_business_demand[n] = dz_wp / len(nodes_in_dz)
+                node_workplace[n] = dz_wp / len(nodes_in_dz)
 
-    active_biz_nodes = sum(1 for v in node_business_demand.values() if v > 0)
-    total_biz = sum(node_business_demand.values())
-    print(f"  {active_biz_nodes} nodes with business demand · total {total_biz:.0f} workplace pop attributed")
+    active_wp_nodes = sum(1 for v in node_workplace.values() if v > 0)
+    total_wp = sum(node_workplace.values())
+    print(f"  {active_wp_nodes} nodes with workplace jobs · total {total_wp:.0f} workplace pop attributed")
 
     # ── Trip producers (commute, school) — census per-DZ counts distributed to nodes ──
     # Residents → distribute each DZ's producer totals across its nodes by population share.
@@ -555,14 +558,11 @@ else:
         _eidx = _edge_strtree.nearest(_pt)
         if _eidx in _ghost_junction:
             _junc = _ghost_junction[_eidx]
-            node_business_demand[_junc] = node_business_demand.get(_junc, 0.0) + _spaces
             node_retail_spaces[_junc]   = node_retail_spaces.get(_junc, 0.0) + _spaces
         else:
             _eu, _ev = _edge_keys[_eidx]
             _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
             _eu_share, _ev_share = (1.0 - _t) * _spaces, _t * _spaces
-            node_business_demand[_eu] = node_business_demand.get(_eu, 0.0) + _eu_share
-            node_business_demand[_ev] = node_business_demand.get(_ev, 0.0) + _ev_share
             node_retail_spaces[_eu]   = node_retail_spaces.get(_eu, 0.0) + _eu_share
             node_retail_spaces[_ev]   = node_retail_spaces.get(_ev, 0.0) + _ev_share
 
@@ -657,7 +657,7 @@ else:
                 _missing_retail += 1
             node_population[nid]      = float(ext["population"])
             node_retail_spaces[nid]   = _retail
-            node_business_demand[nid] = float(ext["workplace_pop"]) + _retail
+            node_workplace[nid]       = float(ext["workplace_pop"])
             node_school_demand[nid]   = float(ext.get("school_demand", 0.0))
             node_commute_producers[nid] = float(ext.get("commute_producers", 0.0))
             node_school_producers[nid]  = float(ext.get("school_producers", 0.0))
@@ -673,7 +673,7 @@ else:
     with open(weights_path, "w") as f:
         json.dump({
             "node_population":      {str(k): v for k, v in node_population.items()},
-            "node_business_demand": {str(k): v for k, v in node_business_demand.items()},
+            "node_workplace":       {str(k): v for k, v in node_workplace.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
             "node_commute_producers": {str(k): v for k, v in node_commute_producers.items()},

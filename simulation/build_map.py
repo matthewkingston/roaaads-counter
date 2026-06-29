@@ -62,7 +62,7 @@ with open(f"{OUT_DIR}/node_weights.json") as _f:
     _w = json.load(_f)
 _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_population      = {_pnid(k): v for k, v in _w["node_population"].items()}
-node_business_demand = {_pnid(k): v for k, v in _w["node_business_demand"].items()}
+node_workplace       = {_pnid(k): v for k, v in _w["node_workplace"].items()}
 node_retail_spaces   = {_pnid(k): v for k, v in _w.get("node_retail_spaces", {}).items()}
 node_school_demand   = {_pnid(k): v for k, v in _w.get("node_school_demand", {}).items()}
 _boundary_ids        = set(int(x) for x in _w.get("boundary_node_ids", []))
@@ -146,13 +146,15 @@ print(f"  Node classification: {len(boundary_nodes_map)} boundary, {len(interior
 nodes_fg = folium.FeatureGroup(name="Nodes", show=True)
 for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
     is_boundary = node_id in BOUNDARY_NODE_IDS
-    node_pop = node_population.get(node_id, 0)
-    node_biz = node_business_demand.get(node_id, 0)
-    node_sch = node_school_demand.get(node_id, 0)
+    node_pop  = node_population.get(node_id, 0)
+    node_wp   = node_workplace.get(node_id, 0)
+    node_ret  = node_retail_spaces.get(node_id, 0)
+    node_sch  = node_school_demand.get(node_id, 0)
     tooltip = (
         f"<b>Node {node_id}</b>{' [boundary]' if is_boundary else ''}<br>"
         f"population: {node_pop:,.0f}<br>"
-        f"business demand: {node_biz:,.1f}<br>"
+        f"workplace jobs: {node_wp:,.1f}<br>"
+        f"retail parking spaces: {node_ret:,.1f}<br>"
         f"school capacity: {node_sch:,.1f}"
     )
     if is_boundary:
@@ -190,26 +192,33 @@ for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
     ).add_to(pop_fg)
 pop_fg.add_to(m)
 
-# Business nodes
-max_biz_internal = max((node_business_demand.get(n, 0) for n in interior_nodes_map), default=1) or 1
-biz_fg = folium.FeatureGroup(name="Business nodes", show=False)
+# Workplace nodes (commute attractor)
+max_wp_internal = max((node_workplace.get(n, 0) for n in interior_nodes_map), default=1) or 1
+wp_fg = folium.FeatureGroup(name="Workplace nodes", show=False)
 for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
-    biz = node_business_demand.get(node_id, 0)
-    if biz <= 0:
+    wp = node_workplace.get(node_id, 0)
+    if wp <= 0:
         continue
-    retail_sp = node_retail_spaces.get(node_id, 0)
-    wp_demand = biz - retail_sp
     folium.CircleMarker(
-        location=[nlat, nlon], radius=_scaled_radius(biz, max_biz_internal),
+        location=[nlat, nlon], radius=_scaled_radius(wp, max_wp_internal),
         color="#7b2d8b", fill=True, fill_color="#b05ec0", fill_opacity=0.65, weight=1,
-        tooltip=(
-            f"<b>Node {node_id}</b><br>"
-            f"workplace population: {wp_demand:,.1f}<br>"
-            f"retail parking spaces: {retail_sp:,.1f}<br>"
-            f"business demand: {biz:,.1f}"
-        ),
-    ).add_to(biz_fg)
-biz_fg.add_to(m)
+        tooltip=f"<b>Node {node_id}</b><br>workplace jobs: {wp:,.1f}",
+    ).add_to(wp_fg)
+wp_fg.add_to(m)
+
+# Retail nodes (retail attractor — parking spaces)
+max_ret_internal = max((node_retail_spaces.get(n, 0) for n in interior_nodes_map), default=1) or 1
+ret_fg = folium.FeatureGroup(name="Retail nodes", show=False)
+for node_id, (nlat, nlon, dist, deg) in all_nodes_map.items():
+    ret = node_retail_spaces.get(node_id, 0)
+    if ret <= 0:
+        continue
+    folium.CircleMarker(
+        location=[nlat, nlon], radius=_scaled_radius(ret, max_ret_internal),
+        color="#b06a00", fill=True, fill_color="#e8a020", fill_opacity=0.65, weight=1,
+        tooltip=f"<b>Node {node_id}</b><br>retail parking spaces: {ret:,.1f}",
+    ).add_to(ret_fg)
+ret_fg.add_to(m)
 
 # School nodes
 max_sch_internal = max((node_school_demand.get(n, 0) for n in all_nodes_map), default=1) or 1
@@ -376,13 +385,14 @@ if os.path.exists(_flows_path):
         return {tuple(int(x) for x in k.split(",")): v
                 for k, v in _flows_data.get(key, {}).items()}
 
-    _link_flow        = _parse_flows("flows")
-    _link_flow_res    = _parse_flows("flows_res")
-    _link_flow_biz    = _parse_flows("flows_biz")
-    _link_flow_school = _parse_flows("flows_school")
-    _has_components   = bool(_link_flow_res)
-    _has_school_layer = bool(_link_flow_school)
-    _ext_node_trips   = _flows_data.get("ext_node_trips", {})
+    _link_flow         = _parse_flows("flows")
+    _link_flow_res     = _parse_flows("flows_res")
+    _link_flow_commute = _parse_flows("flows_commute")
+    _link_flow_retail  = _parse_flows("flows_retail")
+    _link_flow_school  = _parse_flows("flows_school")
+    _has_components    = bool(_link_flow_res)
+    _has_school_layer  = bool(_link_flow_school)
+    _ext_node_trips    = _flows_data.get("ext_node_trips", {})
 
     # ── colour helpers ────────────────────────────────────────────────────────
     def _log_scale(flow_dict):
@@ -421,11 +431,18 @@ if os.path.exists(_flows_path):
         b = int(80  + 80  * (1 - t))
         return f"#{r:02x}{g:02x}{b:02x}"
 
-    def _color_biz(t):
-        """Amber → dark orange-red."""
+    def _color_commute(t):
+        """Amber → dark orange-red (commute trips)."""
         r = min(255, int(200 + 55 * t))
         g = int(160 * (1 - t * 0.85))
         b = int(20  * (1 - t))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _color_retail(t):
+        """Light cyan → deep teal-blue (retail trips)."""
+        r = int(80  * (1 - t))
+        g = int(150 + 50 * (1 - t))
+        b = min(255, int(160 + 95 * t))
         return f"#{r:02x}{g:02x}{b:02x}"
 
     def _color_school(t):
@@ -478,13 +495,15 @@ if os.path.exists(_flows_path):
         _tip = f"{_data.get('name', '') or 'link'}<br>est. AADT: {_flow:,.0f}"
         if _has_components:
             _r = _link_flow_res.get((_u, _v), 0) + _link_flow_res.get((_v, _u), 0)
-            _b = _link_flow_biz.get((_u, _v), 0) + _link_flow_biz.get((_v, _u), 0)
+            _c = _link_flow_commute.get((_u, _v), 0) + _link_flow_commute.get((_v, _u), 0)
+            _rt = _link_flow_retail.get((_u, _v), 0) + _link_flow_retail.get((_v, _u), 0)
             _s = (_link_flow_school.get((_u, _v), 0) + _link_flow_school.get((_v, _u), 0)
                   if _has_school_layer else 0)
-            _tot = _r + _b + _s
+            _tot = _r + _c + _rt + _s
             if _tot > 0:
                 _tip += f"<br>&nbsp;&nbsp;residential: {_r:,.0f} ({100*_r/_tot:.0f}%)"
-                _tip += f"<br>&nbsp;&nbsp;business: {_b:,.0f} ({100*_b/_tot:.0f}%)"
+                _tip += f"<br>&nbsp;&nbsp;commute: {_c:,.0f} ({100*_c/_tot:.0f}%)"
+                _tip += f"<br>&nbsp;&nbsp;retail: {_rt:,.0f} ({100*_rt/_tot:.0f}%)"
                 if _has_school_layer:
                     _tip += f"<br>&nbsp;&nbsp;school: {_s:,.0f} ({100*_s/_tot:.0f}%)"
         _tip += f"<br>length: {float(_data.get('length', 0)):.0f}m"
@@ -505,9 +524,16 @@ if os.path.exists(_flows_path):
             show=False,
         )
         _add_flow_fg(
-            _link_flow_biz, "Flows - business", _color_biz,
+            _link_flow_commute, "Flows - commute", _color_commute,
             lambda name, flow, length: (
-                f"{name or 'link'}<br>business AADT: {flow:,.0f}<br>length: {length:.0f}m"
+                f"{name or 'link'}<br>commute AADT: {flow:,.0f}<br>length: {length:.0f}m"
+            ),
+            show=False,
+        )
+        _add_flow_fg(
+            _link_flow_retail, "Flows - retail", _color_retail,
+            lambda name, flow, length: (
+                f"{name or 'link'}<br>retail AADT: {flow:,.0f}<br>length: {length:.0f}m"
             ),
             show=False,
         )
@@ -519,7 +545,7 @@ if os.path.exists(_flows_path):
                 ),
                 show=False,
             )
-        _layer_str = "combined + res + biz" + (" + school" if _has_school_layer else "")
+        _layer_str = "combined + res + commute + retail" + (" + school" if _has_school_layer else "")
         print(f"Added flow layers from {_flows_path} ({_layer_str}, {len(_link_flow)} links)")
     else:
         print(f"Added flow layer from {_flows_path} ({len(_link_flow)} links)")
@@ -543,12 +569,13 @@ if os.path.exists(_flows_path):
             return {tuple(int(x) for x in k.split(",")): v
                     for k, v in _tp.get(key, {}).items()}
 
-        _sf_res = _parse_sf("slot_fracs_res")
-        _sf_biz = _parse_sf("slot_fracs_biz")
-        _sf_sch = _parse_sf("slot_fracs_school")
+        _sf_res     = _parse_sf("slot_fracs_res")
+        _sf_commute = _parse_sf("slot_fracs_commute")
+        _sf_retail  = _parse_sf("slot_fracs_retail")
+        _sf_sch     = _parse_sf("slot_fracs_school")
 
-        if not (_sf_res and _sf_biz):
-            print("Residuals layer skipped: slot_fracs_res/biz missing from tuned_params.json")
+        if not (_sf_res and _sf_commute and _sf_retail):
+            print("Residuals layer skipped: slot_fracs_res/commute/retail missing from tuned_params.json")
         else:
             with open(_LINK_AADT) as _f:
                 _link_aadt = json.load(_f)["links"]
@@ -613,13 +640,16 @@ if os.path.exists(_flows_path):
                     ).add_to(resid_fg)
                     _n_excl += 1
                     continue
-                _m_r = _link_flow_res.get((_u, _v), 0.0)
-                _m_b = _link_flow_biz.get((_u, _v), 0.0)
-                _m_s = _link_flow_school.get((_u, _v), 0.0) if _has_school_layer else 0.0
+                _m_r  = _link_flow_res.get((_u, _v), 0.0)
+                _m_c  = _link_flow_commute.get((_u, _v), 0.0)
+                _m_rt = _link_flow_retail.get((_u, _v), 0.0)
+                _m_s  = _link_flow_school.get((_u, _v), 0.0) if _has_school_layer else 0.0
+                _comps = [(_m_r, _sf_res), (_m_c, _sf_commute), (_m_rt, _sf_retail)]
+                if _has_school_layer:
+                    _comps.append((_m_s, _sf_sch))
                 _zs = []
                 for _sess in _entry.get("observations", []):
-                    _r = walking_session_residual(_m_r, _m_b, _m_s, _sess,
-                                                  _sf_res, _sf_biz, _sf_sch)
+                    _r = walking_session_residual(_comps, _sess)
                     if _r is not None:
                         _zs.append(_r["z"])
                 if not _zs:
@@ -628,7 +658,7 @@ if os.path.exists(_flows_path):
                 _mean_z = sum(_zs) / len(_zs)
                 _rms    = math.sqrt(sum(z * z for z in _zs) / len(_zs))
                 _signed = math.copysign(_rms, _mean_z) if _mean_z != 0 else 0.0
-                _model_aadt = _m_r + _m_b + _m_s
+                _model_aadt = _m_r + _m_c + _m_rt + _m_s
                 _obs_aadt   = _entry.get("aadt", 0)
                 _obs_sig    = _entry.get("aadt_uncertainty", 0)
                 _nobs       = _entry.get("n_observations", len(_zs))
@@ -736,7 +766,8 @@ if _census_zones is not None:
     for _ez in _ext_zones:
         _nid    = _ez["id"]
         _ez_pop = node_population.get(_nid, 0)
-        _ez_biz = node_business_demand.get(_nid, 0)
+        _ez_wp  = node_workplace.get(_nid, 0)
+        _ez_ret = node_retail_spaces.get(_nid, 0)
         _ez_sch = node_school_demand.get(_nid, 0)
         _trips  = _ext_node_trips.get(_nid, {})
         _t_int  = _trips.get("trips_internal", 0)
@@ -746,7 +777,8 @@ if _census_zones is not None:
         _tip = (
             f"<b>{_nid}</b> [{_ez['level']}]<br>"
             f"population: {_ez_pop:,.0f}<br>"
-            f"business demand: {_ez_biz:,.1f}<br>"
+            f"workplace jobs: {_ez_wp:,.1f}<br>"
+            f"retail parking spaces: {_ez_ret:,.1f}<br>"
             f"school demand: {_ez_sch:,.1f}"
         )
         if _trips:

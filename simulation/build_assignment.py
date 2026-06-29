@@ -49,53 +49,58 @@ with open(WEIGHTS_FILE) as f:
     weights = json.load(f)
 
 _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
-node_population      = {_pnid(k): v for k, v in weights["node_population"].items()}
-node_business_demand = {_pnid(k): v for k, v in weights["node_business_demand"].items()}
-node_school_demand   = {_pnid(k): v for k, v in weights.get("node_school_demand", {}).items()}
-node_school_producers = {_pnid(k): v for k, v in weights.get("node_school_producers", {}).items()}
+node_population        = {_pnid(k): v for k, v in weights["node_population"].items()}
+node_workplace         = {_pnid(k): v for k, v in weights["node_workplace"].items()}
+node_retail_spaces     = {_pnid(k): v for k, v in weights.get("node_retail_spaces", {}).items()}
+node_school_demand     = {_pnid(k): v for k, v in weights.get("node_school_demand", {}).items()}
+node_commute_producers = {_pnid(k): v for k, v in weights.get("node_commute_producers", {}).items()}
+node_school_producers  = {_pnid(k): v for k, v in weights.get("node_school_producers", {}).items()}
 
 THETA          = None
 K_res          = None
-K_biz          = None
+K_commute      = None
+K_retail       = None
 K_sch          = None
-P_biz          = None
-ALPHA_biz      = None
-W_SCHOOL       = None
+P_commute      = None
+ALPHA_commute  = None
+P_retail       = None
+ALPHA_retail   = None
 P_school       = None
 ALPHA_school   = None
-slot_fracs_res    = {}
-slot_fracs_biz    = {}
-slot_fracs_school = {}
+slot_fracs_res     = {}
+slot_fracs_commute = {}
+slot_fracs_retail  = {}
+slot_fracs_school  = {}
 
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         _tp = json.load(f)
-    K         = _tp.get("K",         K)
-    W_BIZ     = _tp.get("W_BIZ",     W_BIZ)
-    P         = _tp.get("P",         P)
-    ALPHA     = _tp.get("ALPHA",     ALPHA)
-    BETA      = _tp.get("BETA",      BETA)
-    THETA     = _tp.get("THETA",     None)
-    P_biz     = _tp.get("P_biz",     None)
-    ALPHA_biz = _tp.get("ALPHA_biz", None)
-    W_SCHOOL     = _tp.get("W_SCHOOL",     None)
-    P_school     = _tp.get("P_school",     None)
-    ALPHA_school = _tp.get("ALPHA_school", None)
-    if "K_res" in _tp and "K_biz" in _tp:
-        K_res = _tp["K_res"]
-        K_biz = _tp["K_biz"]
-        K_sch = _tp.get("K_sch", 0.0)
-        slot_fracs_res = {tuple(int(x) for x in k.split(",")): v
-                          for k, v in _tp.get("slot_fracs_res", {}).items()}
-        slot_fracs_biz = {tuple(int(x) for x in k.split(",")): v
-                          for k, v in _tp.get("slot_fracs_biz", {}).items()}
-        slot_fracs_school = {tuple(int(x) for x in k.split(",")): v
-                             for k, v in _tp.get("slot_fracs_school", {}).items()}
+    K             = _tp.get("K",             K)
+    P             = _tp.get("P",             P)
+    ALPHA         = _tp.get("ALPHA",         ALPHA)
+    BETA          = _tp.get("BETA",          BETA)
+    THETA         = _tp.get("THETA",         None)
+    P_commute     = _tp.get("P_commute",     None)
+    ALPHA_commute = _tp.get("ALPHA_commute", None)
+    P_retail      = _tp.get("P_retail",      None)
+    ALPHA_retail  = _tp.get("ALPHA_retail",  None)
+    P_school      = _tp.get("P_school",      None)
+    ALPHA_school  = _tp.get("ALPHA_school",  None)
+    if "K_res" in _tp and "K_commute" in _tp and "K_retail" in _tp:
+        K_res     = _tp["K_res"]
+        K_commute = _tp["K_commute"]
+        K_retail  = _tp["K_retail"]
+        K_sch     = _tp.get("K_sch", 0.0)
+        _parse_sf = lambda key: {tuple(int(x) for x in k.split(",")): v
+                                 for k, v in _tp.get(key, {}).items()}
+        slot_fracs_res     = _parse_sf("slot_fracs_res")
+        slot_fracs_commute = _parse_sf("slot_fracs_commute")
+        slot_fracs_retail  = _parse_sf("slot_fracs_retail")
+        slot_fracs_school  = _parse_sf("slot_fracs_school")
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}"
-          + (f"  THETA={THETA:.4f}"             if THETA is not None     else "")
-          + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}  K_sch={K_sch:.3e}" if K_res is not None else "")
-          + (f"  P_biz={P_biz:.1f}s  ALPHA_biz={ALPHA_biz:.4f}" if P_biz is not None else "")
-          + (f"  W_SCHOOL={W_SCHOOL:.4f}  P_school={P_school:.1f}s" if W_SCHOOL is not None else "")
+          + (f"  THETA={THETA:.4f}" if THETA is not None else "")
+          + (f"  K_res={K_res:.3e}  K_commute={K_commute:.3e}  K_retail={K_retail:.3e}"
+             f"  K_sch={K_sch:.3e}" if K_res is not None else "")
           + "]")
 
 # ── Assignment ────────────────────────────────────────────────────────────────
@@ -143,53 +148,60 @@ else:
             print("  Warning: THETA in params but no stochastic paths in cache — using all-or-nothing")
             THETA = None
 
-w_pop    = np.array([node_population.get(nid, 0)      for nid in node_ids_arr], dtype=np.float64)
-w_biz    = np.array([node_business_demand.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
-w_school = np.array([node_school_demand.get(nid, 0)   for nid in node_ids_arr], dtype=np.float64)
-w_school_prod = np.array([node_school_producers.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
+w_pop       = np.array([node_population.get(nid, 0)        for nid in node_ids_arr], dtype=np.float64)
+w_workplace = np.array([node_workplace.get(nid, 0)         for nid in node_ids_arr], dtype=np.float64)
+w_retail    = np.array([node_retail_spaces.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
+w_school    = np.array([node_school_demand.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
+w_commute_prod = np.array([node_commute_producers.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
+w_school_prod  = np.array([node_school_producers.get(nid, 0)  for nid in node_ids_arr], dtype=np.float64)
+if w_commute_prod.sum() == 0:
+    w_commute_prod = None   # fall back to population producer (legacy weights)
 if w_school_prod.sum() == 0:
-    w_school_prod = None   # fall back to population producer (legacy weights)
-print(f"  {len(node_ids_arr)} nodes  total weight {(w_pop + W_BIZ * w_biz).sum():,.0f}  (W_BIZ={W_BIZ})")
+    w_school_prod = None    # fall back to population producer (legacy weights)
+print(f"  {len(node_ids_arr)} nodes  pop {w_pop.sum():,.0f}  workplace {w_workplace.sum():,.0f}"
+      f"  retail {w_retail.sum():,.0f}")
 
 N_links  = len(link_u)
 N_nodes  = len(node_ids_arr)
 # External intra-zonal self-term (denominator-only; from build_intra_times.py).
 self_src, self_dist, self_w = load_self_terms(list(node_ids_arr))
-# School component is active when K_sch>0, the school kernel is present, and there is
-# school demand. W_SCHOOL is no longer required/used (removed: redundant with K_sch under
-# the production constraint).
-_use_3c  = (K_res is not None and K_sch is not None and K_sch > 0
-            and P_school is not None and w_school.sum() > 0)
-_use_2c  = (K_res is not None and not _use_3c)
+# Four-component mode requires the four K's and the commute/retail kernels.
+_use_4c  = (K_res is not None and K_commute is not None and K_retail is not None
+            and P_commute is not None and P_retail is not None)
+# School sub-component is active when K_sch>0, the school kernel is present, and there
+# is school demand.
+_use_school = (_use_4c and K_sch is not None and K_sch > 0
+               and P_school is not None and w_school.sum() > 0)
 
-if _use_2c or _use_3c:
+if _use_4c:
     # Production-constrained assignment (singly-constrained per component).
     # Per-OD-pair pre-K component flows, then scatter onto links via the probit
-    # routing incidence and apply K_res/K_biz/K_sch.
-    t_res, t_biz, t_sch = constrained_od_flows(
-        od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, w_school,
-        W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_3c,
+    # routing incidence and apply K_res/K_commute/K_retail/K_sch.
+    t_res, t_commute, t_retail, t_sch = constrained_od_flows(
+        od_src, od_dst, od_dist, N_nodes,
+        w_pop, w_workplace, w_retail, w_school,
+        P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+        P_school=P_school, ALPHA_school=ALPHA_school, with_school=_use_school,
         self_src=self_src, self_dist=self_dist, self_w=self_w,
-        w_school_prod=w_school_prod)
-    raw_res = scatter_od_to_links(t_res, pair_idx, link_idx, link_weight, N_links)
-    raw_biz = scatter_od_to_links(t_biz, pair_idx, link_idx, link_weight, N_links)
-    raw_sch = (scatter_od_to_links(t_sch, pair_idx, link_idx, link_weight, N_links)
-               if _use_3c else np.zeros(N_links))
-    _nonzero = (raw_res + raw_biz + raw_sch) > 0
-    link_flow_res = {(int(link_u[k]), int(link_v[k])): raw_res[k] * K_res
-                     for k in range(N_links) if _nonzero[k]}
-    link_flow_biz = {(int(link_u[k]), int(link_v[k])): raw_biz[k] * K_biz
-                     for k in range(N_links) if _nonzero[k]}
-    if _use_3c:
-        link_flow_school = {(int(link_u[k]), int(link_v[k])): raw_sch[k] * K_sch
+        w_commute_prod=w_commute_prod, w_school_prod=w_school_prod)
+    raw_res     = scatter_od_to_links(t_res,     pair_idx, link_idx, link_weight, N_links)
+    raw_commute = scatter_od_to_links(t_commute, pair_idx, link_idx, link_weight, N_links)
+    raw_retail  = scatter_od_to_links(t_retail,  pair_idx, link_idx, link_weight, N_links)
+    raw_sch     = (scatter_od_to_links(t_sch, pair_idx, link_idx, link_weight, N_links)
+                   if _use_school else np.zeros(N_links))
+    _nonzero = (raw_res + raw_commute + raw_retail + raw_sch) > 0
+    _mk = lambda raw, K_c: {(int(link_u[k]), int(link_v[k])): raw[k] * K_c
                             for k in range(N_links) if _nonzero[k]}
-    else:
-        link_flow_school = None
-    link_flow = {lnk: (link_flow_res.get(lnk, 0.0) + link_flow_biz.get(lnk, 0.0)
+    link_flow_res     = _mk(raw_res,     K_res)
+    link_flow_commute = _mk(raw_commute, K_commute)
+    link_flow_retail  = _mk(raw_retail,  K_retail)
+    link_flow_school  = _mk(raw_sch, K_sch) if _use_school else None
+    _all_keys = (set(link_flow_res) | set(link_flow_commute) | set(link_flow_retail)
+                 | (set(link_flow_school) if link_flow_school else set()))
+    link_flow = {lnk: (link_flow_res.get(lnk, 0.0) + link_flow_commute.get(lnk, 0.0)
+                       + link_flow_retail.get(lnk, 0.0)
                        + (link_flow_school.get(lnk, 0.0) if link_flow_school else 0.0))
-                 for lnk in set(link_flow_res) | set(link_flow_biz)
-                            | (set(link_flow_school) if link_flow_school else set())}
+                 for lnk in _all_keys}
 
     # ── True AADT (daily) link flows ──────────────────────────────────────────
     # link_flow_* above are K_c·m_c — calibrated so K_c·m_c·f_c[slot] matches the
@@ -197,25 +209,29 @@ if _use_2c or _use_3c:
     # The annual-average daily contribution is K_c·m_c·W_c (W_c from aadt_weights).
     # These weighted dicts are what is REPORTED/SERIALISED as AADT; the unweighted
     # link_flow_* still feed compute_chi2 (which applies f_c itself — do not double
-    # weight).  W_res+W_biz+W_sch ≈ 1.
-    W_res, W_biz, W_sch = aadt_weights(slot_fracs_res, slot_fracs_biz, slot_fracs_school)
-    aadt_res = {lnk: v * W_res for lnk, v in link_flow_res.items()}
-    aadt_biz = {lnk: v * W_biz for lnk, v in link_flow_biz.items()}
-    aadt_school = ({lnk: v * W_sch for lnk, v in link_flow_school.items()}
-                   if link_flow_school else None)
-    aadt_combined = {lnk: (aadt_res.get(lnk, 0.0) + aadt_biz.get(lnk, 0.0)
+    # weight).  W_res+W_commute+W_retail+W_sch ≈ 1.
+    W_res, W_commute, W_retail, W_sch = aadt_weights(
+        slot_fracs_res, slot_fracs_commute, slot_fracs_retail, slot_fracs_school)
+    aadt_res     = {lnk: v * W_res     for lnk, v in link_flow_res.items()}
+    aadt_commute = {lnk: v * W_commute for lnk, v in link_flow_commute.items()}
+    aadt_retail  = {lnk: v * W_retail  for lnk, v in link_flow_retail.items()}
+    aadt_school  = ({lnk: v * W_sch for lnk, v in link_flow_school.items()}
+                    if link_flow_school else None)
+    aadt_combined = {lnk: (aadt_res.get(lnk, 0.0) + aadt_commute.get(lnk, 0.0)
+                           + aadt_retail.get(lnk, 0.0)
                            + (aadt_school.get(lnk, 0.0) if aadt_school else 0.0))
-                     for lnk in set(aadt_res) | set(aadt_biz)
-                                | (set(aadt_school) if aadt_school else set())}
-    print(f"  AADT weights: W_res={W_res:.3f} W_biz={W_biz:.3f} W_sch={W_sch:.3f}"
-          f"  (sum={W_res+W_biz+W_sch:.3f})")
+                     for lnk in _all_keys}
+    print(f"  AADT weights: W_res={W_res:.3f} W_commute={W_commute:.3f} "
+          f"W_retail={W_retail:.3f} W_sch={W_sch:.3f}"
+          f"  (sum={W_res+W_commute+W_retail+W_sch:.3f})")
 
     # Per-external-node trip totals (routed pairs only: through = transiting ext→ext).
     # AADT-weighted per component so these are true daily trips.
     _n_routed = int(cache.get("n_routed_pairs", len(od_src)))
     _is_ext   = np.array([isinstance(nid, str) for nid in node_ids_arr])
-    _t_total  = (t_res * K_res * W_res + t_biz * K_biz * W_biz
-                 + (t_sch * K_sch * W_sch if _use_3c else np.zeros(len(t_res))))
+    _t_total  = (t_res * K_res * W_res + t_commute * K_commute * W_commute
+                 + t_retail * K_retail * W_retail
+                 + (t_sch * K_sch * W_sch if _use_school else np.zeros(len(t_res))))
     _src_r    = od_src[:_n_routed]
     _dst_r    = od_dst[:_n_routed]
     _t_r      = _t_total[:_n_routed]
@@ -232,17 +248,18 @@ if _use_2c or _use_3c:
             "trips_internal": round(float(_t[~_de].sum()), 1),
         }
 else:
-    # Legacy single-K unconstrained path (old param files without K_res/K_biz).
+    # Legacy single-K unconstrained path (old param files without the 4-component K's).
+    # Reconstruct a combined business weight from the clean layers for backward compat.
+    w_biz_legacy = w_workplace + w_retail
     _kw = dict(BETA=BETA, THETA=THETA,
-               P_biz=P_biz, ALPHA_biz=ALPHA_biz,
                od_dist_2=od_dist_2, pair_idx_2=pair_idx_2, link_idx_2=link_idx_2,
                od_dist_3=od_dist_3, pair_idx_3=pair_idx_3, link_idx_3=link_idx_3,
                link_weight=link_weight)
     raw_flow_arr = gravity_assign(od_src, od_dst, od_dist, pair_idx, link_idx, N_links,
-                                  W_BIZ, P, ALPHA, w_pop, w_biz, **_kw)
+                                  W_BIZ, P, ALPHA, w_pop, w_biz_legacy, **_kw)
     link_flow = {(int(link_u[k]), int(link_v[k])): raw_flow_arr[k] * K
                  for k in range(N_links) if raw_flow_arr[k] > 0}
-    link_flow_res = link_flow_biz = link_flow_school = None
+    link_flow_res = link_flow_commute = link_flow_retail = link_flow_school = None
     ext_node_trips = {}
 
 print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded links)")
@@ -251,8 +268,8 @@ print(f"  Assignment complete in {time.time()-t0:.2f}s  ({len(link_flow)} loaded
 
 node_ids    = list(node_ids_arr)
 G           = ox.load_graphml(CONS_GRAPH)
-node_weight = {nid: float(wp + W_BIZ * wb)
-               for nid, wp, wb in zip(node_ids_arr, w_pop, w_biz)}
+node_weight = {nid: float(wp + wk + wr)
+               for nid, wp, wk, wr in zip(node_ids_arr, w_pop, w_workplace, w_retail)}
 
 _link_name = {(int(u), int(v)): d["name"]
               for u, v, d in G.edges(data=True) if d.get("name")}
@@ -265,27 +282,29 @@ def _link_label(u, v):
 # ── Report ────────────────────────────────────────────────────────────────────
 
 print(f"\nOfficial count sites  (K = {K:.4e}"
-      + (f"  K_res={K_res:.3e}  K_biz={K_biz:.3e}"
-         + (f"  K_sch={K_sch:.3e}" if _use_3c else "")
-         if (_use_2c or _use_3c) else "") + ")")
+      + (f"  K_res={K_res:.3e}  K_commute={K_commute:.3e}  K_retail={K_retail:.3e}"
+         + (f"  K_sch={K_sch:.3e}" if _use_school else "")
+         if _use_4c else "") + ")")
 print(f"  {'Site':<45s}  {'Modelled':>9s}  {'Observed':>9s}  {'Ratio':>6s}")
 # Compare TRUE AADT (component-weighted) to the observed AADT — not the unweighted
 # K·m link_flow, which is ~1/ΣW ≈ 2.6× larger and is hourly-calibrated, not daily.
-_report_flow = aadt_combined if (_use_2c or _use_3c) else link_flow
+_report_flow = aadt_combined if _use_4c else link_flow
 for s in COUNT_SITES:
     f = site_flow(_report_flow, s)
     print(f"  {s['label']:<45s}  {f:>9,.0f}  {s['observed']:>9,}  {f/s['observed']:>6.2f}")
 
 rows, chi2, n_obs, n_eff = compute_chi2(
-    link_flow_res if (_use_2c or _use_3c) else link_flow,
+    link_flow_res if _use_4c else link_flow,
     label_fn=_link_label,
     link_aadt_file=LINK_AADT,
     exclude_links=EXCLUDE_LINKS,
-    link_flow_biz_dict=link_flow_biz if (_use_2c or _use_3c) else None,
-    link_flow_school_dict=link_flow_school if _use_3c else None,
-    slot_fracs_res=slot_fracs_res if (_use_2c or _use_3c) else None,
-    slot_fracs_biz=slot_fracs_biz if (_use_2c or _use_3c) else None,
-    slot_fracs_school=slot_fracs_school if _use_3c else None,
+    link_flow_commute_dict=link_flow_commute if _use_4c else None,
+    link_flow_retail_dict=link_flow_retail   if _use_4c else None,
+    link_flow_school_dict=link_flow_school    if _use_school else None,
+    slot_fracs_res=slot_fracs_res         if _use_4c else None,
+    slot_fracs_commute=slot_fracs_commute if _use_4c else None,
+    slot_fracs_retail=slot_fracs_retail   if _use_4c else None,
+    slot_fracs_school=slot_fracs_school   if _use_school else None,
 )
 print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
@@ -293,26 +312,30 @@ print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
 # Serialise TRUE AADT (component-weighted) flows — consumed by build_map.py as AADT.
-_out_flow = aadt_combined if (_use_3c or _use_2c) else link_flow
+_out_flow = aadt_combined if _use_4c else link_flow
 out = {
-    "kernel": "rational", "W_BIZ": W_BIZ, "P": P, "ALPHA": ALPHA, "BETA": BETA, "K": K,
+    "kernel": "rational", "P": P, "ALPHA": ALPHA, "BETA": BETA, "K": K,
     "flows": {f"{u},{v}": flow for (u, v), flow in _out_flow.items()},
 }
-if _use_3c or _use_2c:
-    out["K_res"] = K_res
-    out["K_biz"] = K_biz
-    out["aadt_weights"] = {"res": W_res, "biz": W_biz, "school": W_sch}
-    out["flows_res"] = {f"{u},{v}": flow for (u, v), flow in aadt_res.items()}
-    out["flows_biz"] = {f"{u},{v}": flow for (u, v), flow in aadt_biz.items()}
+if _use_4c:
+    out["K_res"]     = K_res
+    out["K_commute"] = K_commute
+    out["K_retail"]  = K_retail
+    out["aadt_weights"] = {"res": W_res, "commute": W_commute,
+                           "retail": W_retail, "school": W_sch}
+    out["flows_res"]     = {f"{u},{v}": flow for (u, v), flow in aadt_res.items()}
+    out["flows_commute"] = {f"{u},{v}": flow for (u, v), flow in aadt_commute.items()}
+    out["flows_retail"]  = {f"{u},{v}": flow for (u, v), flow in aadt_retail.items()}
     out["ext_node_trips"] = ext_node_trips
-if _use_3c:
+if _use_school:
     out["K_sch"] = K_sch
     out["flows_school"] = {f"{u},{v}": flow for (u, v), flow in aadt_school.items()}
 with open(flows_path, "w") as f:
     json.dump(out, f)
-_comp_str = ("+ res/biz/school" if _use_3c else ("+ res/biz" if _use_2c else ""))
+_comp_str = ("+ res/commute/retail/school" if _use_school
+             else ("+ res/commute/retail" if _use_4c else ""))
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}"
       + (f"  ({_comp_str} components)" if _comp_str else ""))
-print(f"Parameters: K={K}  W_BIZ={W_BIZ}  P={P}  ALPHA={ALPHA}  BETA={BETA}"
-      + (f"  P_biz={P_biz}  ALPHA_biz={ALPHA_biz}" if P_biz is not None else "")
-      + (f"  W_SCHOOL={W_SCHOOL}  P_school={P_school}" if W_SCHOOL is not None else ""))
+print(f"Parameters: K={K}  P={P}  ALPHA={ALPHA}  BETA={BETA}"
+      + (f"  P_commute={P_commute}  ALPHA_commute={ALPHA_commute}"
+         f"  P_retail={P_retail}  ALPHA_retail={ALPHA_retail}" if _use_4c else ""))

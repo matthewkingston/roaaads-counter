@@ -234,31 +234,38 @@ def _section_gravity(e, prev_entry, config):
         )
 
     # K components (analytical, not tuned)
-    K     = params.get("K")
-    K_res = params.get("K_res")
-    K_biz = params.get("K_biz")
-    K_sch = params.get("K_sch")
+    K         = params.get("K")
+    K_res     = params.get("K_res")
+    K_commute = params.get("K_commute")
+    K_retail  = params.get("K_retail")
+    K_sch     = params.get("K_sch")
     if K is not None:
         lines.append(
             f"  {'K':<8}  {'(analytical)':>12}  {K:>12.4e}  "
             f"{'':>8}  {'—':>12}  {'':>8}  {'':>9}"
         )
-    if K_res is not None and K_biz is not None and K:
-        K_tot = K_res + K_biz + (K_sch or 0.0)
-        phi_b = K_biz / K_tot if K_tot > 0 else 0.0
+    if K_res is not None and K_commute is not None and K_retail is not None and K:
+        K_tot = K_res + K_commute + K_retail + (K_sch or 0.0)
+        phi_c = K_commute / K_tot if K_tot > 0 else 0.0
+        phi_t = K_retail  / K_tot if K_tot > 0 else 0.0
         phi_s = (K_sch / K_tot if K_tot > 0 else 0.0) if K_sch is not None else 0.0
         lines.append(f"  {'K_res':<8}  {'':>12}  {K_res:>12.4e}  "
-                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*(1-phi_b-phi_s):.1f}% of K)")
-        lines.append(f"  {'K_biz':<8}  {'':>12}  {K_biz:>12.4e}  "
-                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*phi_b:.1f}% of K, phi_biz)")
+                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*(1-phi_c-phi_t-phi_s):.1f}% of K)")
+        lines.append(f"  {'K_comm':<8}  {'':>12}  {K_commute:>12.4e}  "
+                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*phi_c:.1f}% of K, phi_commute)")
+        lines.append(f"  {'K_ret':<8}  {'':>12}  {K_retail:>12.4e}  "
+                     f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*phi_t:.1f}% of K, phi_retail)")
         if K_sch is not None:
             lines.append(f"  {'K_sch':<8}  {'':>12}  {K_sch:>12.4e}  "
                          f"{'':>8}  {'':>12}  {'':>8}  {'':>9}  ({100*phi_s:.1f}% of K, phi_sch)")
         hp = e.get("tuner_hyperparams", {})
-        phi_p = hp.get("phi_biz_prior", hp.get("phi_prior", 0.35))
-        phi_sp = hp.get("phi_school_prior", 0.10)
-        lines.append(f"  {'phi_biz':<8}  {'':>12}  {phi_b:>12.4f}  "
-                     f"{'':>8}  {phi_p:>12.4f}  {'':>8}  {'':>9}  (phi_biz_prior)")
+        phi_cp = hp.get("phi_commute_prior", 0.22)
+        phi_tp = hp.get("phi_retail_prior",  0.22)
+        phi_sp = hp.get("phi_school_prior",  0.10)
+        lines.append(f"  {'phi_comm':<8}  {'':>12}  {phi_c:>12.4f}  "
+                     f"{'':>8}  {phi_cp:>12.4f}  {'':>8}  {'':>9}  (phi_commute_prior)")
+        lines.append(f"  {'phi_ret':<8}  {'':>12}  {phi_t:>12.4f}  "
+                     f"{'':>8}  {phi_tp:>12.4f}  {'':>8}  {'':>9}  (phi_retail_prior)")
         if K_sch is not None:
             lines.append(f"  {'phi_sch':<8}  {'':>12}  {phi_s:>12.4f}  "
                          f"{'':>8}  {phi_sp:>12.4f}  {'':>8}  {'':>9}  (phi_school_prior)")
@@ -352,84 +359,44 @@ def _section_external(e, config):
 # ── Section: SLOT FRACTIONS ───────────────────────────────────────────────────
 
 def _section_slots(e):
-    params            = e["params"]
-    slot_fracs_res    = params.get("slot_fracs_res",    {})
-    slot_fracs_biz    = params.get("slot_fracs_biz",    {})
-    slot_fracs_school = params.get("slot_fracs_school", {})
-    slot_prior        = e.get("slot_prior", {})
+    # f is pinned at the NTS profile (never tuned), so each component fraction equals
+    # its NTS prior and the displayed fractions are the pinned NTS shares.
+    params             = e["params"]
+    slot_fracs_res     = params.get("slot_fracs_res",     {})
+    slot_fracs_commute = params.get("slot_fracs_commute", {})
+    slot_fracs_retail  = params.get("slot_fracs_retail",  {})
+    slot_fracs_school  = params.get("slot_fracs_school",  {})
+    slot_prior         = e.get("slot_prior", {})
     _has_sch = bool(slot_fracs_school)
 
-    if not slot_fracs_res and not slot_fracs_biz:
+    if not slot_fracs_res and not slot_fracs_commute:
         return [_rule("SLOT FRACTIONS"), "", "  (no slot fraction data)", ""]
 
-    lines = [_rule("SLOT FRACTIONS"), ""]
-    if _has_sch:
-        header = (
-            f"  {'Type':<5}  {'Hr':>2}  {'Prior_agg':>9}  "
-            f"{'f_res':>8}  {'Δ/σ_res':>7}  "
-            f"{'f_biz':>8}  {'Δ/σ_biz':>7}  "
-            f"{'f_sch':>8}  {'Δ/σ_sch':>7}  "
-            f"{'f_r+b+s':>8}  {'prior':>8}"
-        )
-    else:
-        header = (
-            f"  {'Type':<5}  {'Hr':>2}  {'Prior_agg':>9}  "
-            f"{'f_res':>8}  {'Δ/σ_res':>7}  "
-            f"{'f_biz':>8}  {'Δ/σ_biz':>7}  "
-            f"{'f_r+f_b':>8}  {'2·prior':>8}"
-        )
+    lines = [_rule("SLOT FRACTIONS  (f pinned at NTS)"), ""]
+    header = (f"  {'Type':<5}  {'Hr':>2}  {'Prior_agg':>9}  "
+              f"{'f_res':>8}  {'f_com':>8}  {'f_ret':>8}  {'f_sch':>8}  {'f_sum':>8}")
     lines.append(header)
     lines.append("  " + "─" * (len(header) - 2))
 
-    all_keys = sorted(set(slot_fracs_res) | set(slot_fracs_biz) | set(slot_fracs_school),
+    all_keys = sorted(set(slot_fracs_res) | set(slot_fracs_commute)
+                      | set(slot_fracs_retail) | set(slot_fracs_school),
                       key=lambda s: (int(s.split(",")[0]), int(s.split(",")[1])))
+
+    def _fs(v): return f"{v:>8.5f}" if not math.isnan(v) else f"{'—':>8}"
 
     for sk_str in all_keys:
         dt, h = int(sk_str.split(",")[0]), int(sk_str.split(",")[1])
-        f_r = slot_fracs_res.get(sk_str, float("nan"))
-        f_b = slot_fracs_biz.get(sk_str, float("nan"))
-        f_s = slot_fracs_school.get(sk_str, float("nan")) if _has_sch else float("nan")
-
-        if sk_str in slot_prior:
-            prior_vals = slot_prior[sk_str]
-            mfa, std_f = float(prior_vals[0]), float(prior_vals[1])
-            mfr = float(prior_vals[2]) if len(prior_vals) > 2 else float("nan")
-            mfb = float(prior_vals[3]) if len(prior_vals) > 3 else float("nan")
-            mfs = float(prior_vals[4]) if len(prior_vals) > 4 else float("nan")
-        else:
-            mfa = std_f = mfr = mfb = mfs = float("nan")
-
-        def _pull(f, prior):
-            if std_f > 0 and not any(math.isnan(x) for x in (f, prior, std_f)):
-                return (f - prior) / std_f
-            return float("nan")
-
-        pr = _pull(f_r, mfr)
-        pb = _pull(f_b, mfb)
-        ps = _pull(f_s, mfs) if _has_sch else float("nan")
-
-        vals = [x for x in (f_r, f_b, f_s if _has_sch else None) if x is not None]
-        f_sum  = sum(v for v in vals if not math.isnan(v)) if vals else float("nan")
-        f_agg2 = mfa if not math.isnan(mfa) else float("nan")
-
-        def _fs(v): return f"{v:>8.5f}" if not math.isnan(v) else f"{'—':>8}"
-        def _ps(v): return f"{v:>+7.2f}" if not math.isnan(v) else f"{'—':>7}"
-
-        if _has_sch:
-            lines.append(
-                f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.5f}  "
-                f"{_fs(f_r)}  {_ps(pr)}  "
-                f"{_fs(f_b)}  {_ps(pb)}  "
-                f"{_fs(f_s)}  {_ps(ps)}  "
-                f"{_fs(f_sum)}  {_fs(f_agg2)}"
-            )
-        else:
-            lines.append(
-                f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.5f}  "
-                f"{_fs(f_r)}  {_ps(pr)}  "
-                f"{_fs(f_b)}  {_ps(pb)}  "
-                f"{_fs(f_sum)}  {_fs(f_agg2)}"
-            )
+        f_r = slot_fracs_res.get(sk_str,     float("nan"))
+        f_c = slot_fracs_commute.get(sk_str, float("nan"))
+        f_t = slot_fracs_retail.get(sk_str,  float("nan"))
+        f_s = slot_fracs_school.get(sk_str,  float("nan")) if _has_sch else float("nan")
+        mfa = float(slot_prior[sk_str][0]) if sk_str in slot_prior else float("nan")
+        comps = [v for v in (f_r, f_c, f_t, f_s) if not math.isnan(v)]
+        f_sum = sum(comps) if comps else float("nan")
+        lines.append(
+            f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.5f}  "
+            f"{_fs(f_r)}  {_fs(f_c)}  {_fs(f_t)}  {_fs(f_s)}  {_fs(f_sum)}"
+        )
 
     lines.append("")
     return lines
@@ -439,9 +406,10 @@ def _section_slots(e):
 
 def _make_pull_plot(e, out_path):
     """
-    Two or three side-by-side heatmaps: residential, business, and (if present) school pulls.
+    Side-by-side heatmaps: residential, commute, retail, and (if present) school pulls.
     Each heatmap: 24 rows (hour 0–23) × 3 columns (Wkday / Sat / Sun).
     Colour = (f_inferred − f_prior_component) / σ_agg  (diverging: blue < 0 < red).
+    Since f is pinned at the NTS profile, all pulls are ≈ 0 (the plot is informational).
     """
     try:
         import matplotlib
@@ -452,65 +420,57 @@ def _make_pull_plot(e, out_path):
         print("matplotlib not available — skipping pull plot")
         return
 
-    params            = e["params"]
-    slot_fracs_res    = params.get("slot_fracs_res",    {})
-    slot_fracs_biz    = params.get("slot_fracs_biz",    {})
-    slot_fracs_school = params.get("slot_fracs_school", {})
-    slot_prior        = e.get("slot_prior", {})
-    _has_sch          = bool(slot_fracs_school)
+    params             = e["params"]
+    slot_fracs_res     = params.get("slot_fracs_res",     {})
+    slot_fracs_commute = params.get("slot_fracs_commute", {})
+    slot_fracs_retail  = params.get("slot_fracs_retail",  {})
+    slot_fracs_school  = params.get("slot_fracs_school",  {})
+    slot_prior         = e.get("slot_prior", {})
+    _has_sch           = bool(slot_fracs_school)
 
-    if (not slot_fracs_res and not slot_fracs_biz) or not slot_prior:
+    if (not slot_fracs_res and not slot_fracs_commute) or not slot_prior:
         print("  No slot prior data — skipping pull plot")
         return
 
-    pull_res    = np.full((24, 3), np.nan)
-    pull_biz    = np.full((24, 3), np.nan)
-    pull_school = np.full((24, 3), np.nan)
+    # f is pinned at NTS, so pull = (f − prior)/σ ≡ 0; the plot reflects that. slot_prior
+    # 6-tuple = [mfa, std, mf_res, mf_commute, mf_retail, mf_school]. Components: index
+    # into the prior tuple and the matching slot_fracs dict.
+    comps = [("Residential (f_res)", 2, slot_fracs_res),
+             ("Commute (f_com)",     3, slot_fracs_commute),
+             ("Retail (f_ret)",      4, slot_fracs_retail)]
+    if _has_sch:
+        comps.append(("School (f_sch)", 5, slot_fracs_school))
 
+    pull_mats = [np.full((24, 3), np.nan) for _ in comps]
     for sk_str, prior_vals in slot_prior.items():
         dt, h = int(sk_str.split(",")[0]), int(sk_str.split(",")[1])
-        if len(prior_vals) < 4:
+        if len(prior_vals) < 6:
             continue
-        mfa  = float(prior_vals[0])
         std_f = float(prior_vals[1])
-        mfr  = float(prior_vals[2])
-        mfb  = float(prior_vals[3])
-        mfs  = float(prior_vals[4]) if len(prior_vals) > 4 else float("nan")
         if std_f <= 0 or math.isnan(std_f):
             continue
-        f_r = slot_fracs_res.get(sk_str)
-        f_b = slot_fracs_biz.get(sk_str)
-        f_s = slot_fracs_school.get(sk_str) if _has_sch else None
-        if f_r is not None:
-            pull_res[h, dt] = (f_r - mfr) / std_f
-        if f_b is not None:
-            pull_biz[h, dt] = (f_b - mfb) / std_f
-        if f_s is not None and not math.isnan(mfs):
-            pull_school[h, dt] = (f_s - mfs) / std_f
+        for (_, pidx, sfd), mat in zip(comps, pull_mats):
+            prior_c = float(prior_vals[pidx])
+            f_c = sfd.get(sk_str)
+            if f_c is not None and not math.isnan(prior_c):
+                mat[h, dt] = (f_c - prior_c) / std_f
 
-    mats = [pull_res, pull_biz] + ([pull_school] if _has_sch else [])
     vmax = max(
-        max(np.nanmax(np.abs(m)) if not np.all(np.isnan(m)) else 1.0 for m in mats),
+        max(np.nanmax(np.abs(m)) if not np.all(np.isnan(m)) else 1.0 for m in pull_mats),
         1.0,
     )
     vmax = math.ceil(vmax * 10) / 10
 
     col_labels  = ["Wkday", "Sat", "Sun"]
     hour_labels = [f"{h:02d}h" for h in range(24)]
-    n_panels    = 3 if _has_sch else 2
+    n_panels    = len(comps)
     fig_w       = 5 * n_panels
 
     fig, axes = plt.subplots(1, n_panels, figsize=(fig_w, 9), sharey=True)
     fig.subplots_adjust(wspace=0.08)
-    if n_panels == 2:
-        axes = list(axes)
+    axes = list(np.atleast_1d(axes))
 
-    panels = [
-        (axes[0], pull_res,    "Residential (f_res)"),
-        (axes[1], pull_biz,    "Business (f_biz)"),
-    ]
-    if _has_sch:
-        panels.append((axes[2], pull_school, "School (f_school)"))
+    panels = [(axes[i], pull_mats[i], comps[i][0]) for i in range(n_panels)]
 
     for ax, pull_mat, comp_label in panels:
         im = ax.imshow(pull_mat, aspect="auto", cmap="RdBu_r",

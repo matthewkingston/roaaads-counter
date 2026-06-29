@@ -104,7 +104,7 @@ def main():
     with open(WEIGHTS_FILE) as f:
         nw = json.load(f)
     pop = nw["node_population"]
-    biz = nw["node_business_demand"]
+    workplace = nw["node_workplace"]
     sch = nw["node_school_demand"]
     park = nw.get("node_retail_spaces", {})
     cprod = nw.get("node_commute_producers", {})
@@ -165,7 +165,10 @@ def main():
     for region, E in candidates.items():
         if len(region) < MIN_REGION_SIZE:
             continue
-        region_biz = sum(w(biz, n) for n in region)
+        # Demand cap (criterion 4): total business-type demand = workplace jobs +
+        # retail spaces (the two clean layers that replaced node_business_demand);
+        # preserves the pre-split collapse decisions.
+        region_biz = sum(w(workplace, n) + w(park, n) for n in region)
         if region_biz >= BIZ_CAP:
             continue
         # school is 0 by protection; assert defensively
@@ -221,8 +224,8 @@ def main():
     # ── Rewrite graph + weights ───────────────────────────────────────────────
     nw_out = {k: dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v
               for k, v in nw.items()}
-    pop_o, biz_o, sch_o, park_o = (nw_out["node_population"], nw_out["node_business_demand"],
-                                   nw_out["node_school_demand"], nw_out.get("node_retail_spaces", {}))
+    pop_o, work_o, sch_o, park_o = (nw_out["node_population"], nw_out["node_workplace"],
+                                    nw_out["node_school_demand"], nw_out.get("node_retail_spaces", {}))
     cprod_o = nw_out.get("node_commute_producers", {})
     sprod_o = nw_out.get("node_school_producers", {})
     internal = set(int(x) for x in nw_out.get("internal_node_ids", []))
@@ -246,16 +249,16 @@ def main():
         clon, clat = utm_to_wgs.transform(cx, cy)
 
         absorbed_orig = []
-        rbiz_sum = rsch_sum = rpark_sum = 0.0
+        rwork_sum = rsch_sum = rpark_sum = 0.0
         rpop_sum = 0.0
         rcprod_sum = rsprod_sum = 0.0
         for n in region_nodes:
             o = G.nodes[n].get("osmid_original", str(n))
             absorbed_orig.append(str(o))
-            rpop_sum += w(pop, n); rbiz_sum += w(biz, n)
+            rpop_sum += w(pop, n); rwork_sum += w(workplace, n)
             rsch_sum += w(sch, n); rpark_sum += w(park, n)
             rcprod_sum += w(cprod, n); rsprod_sum += w(sprod, n)
-            for d in (pop_o, biz_o, sch_o, park_o, cprod_o, sprod_o):
+            for d in (pop_o, work_o, sch_o, park_o, cprod_o, sprod_o):
                 d.pop(str(n), None)
             internal.discard(n)
             G.remove_node(n)
@@ -265,7 +268,7 @@ def main():
                    osmid_original=str([int(x) for x in region_nodes]))
         internal.add(S)
         pop_o[str(S)] = rpop_sum
-        biz_o[str(S)] = rbiz_sum
+        work_o[str(S)] = rwork_sum
         sch_o[str(S)] = rsch_sum
         if park_o is not None:
             park_o[str(S)] = rpark_sum
@@ -284,8 +287,8 @@ def main():
         deadend_map[str(S)] = {
             "entrance": int(E), "absorbed": [int(n) for n in region_nodes],
             "absorbed_osmid_original": absorbed_orig,
-            "pop": round(rpop_sum, 3), "biz": round(rbiz_sum, 3),
-            "school": round(rsch_sum, 3),
+            "pop": round(rpop_sum, 3), "workplace": round(rwork_sum, 3),
+            "retail": round(rpark_sum, 3), "school": round(rsch_sum, 3),
             "t_fwd_s": round(t_fwd, 2), "t_rev_s": round(t_rev, 2),
             "maxT_s": round(maxT, 2), "n_nodes": len(region_nodes),
         }
@@ -330,7 +333,8 @@ def main():
           f"({len(gnodes) - G.number_of_nodes()} removed)")
     print(f"  regions collapsed: {len(selected)}")
     print(f"  pop moved to super-nodes: {sum(deadend_map[s]['pop'] for s in deadend_map):.0f}")
-    print(f"  biz moved to super-nodes: {sum(deadend_map[s]['biz'] for s in deadend_map):.0f}")
+    print(f"  workplace moved to super-nodes: {sum(deadend_map[s]['workplace'] for s in deadend_map):.0f}")
+    print(f"  retail moved to super-nodes: {sum(deadend_map[s]['retail'] for s in deadend_map):.0f}")
     n_broken = len(broken['link_aadt']) + len(broken['count_sites'])
     if n_broken:
         print(f"  *** {len(broken['link_aadt'])} observed link(s) and "

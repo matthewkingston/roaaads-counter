@@ -85,9 +85,10 @@ if hp:
 print()
 
 # Scalar gravity params: show before/after
-SCALAR_KEYS = [k for k in ("K", "K_res", "K_biz", "K_sch", "W_BIZ", "P", "ALPHA", "BETA",
-                            "P_biz", "ALPHA_biz", "THETA",
-                            "W_SCHOOL", "P_school", "ALPHA_school")
+SCALAR_KEYS = [k for k in ("K", "K_res", "K_commute", "K_retail", "K_sch",
+                            "P", "ALPHA", "BETA",
+                            "P_commute", "ALPHA_commute", "P_retail", "ALPHA_retail",
+                            "THETA", "P_school", "ALPHA_school")
                if k in params]
 if SCALAR_KEYS:
     print(f"  {'param':<8}  {'before':>14}  {'after':>14}")
@@ -98,12 +99,13 @@ if SCALAR_KEYS:
         print(f"  {key:<8}  {before_s:>14}  {after:>14.6g}")
 
 # Report what else is being written
-n_slot_r = len(params.get("slot_fracs_res",    {}))
-n_slot_b = len(params.get("slot_fracs_biz",    {}))
-n_slot_s = len(params.get("slot_fracs_school", {}))
-if n_slot_r or n_slot_b or n_slot_s:
+n_slot_r = len(params.get("slot_fracs_res",     {}))
+n_slot_c = len(params.get("slot_fracs_commute", {}))
+n_slot_t = len(params.get("slot_fracs_retail",  {}))
+n_slot_s = len(params.get("slot_fracs_school",  {}))
+if n_slot_r or n_slot_c or n_slot_t or n_slot_s:
     _sch_str = f" + {n_slot_s} school" if n_slot_s else ""
-    print(f"\n  Slot fracs: {n_slot_r} res + {n_slot_b} biz{_sch_str} slots")
+    print(f"\n  Slot fracs: {n_slot_r} res + {n_slot_c} commute + {n_slot_t} retail{_sch_str} slots")
 ext_keys = [k for k in params if k.startswith("external_")]
 if ext_keys:
     print(f"  External zone params: {', '.join(ext_keys)}")

@@ -310,16 +310,27 @@ def _rational_kernel(d, P, ALPHA, BETA):
 
 
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
-                         w_pop, w_biz, w_school,
-                         W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+                         w_pop, w_workplace, w_retail, w_school,
+                         P, ALPHA, BETA,
+                         P_commute, ALPHA_commute, P_retail, ALPHA_retail,
                          P_school=None, ALPHA_school=None, with_school=False,
                          self_src=None, self_dist=None, self_w=None,
-                         w_school_prod=None):
+                         w_commute_prod=None, w_school_prod=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
-    Returns (t_res, t_biz, t_sch), each a float64 array parallel to od_src/od_dst.
-    These are the per-pair flows BEFORE the K_res/K_biz/K_sch scaling; the caller
-    scatters them onto links (all links, or observed rows only) and applies K.
+    Returns (t_res, t_commute, t_retail, t_sch), each a float64 array parallel to
+    od_src/od_dst.  These are the per-pair flows BEFORE the K_res/K_commute/
+    K_retail/K_sch scaling; the caller scatters them onto links (all links, or
+    observed rows only) and applies K.
+
+    The commute and retail components are independent clones of the school
+    component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
+    split with its OWN kernel — NO weight parameter and NO self/cross term
+    (the old single business component's W_BIZ and biz×biz term are gone):
+      commute (kernel P_commute/ALPHA_commute): producer = resident commuters
+        (w_commute_prod), attractor = workplace jobs (w_workplace).
+      retail  (kernel P_retail/ALPHA_retail):   producer = population,
+        attractor = retail parking spaces (w_retail).
 
     Denominators are summed over the FULL destination set of each origin (all od
     pairs sharing that od_src — internal, external-routed, and denominator-only
@@ -339,16 +350,21 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     """
     src = od_src
     dst = od_dst
-    F_res = _rational_kernel(od_dist, P,     ALPHA,     BETA)
-    F_biz = _rational_kernel(od_dist, P_biz, ALPHA_biz, BETA)
+    F_res = _rational_kernel(od_dist, P,         ALPHA,         BETA)
+    F_com = _rational_kernel(od_dist, P_commute, ALPHA_commute, BETA)
+    F_ret = _rational_kernel(od_dist, P_retail,  ALPHA_retail,  BETA)
 
-    pop_s = w_pop[src]; pop_d = w_pop[dst]
-    biz_s = w_biz[src]; biz_d = w_biz[dst]
+    pop_s  = w_pop[src];       pop_d  = w_pop[dst]
+    work_s = w_workplace[src]; work_d = w_workplace[dst]
+    ret_s  = w_retail[src];    ret_d  = w_retail[dst]
 
     _has_self = self_src is not None and len(self_src) > 0
     if _has_self:
-        F_res_self = _rational_kernel(self_dist, P,     ALPHA,     BETA)
-        F_biz_self = _rational_kernel(self_dist, P_biz, ALPHA_biz, BETA)
+        F_res_self = _rational_kernel(self_dist, P,         ALPHA,         BETA)
+        F_com_self = _rational_kernel(self_dist, P_commute, ALPHA_commute, BETA)
+        F_ret_self = _rational_kernel(self_dist, P_retail,  ALPHA_retail,  BETA)
+    else:
+        F_res_self = F_com_self = F_ret_self = None
 
     # Per-origin denominators D^c_i = Σ_k a^c_k·F_c(d_ik) (+ intra-zonal self-term);
     # inverse with 0/0 → 0.  attr_d/F = per-pair destination attraction × kernel;
@@ -361,18 +377,28 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                              minlength=N_nodes)
         return np.where(D > 0, 1.0 / D, 0.0)
 
-    iD_res_pop = _inv_denom(pop_d, F_res, w_pop, F_res_self if _has_self else None)   # res: attraction = pop
-    iD_biz_pop = _inv_denom(pop_d, F_biz, w_pop, F_biz_self if _has_self else None)   # biz-cross leg biz→pop: attraction = pop
-    iD_biz_biz = _inv_denom(biz_d, F_biz, w_biz, F_biz_self if _has_self else None)   # biz-cross leg pop→biz + biz×biz: attraction = biz
+    iD_res_pop  = _inv_denom(pop_d,  F_res, w_pop,       F_res_self)   # res: attraction = pop
+    iD_com_work = _inv_denom(work_d, F_com, w_workplace, F_com_self)   # commute leg home→work: attraction = workplace
+    iD_com_pop  = _inv_denom(pop_d,  F_com, w_pop,       F_com_self)   # commute leg work→home: attraction = pop
+    iD_ret_ret  = _inv_denom(ret_d,  F_ret, w_retail,    F_ret_self)   # retail leg home→shop:  attraction = retail
+    iD_ret_pop  = _inv_denom(pop_d,  F_ret, w_pop,       F_ret_self)   # retail leg shop→home:  attraction = pop
 
     # res: pop_i·pop_j·F_res / D^res,pop_i
     t_res = pop_s * pop_d * F_res * iD_res_pop[src]
 
-    # biz: symmetric split (pop→biz, biz→pop) + biz×biz (W_BIZ), each per-origin-normalised
-    t_biz = F_biz * (
-        pop_s * biz_d * iD_biz_biz[src]            # home i → work j   (attraction biz)
-        + biz_s * pop_d * iD_biz_pop[src]          # biz i → pop j     (attraction pop)
-        + W_BIZ * biz_s * biz_d * iD_biz_biz[src]  # biz×biz           (attraction biz)
+    # commute: symmetric split, each per-origin-normalised (no weight, no cross term).
+    # Home→work producer = resident commuters (node_commute_producers) when supplied,
+    # else falls back to population.
+    commprod_s = (w_commute_prod[src] if w_commute_prod is not None else pop_s)
+    t_commute = F_com * (
+        commprod_s * work_d * iD_com_work[src]   # commuters i → work j  (attraction workplace)
+        + work_s * pop_d * iD_com_pop[src]       # work i → home j        (attraction pop)
+    )
+
+    # retail: symmetric pop↔retail split, each per-origin-normalised (no weight, no cross term).
+    t_retail = F_ret * (
+        pop_s * ret_d * iD_ret_ret[src]          # home i → shop j        (attraction retail)
+        + ret_s * pop_d * iD_ret_pop[src]        # shop i → home j        (attraction pop)
     )
 
     if with_school and w_school is not None and w_school.sum() > 0:
@@ -391,7 +417,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     else:
         t_sch = np.zeros(len(src), dtype=np.float64)
 
-    return t_res, t_biz, t_sch
+    return t_res, t_commute, t_retail, t_sch
 
 
 def scatter_od_to_links(t_pair, pair_idx, link_idx, link_weight, N_links):
@@ -467,7 +493,8 @@ def site_flow(link_flow_dict, site):
 _AADT_DAY_WEIGHT = {0: 5, 1: 1, 2: 1}
 
 
-def aadt_weights(slot_fracs_res, slot_fracs_biz, slot_fracs_school=None):
+def aadt_weights(slot_fracs_res, slot_fracs_commute, slot_fracs_retail,
+                 slot_fracs_school=None):
     """Per-component AADT weights for converting a pre-K component flow to a daily total.
 
     A component flow K_c·m_c is calibrated so that K_c·m_c·f_c[slot] matches the
@@ -475,92 +502,82 @@ def aadt_weights(slot_fracs_res, slot_fracs_biz, slot_fracs_school=None):
     daily total divided by the component's daily fraction sum.  The annual-average
     daily contribution is K_c·m_c·W_c with
         W_c = (5·Σ_h f_c[weekday,h] + Σ_h f_c[Sat,h] + Σ_h f_c[Sun,h]) / 7,
-    i.e. the day-type-weighted sum of the component's hourly fractions.  W_res+W_biz+
-    W_sch ≈ 1 (the components partition the aggregate profile, which sums to ~1/day).
+    i.e. the day-type-weighted sum of the component's hourly fractions.  W_res+
+    W_commute+W_retail+W_sch ≈ 1 (the components partition the aggregate profile,
+    which sums to ~1/day).
 
-    Returns (W_res, W_biz, W_sch).  Components with no slot_fracs return 0.0.
+    Returns (W_res, W_commute, W_retail, W_sch).  Components with no slot_fracs
+    return 0.0.
     """
     def _w(sf):
         if not sf:
             return 0.0
         return sum(_AADT_DAY_WEIGHT.get(dt, 0) * f for (dt, h), f in sf.items()) / 7.0
-    return _w(slot_fracs_res), _w(slot_fracs_biz), _w(slot_fracs_school)
+    return (_w(slot_fracs_res), _w(slot_fracs_commute),
+            _w(slot_fracs_retail), _w(slot_fracs_school))
 
 
-def _site_flow_2c(flow_res_dict, flow_biz_dict, node, links):
-    """Return (m_res, m_biz) for a site defined by node or directed links."""
-    if links:
-        m_r = sum(flow_res_dict.get(tuple(lnk), 0.0) for lnk in links)
-        m_b = sum(flow_biz_dict.get(tuple(lnk), 0.0) for lnk in links)
-    else:
-        m_r = sum(f for (u, v), f in flow_res_dict.items() if u == node or v == node)
-        m_b = sum(f for (u, v), f in flow_biz_dict.items() if u == node or v == node)
-    return m_r, m_b
+def _site_flow_components(flow_dicts, node, links):
+    """Return one modelled flow per component dict for a site (node or links).
 
-
-def _site_flow_3c(flow_res_dict, flow_biz_dict, flow_school_dict, node, links):
-    """Return (m_res, m_biz, m_school) for a site defined by node or directed links."""
-    if links:
-        m_r = sum(flow_res_dict.get(tuple(lnk), 0.0)    for lnk in links)
-        m_b = sum(flow_biz_dict.get(tuple(lnk), 0.0)    for lnk in links)
-        m_s = sum(flow_school_dict.get(tuple(lnk), 0.0) for lnk in links)
-    else:
-        m_r = sum(f for (u, v), f in flow_res_dict.items()    if u == node or v == node)
-        m_b = sum(f for (u, v), f in flow_biz_dict.items()    if u == node or v == node)
-        m_s = sum(f for (u, v), f in flow_school_dict.items() if u == node or v == node)
-    return m_r, m_b, m_s
+    flow_dicts: list of {(u,v): flow} dicts.  Returns a list of the same length.
+    """
+    out = []
+    for fd in flow_dicts:
+        if links:
+            out.append(sum(fd.get(tuple(lnk), 0.0) for lnk in links))
+        else:
+            out.append(sum(f for (u, v), f in fd.items() if u == node or v == node))
+    return out
 
 # ── Chi²/N ───────────────────────────────────────────────────────────────────
 
 def compute_chi2(link_flow_dict, label_fn=None,
                  link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS,
                  official_hourly_file=OFFICIAL_HOURLY,
-                 link_flow_biz_dict=None, link_flow_school_dict=None,
-                 slot_fracs_res=None, slot_fracs_biz=None, slot_fracs_school=None):
+                 link_flow_commute_dict=None, link_flow_retail_dict=None,
+                 link_flow_school_dict=None,
+                 slot_fracs_res=None, slot_fracs_commute=None,
+                 slot_fracs_retail=None, slot_fracs_school=None):
     """
     Compute chi²/N matching the tuner's component formulation.
 
-    Three-component mode (link_flow_biz_dict and link_flow_school_dict provided):
-      link_flow_dict        — {(u,v): K_res * flow_res}
-      link_flow_biz_dict    — {(u,v): K_biz * flow_biz}
-      link_flow_school_dict — {(u,v): K_school * flow_school}
-      slot_fracs_res/biz/school — {(day_type, hour): f}
-      N_eff = N − 3·N_slots.
+    Four-component mode (link_flow_commute_dict and link_flow_retail_dict provided):
+      link_flow_dict         — {(u,v): K_res * flow_res}
+      link_flow_commute_dict — {(u,v): K_commute * flow_commute}
+      link_flow_retail_dict  — {(u,v): K_retail  * flow_retail}
+      link_flow_school_dict  — {(u,v): K_school  * flow_school}  (optional)
+      slot_fracs_res/commute/retail/school — {(day_type, hour): f}
+      N_eff = N (temporal fractions pinned at NTS — no per-slot df consumed).
 
-    Two-component mode (link_flow_biz_dict provided, link_flow_school_dict=None):
-      link_flow_dict     — {(u,v): K_res * flow_res}
-      link_flow_biz_dict — {(u,v): K_biz * flow_biz}
-      slot_fracs_res/biz — {(day_type, hour): f}
-      N_eff = N − 2·N_slots.  No coupling penalty (pure data fit).
-
-    Legacy mode (link_flow_biz_dict=None):
+    Legacy mode (link_flow_commute_dict=None):
       link_flow_dict — {(u,v): K * combined_flow}  (pre-scaled)
       Uses 3 AADT-space obs from COUNT_SITES plus Woodbury-corrected walking obs.
-      N_eff = N − N_slots.
 
     Returns (rows, chi2, n_obs, n_eff).
       rows: list of (label, time_str, obs, sig, mod, z, link) sorted by |z| descending.
     """
-    if link_flow_school_dict is not None and link_flow_biz_dict is not None:
-        return _compute_chi2_3c(link_flow_dict, link_flow_biz_dict, link_flow_school_dict,
-                                slot_fracs_res, slot_fracs_biz, slot_fracs_school,
-                                label_fn, link_aadt_file, exclude_links,
-                                official_hourly_file)
-    if link_flow_biz_dict is not None:
-        return _compute_chi2_2c(link_flow_dict, link_flow_biz_dict,
-                                slot_fracs_res, slot_fracs_biz,
-                                label_fn, link_aadt_file, exclude_links,
-                                official_hourly_file)
+    if link_flow_commute_dict is not None and link_flow_retail_dict is not None:
+        comps = [(link_flow_dict,         slot_fracs_res),
+                 (link_flow_commute_dict, slot_fracs_commute),
+                 (link_flow_retail_dict,  slot_fracs_retail)]
+        if link_flow_school_dict is not None:
+            comps.append((link_flow_school_dict, slot_fracs_school))
+        return _compute_chi2_components(comps, label_fn, link_aadt_file,
+                                        exclude_links, official_hourly_file)
     return _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links)
 
 
-def walking_session_residual(m_r, m_b, m_s, sess,
-                             slot_fracs_res, slot_fracs_biz, slot_fracs_school):
+def walking_session_residual(comps, sess):
     """Per-session walking-count residual for the production-constrained model.
 
     Single source of truth for the per-observation arithmetic used by both
-    _compute_chi2_2c/_3c and the map's residuals layer. Two-component callers
-    pass m_s=0 and slot_fracs_school={} (or None).
+    _compute_chi2_components and the map's residuals layer.
+
+    comps: iterable of (m_c, slot_fracs_c) pairs — one per active gravity
+    component (m_c = that component's K-scaled modelled flow on this link,
+    slot_fracs_c = {(day_type, hour): f}).  The combined hourly prediction in a
+    slot is Σ_c m_c·f_c[slot]; the daily combined AADT is Σ_c m_c.
 
     Returns None if the session is unusable (no time slot or non-positive
     duration), else a dict:
@@ -569,7 +586,7 @@ def walking_session_residual(m_r, m_b, m_s, sess,
       deviance — Poisson deviance contribution to chi²
       obs_disp — observed effective AADT (display)
       sig_disp — observed AADT uncertainty (display)
-      mod_disp — model combined AADT (= m_r + m_b + m_s)
+      mod_disp — model combined AADT (= Σ_c m_c)
     """
     ts   = sess.get("time_slot")
     neff = float(sess.get("n_eff", 0.5))
@@ -577,11 +594,14 @@ def walking_session_residual(m_r, m_b, m_s, sess,
     if ts is None or dur <= 0:
         return None
     sk  = (_DOW_TO_TYPE[ts[0]], ts[1])
-    f_r = (slot_fracs_res    or {}).get(sk, 1.0 / 24)
-    f_b = (slot_fracs_biz    or {}).get(sk, 1.0 / 24)
-    f_s = (slot_fracs_school or {}).get(sk, 0.0)
+    rate  = 0.0   # Σ_c m_c·f_c[slot]  (combined hourly rate)
+    m_tot = 0.0   # Σ_c m_c            (combined daily AADT)
+    for m_c, sf_c in comps:
+        f_c = (sf_c or {}).get(sk, 1.0 / 24)
+        rate  += m_c * f_c
+        m_tot += m_c
     Th        = dur / 3600.0
-    pred      = (m_r * f_r + m_b * f_b + m_s * f_s) * Th
+    pred      = rate * Th
     z         = (pred - neff) / math.sqrt(neff) if neff > 0 else 0.0
     n_actual  = neff - 0.5
     pred_safe = max(pred, 1e-30)
@@ -589,32 +609,32 @@ def walking_session_residual(m_r, m_b, m_s, sess,
         deviance = 2.0 * (pred_safe - n_actual + n_actual * math.log(n_actual / pred_safe))
     else:
         deviance = 2.0 * pred_safe
-    m_tot = m_r + m_b + m_s + 1e-30
-    f_eff = (m_r * f_r + m_b * f_b + m_s * f_s) / m_tot
+    f_eff = rate / (m_tot + 1e-30)
     if f_eff > 0 and Th > 0:
         obs_disp = neff / (Th * f_eff)
         sig_disp = math.sqrt(neff) / (Th * f_eff)
-        mod_disp = pred / (Th * f_eff)   # = combined AADT (m_r + m_b + m_s)
+        mod_disp = pred / (Th * f_eff)   # = combined AADT (Σ_c m_c)
     else:
         obs_disp = sig_disp = mod_disp = 0.0
     return {"sk": sk, "z": z, "deviance": deviance,
             "obs_disp": obs_disp, "sig_disp": sig_disp, "mod_disp": mod_disp}
 
 
-def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
-                     slot_fracs_res, slot_fracs_biz,
-                     label_fn, link_aadt_file, exclude_links,
-                     official_hourly_file):
-    """Two-component chi² matching the tuner's objective (minus coupling penalty)."""
+def _compute_chi2_components(comps, label_fn, link_aadt_file, exclude_links,
+                             official_hourly_file):
+    """Production-constrained chi² over an arbitrary component list.
+
+    comps: list of (flow_dict, slot_fracs) — one per active component
+    (res, commute, retail, school).  flow_dict = {(u,v): K_c·flow_c}.
+
+    Official obs use the count-space Gaussian z; walking obs use the Poisson
+    deviance via walking_session_residual.  N_eff = N (temporal fractions are
+    pinned at NTS, so no per-slot df are consumed).
+    """
     rows  = []
     chi2  = 0.0
     excl  = exclude_links or set()
-
-    # (day_type, hour) → (f_res, f_biz)
-    def _fracs(slot_key):
-        f_r = (slot_fracs_res or {}).get(slot_key, 1.0 / 24)
-        f_b = (slot_fracs_biz or {}).get(slot_key, 1.0 / 24)
-        return f_r, f_b
+    flow_dicts = [fd for fd, _ in comps]
 
     # ── Official hourly obs (count-space Gaussian) ────────────────────────────
     n_official = 0
@@ -624,22 +644,22 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
         for site_id, site in oh.items():
             node  = site["node"]
             links = [tuple(lnk) for lnk in site["links"]] if site["links"] else None
-            m_r, m_b = _site_flow_2c(flow_res_dict, flow_biz_dict, node, links)
+            m_c   = _site_flow_components(flow_dicts, node, links)
             lbl, link = nice_official(site)
             for obs in site["observations"]:
-                dt, h    = obs["time_slot"]
-                sk       = (dt, h)
-                f_r, f_b = _fracs(sk)
-                count    = float(obs["count"])
-                sigma    = float(obs["sigma"])
-                pred     = m_r * f_r + m_b * f_b   # T=3600 → T/3600=1
-                z        = (pred - count) / sigma if sigma > 0 else 0.0
-                chi2    += z ** 2
+                dt, h = obs["time_slot"]
+                sk    = (dt, h)
+                # T=3600 → T/3600=1; pred = Σ_c m_c·f_c[slot]
+                pred  = sum(m * ((sf or {}).get(sk, 1.0 / 24))
+                            for m, (_, sf) in zip(m_c, comps))
+                count = float(obs["count"])
+                sigma = float(obs["sigma"])
+                z     = (pred - count) / sigma if sigma > 0 else 0.0
+                chi2 += z ** 2
                 rows.append((lbl, format_slot_time(dt, h), count, sigma, pred, z, link))
                 n_official += 1
 
     # ── Walking obs (count-space Poisson) ─────────────────────────────────────
-    n_slots_seen = set()
     if link_aadt_file and os.path.exists(link_aadt_file):
         with open(link_aadt_file) as f:
             link_aadt = json.load(f)["links"]
@@ -649,95 +669,17 @@ def _compute_chi2_2c(flow_res_dict, flow_biz_dict,
                 continue
             lbl  = (label_fn(u, v) if label_fn else "") or "(unnamed)"
             link = f"{u}→{v}"
-            m_r  = flow_res_dict.get((u, v), 0.0)
-            m_b  = flow_biz_dict.get((u, v), 0.0)
+            sess_comps = [(fd.get((u, v), 0.0), sf) for fd, sf in comps]
             for sess in entry.get("observations", []):
-                res = walking_session_residual(m_r, m_b, 0.0, sess,
-                                               slot_fracs_res, slot_fracs_biz, None)
+                res = walking_session_residual(sess_comps, sess)
                 if res is None:
                     continue
                 chi2 += res["deviance"]
-                n_slots_seen.add(res["sk"])
-                rows.append((lbl, format_slot_time(*res["sk"]), res["obs_disp"],
-                             res["sig_disp"], res["mod_disp"], res["z"], link))
-
-    n_obs   = len(rows)
-    # N_eff: 2 df per slot (f_res and f_biz each).
-    if n_official:
-        n_slots_seen |= {(dt, h) for dt in range(3) for h in range(24)}
-    n_eff   = n_obs - 2 * len(n_slots_seen)
-
-    rows.sort(key=lambda r: abs(r[5]), reverse=True)
-    return rows, chi2, n_obs, n_eff
-
-
-def _compute_chi2_3c(flow_res_dict, flow_biz_dict, flow_school_dict,
-                     slot_fracs_res, slot_fracs_biz, slot_fracs_school,
-                     label_fn, link_aadt_file, exclude_links,
-                     official_hourly_file):
-    """Three-component chi² (res + biz + school).  N_eff = N − 3·N_slots."""
-    rows  = []
-    chi2  = 0.0
-    excl  = exclude_links or set()
-
-    def _fracs(slot_key):
-        f_r = (slot_fracs_res    or {}).get(slot_key, 1.0 / 24)
-        f_b = (slot_fracs_biz    or {}).get(slot_key, 1.0 / 24)
-        f_s = (slot_fracs_school or {}).get(slot_key, 0.0)
-        return f_r, f_b, f_s
-
-    n_official = 0
-    if official_hourly_file and os.path.exists(official_hourly_file):
-        with open(official_hourly_file) as f:
-            oh = json.load(f)
-        for site_id, site in oh.items():
-            node  = site["node"]
-            links = [tuple(lnk) for lnk in site["links"]] if site["links"] else None
-            m_r, m_b, m_s = _site_flow_3c(flow_res_dict, flow_biz_dict,
-                                           flow_school_dict, node, links)
-            lbl, link = nice_official(site)
-            for obs in site["observations"]:
-                dt, h    = obs["time_slot"]
-                sk       = (dt, h)
-                f_r, f_b, f_s = _fracs(sk)
-                count    = float(obs["count"])
-                sigma    = float(obs["sigma"])
-                pred     = m_r * f_r + m_b * f_b + m_s * f_s
-                z        = (pred - count) / sigma if sigma > 0 else 0.0
-                chi2    += z ** 2
-                rows.append((lbl, format_slot_time(dt, h), count, sigma, pred, z, link))
-                n_official += 1
-
-    n_slots_seen = set()
-    if link_aadt_file and os.path.exists(link_aadt_file):
-        with open(link_aadt_file) as f:
-            link_aadt = json.load(f)["links"]
-        for key, entry in sorted(link_aadt.items()):
-            u, v = map(int, key.split(","))
-            if (u, v) in excl:
-                continue
-            lbl  = (label_fn(u, v) if label_fn else "") or "(unnamed)"
-            link = f"{u}→{v}"
-            m_r  = flow_res_dict.get((u, v), 0.0)
-            m_b  = flow_biz_dict.get((u, v), 0.0)
-            m_s  = flow_school_dict.get((u, v), 0.0)
-            for sess in entry.get("observations", []):
-                res = walking_session_residual(m_r, m_b, m_s, sess,
-                                               slot_fracs_res, slot_fracs_biz,
-                                               slot_fracs_school)
-                if res is None:
-                    continue
-                chi2 += res["deviance"]
-                n_slots_seen.add(res["sk"])
                 rows.append((lbl, format_slot_time(*res["sk"]), res["obs_disp"],
                              res["sig_disp"], res["mod_disp"], res["z"], link))
 
     n_obs = len(rows)
-    if n_official:
-        n_slots_seen |= {(dt, h) for dt in range(3) for h in range(24)}
-    # N_eff: 3 df per slot (f_res, f_biz, f_school each consume one df)
-    n_eff = n_obs - 3 * len(n_slots_seen)
-
+    n_eff = n_obs   # temporal fractions pinned at NTS — no per-slot df consumed
     rows.sort(key=lambda r: abs(r[5]), reverse=True)
     return rows, chi2, n_obs, n_eff
 

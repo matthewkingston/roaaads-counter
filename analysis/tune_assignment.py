@@ -2,15 +2,12 @@
 Powell's-method tuning of gravity model parameters against combined chi-squared
 objective across all traffic count observations.
 
-Three-component model: residential (pop→pop), business-adjacent (pb+bb), and school
-(pop→school) flows each carry their own temporal profile and global scale.
-Jointly calibrated at each evaluation via 5-block alternating minimisation:
-  K-step     (1D solve for total K)
-  phi_biz-step  (1D solve for business fraction, with Gaussian prior)
-  phi_sch-step  (1D solve for school fraction, with Gaussian prior)
-  f_res-step    (per-slot analytical, anchored by NTS residential prior)
-  f_biz-step / f_school-step  (symmetric)
-  + aggregate coupling γ·(f_res + f_biz + f_school − f_agg)² per slot.
+Four-component model: residential (pop↔pop), commute (commuters↔workplace), retail
+(pop↔retail), and school (students↔school) flows each carry their own temporal
+profile, distance kernel, and global scale.  At each evaluation the four component
+scales (K_res, K_commute, K_retail, K_sch) are calibrated directly by a convex
+damped-Newton solve (solve_scales); the temporal fractions f are pinned at the NTS
+profile and never tuned.
 
 Observations:
   Official sites: hourly count obs from data/official_hourly.json (24 h × 3 day-types
@@ -20,10 +17,13 @@ Both types are in count space, unified in _slot_data with per-obs weights and rh
 
 All optimizer parameters are stored in log-space to enforce positivity.
 
-Tunes W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school (8 params with school).
+Tunes 9 gravity params (with school): P, ALPHA, BETA (residential kernel; BETA shared),
+P_commute, ALPHA_commute, P_retail, ALPHA_retail, P_school, ALPHA_school.  Commute and
+retail are independent clones of the school component — each a symmetric two-leg,
+per-origin-normalised split with NO weight parameter and NO self/cross term (the old
+single business component's W_BIZ and biz×biz are gone).
 Production-constrained per component: each origin's trip production is fixed by its
-producing weight, independent of accessibility (school magnitude is K_sch; W_SCHOOL removed
-as redundant under the constraint).
+producing weight, independent of accessibility.
 External zone values are fixed from census data and are not tuned.
 
 Results:
@@ -77,11 +77,11 @@ while i < len(argv):
         note = argv[i]
     i += 1
 
-# Temporal fractions f_res/f_biz/f_school are pinned at the NTS profile
+# Temporal fractions f_res/f_commute/f_retail/f_school are pinned at the NTS profile
 # (mean_fraction_*) and never tuned — every residual is purely spatial. The inner
-# calibration therefore solves only the three component scales (K_res, K_biz, K_sch)
-# directly via a convex Newton solve (see solve_scales); no φ reparam, no f-steps,
-# no alternation, no best-iterate bookkeeping.
+# calibration therefore solves only the four component scales (K_res, K_commute,
+# K_retail, K_sch) directly via a convex Newton solve (see solve_scales); no φ reparam,
+# no f-steps, no alternation, no best-iterate bookkeeping.
 
 run_id = secrets.token_hex(4)
 
@@ -189,18 +189,26 @@ with open(WEIGHTS_FILE) as f:
     wdata = json.load(f)
 
 _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
-node_pop_full    = {_pnid(k): v for k, v in wdata["node_population"].items()}
-node_biz_full    = {_pnid(k): v for k, v in wdata["node_business_demand"].items()}
-node_school_full = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
-node_school_prod_full = {_pnid(k): v for k, v in wdata.get("node_school_producers", {}).items()}
+node_pop_full       = {_pnid(k): v for k, v in wdata["node_population"].items()}
+node_workplace_full = {_pnid(k): v for k, v in wdata["node_workplace"].items()}
+node_retail_full    = {_pnid(k): v for k, v in wdata.get("node_retail_spaces", {}).items()}
+node_school_full    = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
+node_commute_prod_full = {_pnid(k): v for k, v in wdata.get("node_commute_producers", {}).items()}
+node_school_prod_full  = {_pnid(k): v for k, v in wdata.get("node_school_producers", {}).items()}
 
-# Precomputed base weight arrays (from census + OSM demand; external zones fixed)
-base_w_pop    = np.array([node_pop_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
-base_w_biz    = np.array([node_biz_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
-base_w_school = np.array([node_school_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
-base_w_school_prod = np.array([node_school_prod_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+# Precomputed base weight arrays (from census + OSM demand; external zones fixed).
+# Clean separate layers: workplace jobs (commute attractor) and retail spaces (retail
+# attractor) replace the old conflated node_business_demand.
+base_w_pop       = np.array([node_pop_full.get(nid, 0.0)       for nid in node_ids], dtype=np.float64)
+base_w_workplace = np.array([node_workplace_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+base_w_retail    = np.array([node_retail_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
+base_w_school    = np.array([node_school_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
+base_w_commute_prod = np.array([node_commute_prod_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+base_w_school_prod  = np.array([node_school_prod_full.get(nid, 0.0)  for nid in node_ids], dtype=np.float64)
+if base_w_commute_prod.sum() == 0:
+    base_w_commute_prod = None   # fall back to population producer (legacy weights)
 if base_w_school_prod.sum() == 0:
-    base_w_school_prod = None   # fall back to population producer (legacy weights)
+    base_w_school_prod = None    # fall back to population producer (legacy weights)
 
 _has_school = base_w_school.sum() > 0
 if not _has_school:
@@ -253,29 +261,40 @@ with open(TUNER_CONFIG) as f:
 lam                  = config["lambda"]
 gamma_coupling_scale = config.get("gamma_coupling_scale",
                                    config.get("gamma_coupling", 1.0))
-phi_prior            = config.get("phi_biz_prior", config.get("phi_prior",  0.35))
-phi_std              = config.get("phi_biz_std",   config.get("phi_std",    0.15))
-phi_school_prior     = config.get("phi_school_prior",  0.10)
-phi_school_std       = config.get("phi_school_std",    0.08)
+# Scale-share priors anchor each component's K-share (degeneracy break inside
+# solve_scales): commute, retail and school (res = remainder).  commute/retail
+# priors are placeholder clones of the old combined business prior pending the
+# planned prior/profile revamp.
+phi_commute_prior = config.get("phi_commute_prior",
+                               config.get("phi_biz_prior", config.get("phi_prior", 0.35)))
+phi_commute_std   = config.get("phi_commute_std",
+                               config.get("phi_biz_std",   config.get("phi_std",   0.15)))
+phi_retail_prior  = config.get("phi_retail_prior",
+                               config.get("phi_biz_prior", config.get("phi_prior", 0.35)))
+phi_retail_std    = config.get("phi_retail_std",
+                               config.get("phi_biz_std",   config.get("phi_std",   0.15)))
+phi_school_prior  = config.get("phi_school_prior",  0.10)
+phi_school_std    = config.get("phi_school_std",    0.08)
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam_raw = config.get("gravity_lambda", 0.0)
-_grav_param_names = ["W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz"]
+# 9 gravity params (with school): residential kernel (P, ALPHA, BETA shared), plus
+# independent commute and retail kernels, plus the school kernel.  W_BIZ is gone (the
+# commute/retail components carry no weight parameter and no self/cross term).
+_grav_param_names = ["P", "ALPHA", "BETA",
+                     "P_commute", "ALPHA_commute", "P_retail", "ALPHA_retail"]
 if _has_stoch:
     _grav_param_names.append("THETA")
 if _has_school:
-    # W_SCHOOL removed: under the production constraint the school component is
-    # K_sch·(per-origin-normalised pop↔school split), so a separate W_SCHOOL scale is
-    # exactly redundant with K_sch. Only the school KERNEL SHAPE (P_school, ALPHA_school)
-    # is tuned; its magnitude comes from K_sch (analytical).
     _grav_param_names += ["P_school", "ALPHA_school"]
 _grav_ref_vals = [
-    math.log(max(grav_ref.get("W_BIZ",     1.0),  1e-4)),
-    math.log(max(grav_ref.get("P",         600.0), 1e-4)),
-    math.log(max(grav_ref.get("ALPHA",     2.0),   1e-4)),
-    math.log(max(grav_ref.get("BETA",      1.0),   1e-4)),
-    math.log(max(grav_ref.get("P_biz",     600.0), 1e-4)),
-    math.log(max(grav_ref.get("ALPHA_biz", 2.0),   1e-4)),
+    math.log(max(grav_ref.get("P",             600.0), 1e-4)),
+    math.log(max(grav_ref.get("ALPHA",         2.0),   1e-4)),
+    math.log(max(grav_ref.get("BETA",          1.0),   1e-4)),
+    math.log(max(grav_ref.get("P_commute",     600.0), 1e-4)),
+    math.log(max(grav_ref.get("ALPHA_commute", 2.0),   1e-4)),
+    math.log(max(grav_ref.get("P_retail",      600.0), 1e-4)),
+    math.log(max(grav_ref.get("ALPHA_retail",  2.0),   1e-4)),
 ]
 if _has_stoch:
     _grav_ref_vals.append(math.log(max(grav_ref.get("THETA", 1.0), 1e-4)))
@@ -290,15 +309,9 @@ if isinstance(grav_lam_raw, dict):
 else:
     log_grav_lam = np.full(len(_grav_param_names), float(grav_lam_raw))
 
-n_gravity = (7 if _has_stoch else 6) + (2 if _has_school else 0)
+n_gravity = (8 if _has_stoch else 7) + (2 if _has_school else 0)
 
 # External node weights come from node_weights.json (census data, fixed — not tuned).
-# Stochastic-path weight products (constant across all evaluations).
-if _has_stoch:
-    _pp_od_s1 = base_w_pop[od_src] * base_w_pop[od_dst]
-    _pb_od_s1 = (base_w_pop[od_src] * base_w_biz[od_dst]
-                 + base_w_biz[od_src] * base_w_pop[od_dst])
-    _bb_od_s1 = base_w_biz[od_src] * base_w_biz[od_dst]
 
 # ── Precompute distance-bin link matrices (all-or-nothing mode only) ──────────
 # The 20M-entry scatter (pair_idx gather + bincount) dominates each evaluation.
@@ -334,18 +347,19 @@ N_nodes = len(node_ids)   # for the per-origin denominator bincounts
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 _DT_DOWS     = {0: list(range(5)), 1: [5], 2: [6]}
 
-_raw_fracs = {}  # {(dow, hour): (mean_f, std_f, mean_f_res, mean_f_biz, mean_f_school)}
+_raw_fracs = {}  # {(dow, hour): (mean_f, std_f, mf_res, mf_commute, mf_retail, mf_school)}
 with open(HOURLY_FRACS_FILE, newline="") as _fh:
     for _row in csv.DictReader(_fh):
         _dow  = int(_row["day_of_week"])
         _hour = int(_row["hour"].split(":")[0])
-        _mfr  = float(_row["mean_fraction_res"])    if "mean_fraction_res"    in _row else None
-        _mfb  = float(_row["mean_fraction_biz"])    if "mean_fraction_biz"    in _row else None
-        _mfs  = float(_row["mean_fraction_school"]) if "mean_fraction_school" in _row else None
+        _mfr  = float(_row["mean_fraction_res"])      if "mean_fraction_res"      in _row else None
+        _mfc  = float(_row["mean_fraction_commute"])  if "mean_fraction_commute"  in _row else None
+        _mft  = float(_row["mean_fraction_retail"])   if "mean_fraction_retail"   in _row else None
+        _mfs  = float(_row["mean_fraction_school"])   if "mean_fraction_school"   in _row else None
         _raw_fracs[(_dow, _hour)] = (float(_row["mean_fraction"]), float(_row["std_fraction"]),
-                                     _mfr, _mfb, _mfs)
+                                     _mfr, _mfc, _mft, _mfs)
 
-# slot_prior[key] = (mean_f_agg, std_f_agg, mean_f_res, mean_f_biz, mean_f_school)
+# slot_prior[key] = (mean_f_agg, std_f_agg, mf_res, mf_commute, mf_retail, mf_school)
 slot_prior = {}
 for _dt, _dows in _DT_DOWS.items():
     for _h in range(24):
@@ -360,11 +374,13 @@ for _dt, _dows in _DT_DOWS.items():
         _std     = math.sqrt(_between + _within)
         _mfr = (sum(e[2] for e in _entries) / len(_entries)
                 if _entries[0][2] is not None else _mf * 0.5)
-        _mfb = (sum(e[3] for e in _entries) / len(_entries)
-                if _entries[0][3] is not None else _mf * 0.35)
-        _mfs = (sum(e[4] for e in _entries) / len(_entries)
-                if _entries[0][4] is not None else 0.0)
-        slot_prior[(_dt, _h)] = (_mf, _std, _mfr, _mfb, _mfs)
+        _mfc = (sum(e[3] for e in _entries) / len(_entries)
+                if _entries[0][3] is not None else _mf * 0.25)
+        _mft = (sum(e[4] for e in _entries) / len(_entries)
+                if _entries[0][4] is not None else _mf * 0.10)
+        _mfs = (sum(e[5] for e in _entries) / len(_entries)
+                if _entries[0][5] is not None else 0.0)
+        slot_prior[(_dt, _h)] = (_mf, _std, _mfr, _mfc, _mft, _mfs)
 
 # ── Build observation list ────────────────────────────────────────────────────
 # All observations are slotted (day_type, hour) in count space:
@@ -456,7 +472,7 @@ _walk_link_safe = np.where(_walk_link_raw >= 0, _walk_link_raw, 0)
 _walk_valid     = _walk_link_raw >= 0
 
 # ── Observed-link scatter restriction (tuner-only speedup) ────────────────────
-# model_obs_3c reads modelled flow on only the OBSERVED links (the official-site +
+# model_obs_4c reads modelled flow on only the OBSERVED links (the official-site +
 # walking links in obs_link_idxs / _walk_link_safe). run_assignment, however, used
 # to scatter the full ~62M probit-incidence entries onto ALL N_links every eval,
 # then discard flow on the ~1400 links no observation ever touches. The scatter
@@ -511,24 +527,21 @@ for sk, idxs in sorted(slot_list):
     if len(idxs) > 3:
         print(f"  Slot {sk}: {len(idxs)} observations")
 
-# Per-slot data: builds the constant NTS f vectors (below) and the chi² weight arrays
-# Each entry: (slot_key, ia, weights, rhs, Ths,
-#              mean_f_res, inv_var_res, mean_f_biz, inv_var_biz,
-#              mean_f_school, inv_var_school, mean_f_agg, gamma)
+# Per-slot data: builds the constant NTS f vectors (below) and the chi² weight arrays.
+# f is pinned at the NTS profile (never tuned), so only the per-component mean
+# fractions are needed (the old inv_var/coupling columns of the f-step machinery are
+# gone).  Each entry: (slot_key, ia, weights, rhs, Ths,
+#                      mf_res, mf_commute, mf_retail, mf_school, mf_agg)
 _slot_data = []
 for sk, idxs in slot_list:
     ia       = np.array(idxs, dtype=np.int64)
-    mfa, std_f, mfr, mfb, mfs = slot_prior[sk]
-    inv_var  = 1.0 / (std_f ** 2)
+    mfa, std_f, mfr, mfc, mft, mfs = slot_prior[sk]
     _slot_data.append((
         sk, ia,
         obs_w_arr[ia],     # weights: 1/sigma² or 1/n_eff per obs
         obs_rhs_arr[ia],   # rhs: count or n_eff per obs
         obs_Th[ia],        # T/3600 per obs
-        mfr, inv_var,      # residential prior
-        mfb, inv_var,      # business prior (same std as aggregate)
-        mfs, inv_var,      # school prior (same std as aggregate)
-        mfa, gamma_coupling_scale * inv_var,  # aggregate coupling: scale/std_f² per slot
+        mfr, mfc, mft, mfs, mfa,
     ))
 
 # Per-obs weight array with unslotted obs zeroed out (used in vectorised chi² in objective).
@@ -562,118 +575,124 @@ for _si, (_, _sidxs) in enumerate(slot_list):
 _walk_sl_sid = _obs_slot_id[_walk_slotted]
 _walk_sl_n   = _walk_n_arr[_walk_slotted]
 
-_slot_mfr = np.array([e[5]  for e in _slot_data], dtype=np.float64)
-_slot_ivr = np.array([e[6]  for e in _slot_data], dtype=np.float64)
-_slot_mfb = np.array([e[7]  for e in _slot_data], dtype=np.float64)
-_slot_ivb = np.array([e[8]  for e in _slot_data], dtype=np.float64)
-_slot_mfs = np.array([e[9]  for e in _slot_data], dtype=np.float64)
-_slot_ivs = np.array([e[10] for e in _slot_data], dtype=np.float64)
-_slot_mfa = np.array([e[11] for e in _slot_data], dtype=np.float64)
-_slot_gam = np.array([e[12] for e in _slot_data], dtype=np.float64)
+_slot_mfr = np.array([e[5] for e in _slot_data], dtype=np.float64)
+_slot_mfc = np.array([e[6] for e in _slot_data], dtype=np.float64)
+_slot_mft = np.array([e[7] for e in _slot_data], dtype=np.float64)
+_slot_mfs = np.array([e[8] for e in _slot_data], dtype=np.float64)
+_slot_mfa = np.array([e[9] for e in _slot_data], dtype=np.float64)
 
 # ── Frozen temporal fractions (NTS profile) ───────────────────────────────────
-# f is pinned at the NTS profile (mean_fraction_res/biz/school) and never tuned.
-# Build the constant per-obs fraction vectors ONCE (the per-eval f-steps are gone).
-# Unslotted obs map to the sentinel slot index n_slots → fraction 0; they carry
-# zero objective weight anyway (_gauss_w_arr / _walk_slotted are 0 there).
+# f is pinned at the NTS profile (mean_fraction_res/commute/retail/school) and never
+# tuned.  Build the constant per-obs fraction vectors ONCE (the per-eval f-steps are
+# gone).  Unslotted obs map to the sentinel slot index n_slots → fraction 0; they
+# carry zero objective weight anyway (_gauss_w_arr / _walk_slotted are 0 there).
 _f_r_by_slot = np.append(_slot_mfr, 0.0)
-_f_b_by_slot = np.append(_slot_mfb, 0.0)
+_f_c_by_slot = np.append(_slot_mfc, 0.0)
+_f_t_by_slot = np.append(_slot_mft, 0.0)
 _f_s_by_slot = np.append(_slot_mfs, 0.0)
 _obs_f_r = _f_r_by_slot[_obs_slot_id]
-_obs_f_b = _f_b_by_slot[_obs_slot_id]
+_obs_f_c = _f_c_by_slot[_obs_slot_id]
+_obs_f_t = _f_t_by_slot[_obs_slot_id]
 _obs_f_s = _f_s_by_slot[_obs_slot_id]
 
 # Constant NTS slot-fraction dicts, returned by solve_scales for persistence to
 # tuned_params.json / tuning_history.jsonl (downstream consumers unchanged).
-slot_fracs_res_nts    = {sk: float(_slot_mfr[si]) for si, (sk, _) in enumerate(slot_list)}
-slot_fracs_biz_nts    = {sk: float(_slot_mfb[si]) for si, (sk, _) in enumerate(slot_list)}
-slot_fracs_school_nts = {sk: float(_slot_mfs[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_res_nts     = {sk: float(_slot_mfr[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_commute_nts = {sk: float(_slot_mfc[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_retail_nts  = {sk: float(_slot_mft[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_school_nts  = {sk: float(_slot_mfs[si]) for si, (sk, _) in enumerate(slot_list)}
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-                   P_school, ALPHA_school,
-                   w_pop, w_biz, THETA=None):
-    """Production-constrained gravity assignment → (flow_res, flow_biz, flow_school).
+def run_assignment(P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+                   P_school, ALPHA_school, THETA=None):
+    """Production-constrained gravity assignment.
 
-    Each component is singly (production) constrained: T^c_ij = K_c·p^c_i·a^c_j·F_c/D^c_i
-    (see model.constrained_od_flows). This returns the PRE-K per-link flows; the
-    K_res/K_biz/K_sch scaling is applied analytically by solve_scales (D_i has no K,
-    so flow stays linear in K — with f pinned at NTS the scale solve is convex).
+    Returns (flow_res, flow_commute, flow_retail, flow_school).  Each component is
+    singly (production) constrained: T^c_ij = K_c·p^c_i·a^c_j·F_c/D^c_i (see
+    model.constrained_od_flows).  This returns the PRE-K per-link flows; the
+    K_res/K_commute/K_retail/K_sch scaling is applied analytically by solve_scales
+    (D_i has no K, so flow stays linear in K — with f pinned at NTS the scale solve
+    is convex).
 
-    flow_res    = pop→pop,              kernel (P, ALPHA, BETA).
-    flow_biz    = symmetric pop↔biz split (per-origin normalised) + W_BIZ·(biz×biz),
-                  kernel (P_biz, ALPHA_biz, BETA).
-    flow_school = symmetric pop↔school split (per-origin normalised), kernel
-                  (P_school, ALPHA_school, BETA). Magnitude is K_sch (no separate
-                  W_SCHOOL scale — it would be redundant with K_sch under the constraint).
+    flow_res     = pop→pop,                          kernel (P, ALPHA, BETA).
+    flow_commute = symmetric commuters↔workplace split, kernel (P_commute, ALPHA_commute, BETA).
+    flow_retail  = symmetric pop↔retail split,          kernel (P_retail,  ALPHA_retail,  BETA).
+    flow_school  = symmetric students↔school split,     kernel (P_school,  ALPHA_school,  BETA).
+    Each carries NO weight parameter and NO self/cross term (the old W_BIZ / biz×biz
+    are gone); the per-component magnitude is its own K.
 
     THETA is accepted but ignored (probit cache; the legacy k=3 logit scatter is retired).
     """
-    t_res, t_biz, t_sch = constrained_od_flows(
-        od_src, od_dst, od_dist, N_nodes, w_pop, w_biz, base_w_school,
-        W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
+    t_res, t_commute, t_retail, t_sch = constrained_od_flows(
+        od_src, od_dst, od_dist, N_nodes,
+        base_w_pop, base_w_workplace, base_w_retail, base_w_school,
+        P, ALPHA, BETA,
+        P_commute, ALPHA_commute, P_retail, ALPHA_retail,
         P_school=P_school, ALPHA_school=ALPHA_school, with_school=_has_school,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
-        w_school_prod=base_w_school_prod)
+        w_commute_prod=base_w_commute_prod, w_school_prod=base_w_school_prod)
     # Scatter only onto observed links (compact space) — see the observed-link
     # scatter-restriction block above. flow_* are indexed by COMPACT link id
-    # (0.._N_obs_links-1); model_obs_3c reads them via the compact remap.
-    flow_res = scatter_od_to_links(t_res, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
-    flow_biz = scatter_od_to_links(t_biz, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
-    if _has_school:
-        flow_school = scatter_od_to_links(t_sch, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
-    else:
-        flow_school = np.zeros(_N_obs_links, dtype=np.float64)
-    return flow_res, flow_biz, flow_school
+    # (0.._N_obs_links-1); model_obs_4c reads them via the compact remap.
+    def _scatter(t):
+        return scatter_od_to_links(t, _pair_idx_obs, _link_idx_obs, _link_weight_obs, _N_obs_links)
+    flow_res     = _scatter(t_res)
+    flow_commute = _scatter(t_commute)
+    flow_retail  = _scatter(t_retail)
+    flow_school  = _scatter(t_sch) if _has_school else np.zeros(_N_obs_links, dtype=np.float64)
+    return flow_res, flow_commute, flow_retail, flow_school
 
 
-def model_obs_3c(flow_res, flow_biz, flow_school):
-    """Extract per-observation modelled flows for all three components."""
-    m_r = np.empty(n_obs)
-    m_b = np.empty(n_obs)
-    m_s = np.empty(n_obs)
+def model_obs_4c(flow_res, flow_commute, flow_retail, flow_school):
+    """Extract per-observation modelled flows for all four components."""
+    m_r = np.empty(n_obs); m_c = np.empty(n_obs)
+    m_t = np.empty(n_obs); m_s = np.empty(n_obs)
     # flow_* are indexed by compact observed-link id (see run_assignment).
     for i, idxs in enumerate(_obs_link_idxs_compact[:n_official_hourly]):
-        m_r[i] = flow_res[idxs].sum()    if idxs else 0.0
-        m_b[i] = flow_biz[idxs].sum()    if idxs else 0.0
-        m_s[i] = flow_school[idxs].sum() if idxs else 0.0
-    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe_compact],    0.0)
-    m_b[n_official_hourly:] = np.where(_walk_valid, flow_biz[_walk_link_safe_compact],    0.0)
-    m_s[n_official_hourly:] = np.where(_walk_valid, flow_school[_walk_link_safe_compact], 0.0)
-    return m_r, m_b, m_s
+        m_r[i] = flow_res[idxs].sum()     if idxs else 0.0
+        m_c[i] = flow_commute[idxs].sum() if idxs else 0.0
+        m_t[i] = flow_retail[idxs].sum()  if idxs else 0.0
+        m_s[i] = flow_school[idxs].sum()  if idxs else 0.0
+    m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe_compact],     0.0)
+    m_c[n_official_hourly:] = np.where(_walk_valid, flow_commute[_walk_link_safe_compact], 0.0)
+    m_t[n_official_hourly:] = np.where(_walk_valid, flow_retail[_walk_link_safe_compact],  0.0)
+    m_s[n_official_hourly:] = np.where(_walk_valid, flow_school[_walk_link_safe_compact],  0.0)
+    return m_r, m_c, m_t, m_s
 
 
-def solve_scales(m_res, m_biz, m_school):
-    """Direct convex solve for the three component scales (K_res, K_biz, K_sch).
+def solve_scales(m_res, m_commute, m_retail, m_school):
+    """Direct convex solve for the four component scales
+    (K_res, K_commute, K_retail, K_sch).
 
     Temporal fractions f are pinned at the NTS profile (never tuned), so each
     observation prediction is LINEAR in the scales:
 
-        pred_i = K_res·a_i + K_biz·b_i + K_sch·d_i
-        a_i = m_res_i·Th_i·f_res[s_i]   (b, d analogously) — f_* constant (_obs_f_*).
+        pred_i = K_res·a_i + K_commute·b_i + K_retail·c_i + K_sch·d_i
+        a_i = m_res_i·Th_i·f_res[s_i]   (b, c, d analogously) — f_* constant (_obs_f_*).
 
     The objective is therefore CONVEX over K ≥ 0:
       • Gaussian WLS over the official-hourly obs (convex quadratic),
       • Poisson identity-link deviance 2·Σ(n·log(n/pred)+pred−n) over the slotted
         walking obs (convex in the mean pred>0),
-      • a scale-share prior on φ_biz = K_biz/ΣK (and φ_sch) carried over from the
-        old φ-steps — it breaks the K_biz×W_BIZ degeneracy by anchoring the
-        business/school share (it regularises the inner K-solve only and is NOT
-        part of the reported χ², exactly as the old φ-prior was not).
+      • scale-share priors on φ_commute/φ_retail/φ_sch (= K_c/ΣK) — they anchor each
+        component's share (degeneracy break); res is the remainder.  The priors
+        regularise the inner K-solve only and are NOT part of the reported χ².
 
     Solved by damped (Levenberg) Newton with a backtracking line search on the
     full objective — monotone by construction, so there is no K-collapse and no
-    best-iterate bookkeeping. Replaces the old 5-block alternating minimisation.
+    best-iterate bookkeeping.
 
-    Returns (K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school)
-    — the slot_fracs are the constant NTS profile dicts (for persistence).
+    Returns (K_res, K_commute, K_retail, K_sch, slot_fracs_res, slot_fracs_commute,
+    slot_fracs_retail, slot_fracs_school) — the slot_fracs are the constant NTS
+    profile dicts (for persistence).
     """
-    a = m_res    * obs_Th * _obs_f_r
-    b = m_biz    * obs_Th * _obs_f_b
-    d = m_school * obs_Th * _obs_f_s
+    a = m_res     * obs_Th * _obs_f_r
+    b = m_commute * obs_Th * _obs_f_c
+    c = m_retail  * obs_Th * _obs_f_t
+    d = m_school  * obs_Th * _obs_f_s
 
-    C  = np.column_stack((a, b, d))          # (n_obs, 3): pred = C @ K
+    C  = np.column_stack((a, b, c, d))       # (n_obs, 4): pred = C @ K
     y  = obs_rhs_arr
     wg = _gauss_w_arr                        # Gaussian weights (walking zeroed)
     wm = _walk_slotted                       # slotted-walking (Poisson) mask
@@ -681,10 +700,13 @@ def solve_scales(m_res, m_biz, m_school):
     nw = _walk_sl_n
     nw_pos = np.maximum(nw, 1e-300)
 
-    mu_b, iv_b = phi_prior, 1.0 / (phi_std ** 2)
-    mu_s, iv_s = ((phi_school_prior, 1.0 / (phi_school_std ** 2))
-                  if _has_school else (0.0, 0.0))
-    active = np.array([True, True, _has_school])
+    # Scale-share priors: (component index, mu, inv_var).  res (index 0) is the
+    # remainder and carries no prior.
+    priors = [(1, phi_commute_prior, 1.0 / (phi_commute_std ** 2)),
+              (2, phi_retail_prior,  1.0 / (phi_retail_std ** 2))]
+    if _has_school:
+        priors.append((3, phi_school_prior, 1.0 / (phi_school_std ** 2)))
+    active = np.array([True, True, True, _has_school])
 
     def objval(K):
         pred = C @ K
@@ -693,12 +715,11 @@ def solve_scales(m_res, m_biz, m_school):
         pw = np.maximum(pred[wm], 1e-30)
         Lp = float(np.sum(2.0 * np.where(
             nw > 0, nw * np.log(nw_pos / pw) + (pw - nw), pw)))
-        S  = K[0] + K[1] + K[2]
+        S  = K.sum()
         Lpr = 0.0
         if S > 1e-300:
-            Lpr = iv_b * (K[1] / S - mu_b) ** 2
-            if _has_school:
-                Lpr += iv_s * (K[2] / S - mu_s) ** 2
+            for j, mu, iv in priors:
+                Lpr += iv * (K[j] / S - mu) ** 2
         return Lg + Lp + Lpr
 
     def grad_hess(K):
@@ -710,36 +731,37 @@ def solve_scales(m_res, m_biz, m_school):
         pw = np.maximum(pred[wm], 1e-30)
         g += Cw.T @ (2.0 * (1.0 - nw / pw))
         H += (Cw.T * (2.0 * nw / (pw * pw))) @ Cw
-        # Scale-share prior (Gauss-Newton PSD surrogate for its Hessian)
-        S = K[0] + K[1] + K[2]
+        # Scale-share priors (Gauss-Newton PSD surrogate for the Hessian).
+        # φ_j = K_j/S ⇒ ∂φ_j/∂K_k = (δ_jk·S − K_j)/S².
+        S = K.sum()
         if S > 1e-300:
             S2 = S * S
-            jb = np.array([-K[1] / S2, (S - K[1]) / S2, -K[1] / S2])
-            g += 2.0 * iv_b * (K[1] / S - mu_b) * jb
-            H += 2.0 * iv_b * np.outer(jb, jb)
-            if _has_school:
-                js = np.array([-K[2] / S2, -K[2] / S2, (S - K[2]) / S2])
-                g += 2.0 * iv_s * (K[2] / S - mu_s) * js
-                H += 2.0 * iv_s * np.outer(js, js)
+            for j, mu, iv in priors:
+                jac = -K[j] / S2 * np.ones(4)
+                jac[j] = (S - K[j]) / S2
+                g += 2.0 * iv * (K[j] / S - mu) * jac
+                H += 2.0 * iv * np.outer(jac, jac)
         return g, H
 
     # ── Init: single global scale from a moment fit, split by the prior shares.
     # K spans many orders of magnitude as the kernel params change, so a data-driven
     # magnitude is essential to land in the right basin before Newton refines.
-    c     = a + b + d
-    den_g = float((wg * c) @ c)
-    num_g = float((wg * c) @ y)
+    cc    = a + b + c + d
+    den_g = float((wg * cc) @ cc)
+    num_g = float((wg * cc) @ y)
     if den_g > 0 and num_g > 0:
         s0 = num_g / den_g                   # Gaussian (official) least-squares scale
     else:
-        cw_sum = float(c[wm].sum())
+        cw_sum = float(cc[wm].sum())
         s0 = (float(nw.sum()) / cw_sum) if cw_sum > 0 else 1.0   # Poisson moment
     s0   = max(s0, 1e-30)
-    sh_s = mu_s if _has_school else 0.0
-    K = np.array([s0 * max(1.0 - mu_b - sh_s, 1e-6), s0 * mu_b, s0 * sh_s])
+    sh_school = phi_school_prior if _has_school else 0.0
+    sh_res    = max(1.0 - phi_commute_prior - phi_retail_prior - sh_school, 1e-6)
+    K = np.array([s0 * sh_res, s0 * phi_commute_prior,
+                  s0 * phi_retail_prior, s0 * sh_school])
     K = np.maximum(K, 1e-30)
     if not _has_school:
-        K[2] = 0.0
+        K[3] = 0.0
 
     f_cur = objval(K)
     for _ in range(60):
@@ -751,14 +773,14 @@ def solve_scales(m_res, m_biz, m_school):
             step_i = np.linalg.solve(Hi + lam_lm * np.eye(gi.size), -gi)
         except np.linalg.LinAlgError:
             step_i = -gi
-        step = np.zeros(3)
+        step = np.zeros(4)
         step[active] = step_i
         # Backtracking line search on the FULL objective → guaranteed descent.
         t, improved = 1.0, False
         for _ls in range(40):
             Kn = np.maximum(K + t * step, 1e-30)
             if not _has_school:
-                Kn[2] = 0.0
+                Kn[3] = 0.0
             fn = objval(Kn)
             if fn < f_cur - 1e-12 * abs(f_cur):
                 K, f_cur, improved = Kn, fn, True
@@ -769,48 +791,60 @@ def solve_scales(m_res, m_biz, m_school):
         if np.max(np.abs(t * step_i)) < 1e-10 * (np.max(np.abs(K[active])) + 1e-30):
             break
 
-    return (float(K[0]), float(K[1]), float(K[2]),
-            slot_fracs_res_nts, slot_fracs_biz_nts, slot_fracs_school_nts)
+    return (float(K[0]), float(K[1]), float(K[2]), float(K[3]),
+            slot_fracs_res_nts, slot_fracs_commute_nts,
+            slot_fracs_retail_nts, slot_fracs_school_nts)
 
 
 # ── Objective function ────────────────────────────────────────────────────────
 
 eval_count = [0]
 best       = {"chi2": float("inf"), "log_params": None,
-              "K_res": 1.0, "K_biz": 1.0, "K_sch": 0.0}
+              "K_res": 1.0, "K_commute": 1.0, "K_retail": 1.0, "K_sch": 0.0}
 t0         = time.time()
 
 
-def objective(log_params, log_ref=None):
-    log_params = np.clip(log_params, -100, 100)
-    W_BIZ     = math.exp(log_params[0])
-    P         = math.exp(log_params[1])
-    ALPHA     = math.exp(log_params[2])
-    BETA      = math.exp(log_params[3])
-    P_biz     = math.exp(log_params[4])
-    ALPHA_biz = math.exp(log_params[5])
-    THETA     = math.exp(log_params[6]) if _has_stoch else None
-    _sch_off  = 7 if _has_stoch else 6
+def _unpack_gravity(log_params):
+    """Unpack the gravity log-param vector → kernel scalars (single source of truth
+    for index layout, shared by objective / probe / final eval)."""
+    P             = math.exp(log_params[0])
+    ALPHA         = math.exp(log_params[1])
+    BETA          = math.exp(log_params[2])
+    P_commute     = math.exp(log_params[3])
+    ALPHA_commute = math.exp(log_params[4])
+    P_retail      = math.exp(log_params[5])
+    ALPHA_retail  = math.exp(log_params[6])
+    THETA         = math.exp(log_params[7]) if _has_stoch else None
+    _sch_off      = 8 if _has_stoch else 7
     if _has_school:
         P_school     = math.exp(log_params[_sch_off])
         ALPHA_school = math.exp(log_params[_sch_off + 1])
     else:
-        P_school = ALPHA_school = 1.0
+        P_school = ALPHA_school = None
+    return (P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+            P_school, ALPHA_school, THETA)
 
-    w_pop = base_w_pop
-    w_biz = base_w_biz
 
-    flow_res, flow_biz, flow_school = run_assignment(
-        W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-        P_school, ALPHA_school,
-        w_pop, w_biz, THETA)
-    m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
-    K_res, K_biz, K_sch = solve_scales(m_res, m_biz, m_school)[:3]
+def objective(log_params, log_ref=None):
+    log_params = np.clip(log_params, -100, 100)
+    (P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+     P_school, ALPHA_school, THETA) = _unpack_gravity(log_params)
+    _ps = P_school     if _has_school else 1.0
+    _as = ALPHA_school if _has_school else 1.0
+
+    flow_res, flow_commute, flow_retail, flow_school = run_assignment(
+        P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+        _ps, _as, THETA)
+    m_res, m_commute, m_retail, m_school = model_obs_4c(
+        flow_res, flow_commute, flow_retail, flow_school)
+    K_res, K_commute, K_retail, K_sch = solve_scales(
+        m_res, m_commute, m_retail, m_school)[:4]
     # f is pinned at the NTS profile, so the per-obs fraction vectors _obs_f_* are
     # module-level constants and the old f-prior/coupling penalty is identically
-    # zero (f ≡ NTS prior and res+biz+sch = agg per slot); it is dropped.
+    # zero (f ≡ NTS prior and res+commute+retail+sch = agg per slot); it is dropped.
     _pred = (K_res * m_res * obs_Th * _obs_f_r
-             + K_biz * m_biz * obs_Th * _obs_f_b
+             + K_commute * m_commute * obs_Th * _obs_f_c
+             + K_retail * m_retail * obs_Th * _obs_f_t
              + K_sch * m_school * obs_Th * _obs_f_s)
     # Gaussian chi-squared for official hourly obs (_gauss_w_arr zeroes walking obs).
     _resid    = _pred - obs_rhs_arr
@@ -834,7 +868,8 @@ def objective(log_params, log_ref=None):
         best["chi2"]       = chi2
         best["log_params"] = log_params.copy()
         best["K_res"]      = K_res
-        best["K_biz"]      = K_biz
+        best["K_commute"]  = K_commute
+        best["K_retail"]   = K_retail
         best["K_sch"]      = K_sch
 
     if eval_count[0] % 20 == 0:
@@ -848,14 +883,15 @@ def objective(log_params, log_ref=None):
 # ── Build initial parameter vector ────────────────────────────────────────────
 
 # Gravity start: from tuned_params.json if available, else hardcoded defaults
-grav_start = {"W_BIZ": 1.0, "P": 300.0, "ALPHA": 2.0, "BETA": 1.0,
-              "P_biz": 600.0, "ALPHA_biz": 2.0, "THETA": 1.0,
+grav_start = {"P": 300.0, "ALPHA": 2.0, "BETA": 1.0,
+              "P_commute": 600.0, "ALPHA_commute": 2.0,
+              "P_retail": 600.0, "ALPHA_retail": 2.0, "THETA": 1.0,
               "P_school": 300.0, "ALPHA_school": 2.0}
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         tp = json.load(f)
-    for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA",
-              "P_school", "ALPHA_school"):
+    for k in ("P", "ALPHA", "BETA", "P_commute", "ALPHA_commute",
+              "P_retail", "ALPHA_retail", "THETA", "P_school", "ALPHA_school"):
         if k in tp:
             grav_start[k] = tp[k]
     print(f"Starting gravity params from {TUNED_PARAMS}")
@@ -863,12 +899,13 @@ if os.path.exists(TUNED_PARAMS):
 # Clamp to a safe minimum before log-transform (guards against degenerate prior runs)
 _LOG_MIN = 1e-4
 _log_p0_vals = [
-    math.log(max(grav_start["W_BIZ"],     _LOG_MIN)),
-    math.log(max(grav_start["P"],         _LOG_MIN)),
-    math.log(max(grav_start["ALPHA"],     _LOG_MIN)),
-    math.log(max(grav_start["BETA"],      _LOG_MIN)),
-    math.log(max(grav_start["P_biz"],     _LOG_MIN)),
-    math.log(max(grav_start["ALPHA_biz"], _LOG_MIN)),
+    math.log(max(grav_start["P"],             _LOG_MIN)),
+    math.log(max(grav_start["ALPHA"],         _LOG_MIN)),
+    math.log(max(grav_start["BETA"],          _LOG_MIN)),
+    math.log(max(grav_start["P_commute"],     _LOG_MIN)),
+    math.log(max(grav_start["ALPHA_commute"], _LOG_MIN)),
+    math.log(max(grav_start["P_retail"],      _LOG_MIN)),
+    math.log(max(grav_start["ALPHA_retail"],  _LOG_MIN)),
 ]
 if _has_stoch:
     _log_p0_vals.append(math.log(max(grav_start["THETA"], _LOG_MIN)))
@@ -886,7 +923,8 @@ assert len(log_p0) == n_gravity == len(_grav_param_names) == len(log_grav_ref), 
 
 # Capture starting gravity params for history (before any optimization)
 initial_gravity = {k: grav_start[k]
-                   for k in ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz")
+                   for k in ("P", "ALPHA", "BETA", "P_commute", "ALPHA_commute",
+                             "P_retail", "ALPHA_retail")
                    if k in grav_start}
 if _has_stoch and "THETA" in grav_start:
     initial_gravity["THETA"] = grav_start["THETA"]
@@ -896,12 +934,7 @@ if _has_school:
 
 log_ref = None
 
-if _has_stoch:
-    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, THETA]"
-elif _has_school:
-    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz, P_school, ALPHA_school]"
-else:
-    _grav_note = "  [W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz]"
+_grav_note = "  [" + ", ".join(_grav_param_names) + "]"
 print(f"Gravity: {len(log_p0)} params{_grav_note}")
 
 # ── Calibration convergence probe (CALIBRATE_PROBE=1) ─────────────────────────
@@ -910,30 +943,31 @@ print(f"Gravity: {len(log_p0)} params{_grav_note}")
 # optimum — the convex solver has converged). No optimization, no writes.
 if os.environ.get("CALIBRATE_PROBE"):
     print("\n=== CALIBRATE PROBE (no optimization, no writes) ===")
-    _W=math.exp(log_p0[0]);_P=math.exp(log_p0[1]);_A=math.exp(log_p0[2]);_B=math.exp(log_p0[3])
-    _Pb=math.exp(log_p0[4]);_Ab=math.exp(log_p0[5])
-    _so=7 if _has_stoch else 6
-    _Ps=math.exp(log_p0[_so])   if _has_school else 1.0
-    _As=math.exp(log_p0[_so+1]) if _has_school else 1.0
-    _fr,_fb,_fs=run_assignment(_W,_P,_A,_B,_Pb,_Ab,_Ps,_As,base_w_pop,base_w_biz,None)
-    _mr,_mb,_ms=model_obs_3c(_fr,_fb,_fs)
-    def _probe_eval(Kr,Kb,Ks,sfr,sfb,sfs):
-        fr=np.array([sfr.get(sk,1/24) if sk else 1/24 for sk in obs_slot_keys])
-        fb=np.array([sfb.get(sk,1/24) if sk else 1/24 for sk in obs_slot_keys])
-        fs=np.array([sfs.get(sk,0.0) if sk else 0.0 for sk in obs_slot_keys])
-        pred=Kr*_mr*obs_Th*fr+Kb*_mb*obs_Th*fb+Ks*_ms*obs_Th*fs
+    (_P,_A,_B,_Pc,_Ac,_Pr,_Ar,_Ps0,_As0,_TH) = _unpack_gravity(log_p0)
+    _Ps = _Ps0 if _has_school else 1.0
+    _As = _As0 if _has_school else 1.0
+    _fr,_fc,_ft,_fs = run_assignment(_P,_A,_B,_Pc,_Ac,_Pr,_Ar,_Ps,_As,None)
+    _mr,_mc,_mt,_ms = model_obs_4c(_fr,_fc,_ft,_fs)
+    def _probe_eval(Kr,Kc,Kt,Ks):
+        fr=np.array([slot_fracs_res_nts.get(sk,1/24)     if sk else 1/24 for sk in obs_slot_keys])
+        fc=np.array([slot_fracs_commute_nts.get(sk,1/24) if sk else 1/24 for sk in obs_slot_keys])
+        ft=np.array([slot_fracs_retail_nts.get(sk,1/24)  if sk else 1/24 for sk in obs_slot_keys])
+        fs=np.array([slot_fracs_school_nts.get(sk,0.0)   if sk else 0.0  for sk in obs_slot_keys])
+        pred=(Kr*_mr*obs_Th*fr + Kc*_mc*obs_Th*fc + Kt*_mt*obs_Th*ft + Ks*_ms*obs_Th*fs)
         def ch(lam):
             p=np.maximum(lam*pred,1e-30)
-            c=float((_gauss_w_arr*(p-obs_rhs_arr))@(p-obs_rhs_arr))
+            cc=float((_gauss_w_arr*(p-obs_rhs_arr))@(p-obs_rhs_arr))
             pw=p[_walk_slotted]; n=_walk_sl_n; pos=np.maximum(n,1e-300)
-            c+=float(np.sum(2*np.where(n>0,n*np.log(pos/pw)+(pw-n),pw)))
-            return c
+            cc+=float(np.sum(2*np.where(n>0,n*np.log(pos/pw)+(pw-n),pw)))
+            return cc
         ls=np.logspace(-1,2,2000); cs=[ch(l) for l in ls]; lo=ls[int(np.argmin(cs))]
         return ch(1.0),lo,ch(lo)
-    print(f"  params: W_BIZ={_W:.3f} P={_P:.1f} ALPHA={_A:.3f} BETA={_B:.3f} P_biz={_Pb:.1f} ALPHA_biz={_Ab:.3f}")
-    Kr,Kb,Ks,sfr,sfb,sfs=solve_scales(_mr,_mb,_ms)
-    c1,lo,clo=_probe_eval(Kr,Kb,Ks,sfr,sfb,sfs)
-    print(f"  direct solve  K_res={Kr:.4e} K_biz={Kb:.4e} K_sch={Ks:.4e}"
+    print(f"  params: P={_P:.1f} ALPHA={_A:.3f} BETA={_B:.3f} "
+          f"P_commute={_Pc:.1f} ALPHA_commute={_Ac:.3f} "
+          f"P_retail={_Pr:.1f} ALPHA_retail={_Ar:.3f}")
+    Kr,Kc,Kt,Ks = solve_scales(_mr,_mc,_mt,_ms)[:4]
+    c1,lo,clo=_probe_eval(Kr,Kc,Kt,Ks)
+    print(f"  direct solve  K_res={Kr:.4e} K_commute={Kc:.4e} K_retail={Kt:.4e} K_sch={Ks:.4e}"
           f"  data χ²/N={c1/n_obs:7.3f}  opt_λ={lo:6.3f}  χ²/N@optλ={clo/n_obs:7.3f}")
     sys.exit(0)
 
@@ -959,38 +993,26 @@ log_best = best["log_params"]
 
 # ── Unpack best params ────────────────────────────────────────────────────────
 
-W_BIZ     = math.exp(log_best[0])
-P         = math.exp(log_best[1])
-ALPHA     = math.exp(log_best[2])
-BETA      = math.exp(log_best[3])
-P_biz     = math.exp(log_best[4])
-ALPHA_biz = math.exp(log_best[5])
-THETA     = math.exp(log_best[6]) if _has_stoch else None
-_sch_off  = 7 if _has_stoch else 6
-if _has_school:
-    P_school     = math.exp(log_best[_sch_off])
-    ALPHA_school = math.exp(log_best[_sch_off + 1])
-else:
-    P_school = ALPHA_school = None
+(P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+ P_school, ALPHA_school, THETA) = _unpack_gravity(log_best)
 
-# Final evaluation for clean chi2, K_res, K_biz, K_sch, and slot_fracs (no L2 term)
-w_pop_f = base_w_pop
-w_biz_f = base_w_biz
-
+# Final evaluation for clean chi2, the four K's, and slot_fracs (no L2 term)
 _ps_final = 1.0 if not _has_school else P_school
 _as_final = 1.0 if not _has_school else ALPHA_school
-flow_res, flow_biz, flow_school = run_assignment(
-    W_BIZ, P, ALPHA, BETA, P_biz, ALPHA_biz,
-    _ps_final, _as_final,
-    w_pop_f, w_biz_f, THETA)
-m_res, m_biz, m_school = model_obs_3c(flow_res, flow_biz, flow_school)
-K_res, K_biz, K_sch, slot_fracs_res, slot_fracs_biz, slot_fracs_school = \
-    solve_scales(m_res, m_biz, m_school)
-K = K_res + K_biz + K_sch   # total scale (for display and backward compat)
+flow_res, flow_commute, flow_retail, flow_school = run_assignment(
+    P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail,
+    _ps_final, _as_final, THETA)
+m_res, m_commute, m_retail, m_school = model_obs_4c(
+    flow_res, flow_commute, flow_retail, flow_school)
+(K_res, K_commute, K_retail, K_sch,
+ slot_fracs_res, slot_fracs_commute, slot_fracs_retail, slot_fracs_school) = \
+    solve_scales(m_res, m_commute, m_retail, m_school)
+K = K_res + K_commute + K_retail + K_sch   # total scale (display / backward compat)
 # f pinned at the NTS profile → constant fraction vectors; the f-prior/coupling
 # penalty is identically zero and is dropped (see objective()).
 _pred = (K_res * m_res * obs_Th * _obs_f_r
-         + K_biz * m_biz * obs_Th * _obs_f_b
+         + K_commute * m_commute * obs_Th * _obs_f_c
+         + K_retail * m_retail * obs_Th * _obs_f_t
          + K_sch * m_school * obs_Th * _obs_f_s)
 _resid    = _pred - obs_rhs_arr
 chi2_data = float((_gauss_w_arr * _resid) @ _resid)
@@ -1007,7 +1029,7 @@ chi2_per_n = chi2 / n_obs
 # Convert count-space obs to an effective hourly-average for display:
 #   for walking obs: n_eff / (T/3600) = expected hourly count (un-slots the fraction)
 #   for official hourly obs: count is already vehicles/hour
-# The total modelled hourly count is K_res*m_res*f_res + K_biz*m_biz*f_biz.
+# The total modelled hourly count is Σ_c K_c·m_c·f_c over res/commute/retail/school.
 obs_eff = np.empty(n_obs)
 sig_eff = np.empty(n_obs)
 mod_eff = np.empty(n_obs)
@@ -1018,43 +1040,52 @@ for i, (kind, target, links, _obs, _sig, Ts) in enumerate(observations):
         obs_eff[i] = obs_rhs_arr[i]                   # vehicles/hour
         sig_eff[i] = _sig
         if sk is not None:
-            f_r = slot_fracs_res.get(sk, slot_prior[sk][2])
-            f_b = slot_fracs_biz.get(sk, slot_prior[sk][3])
-            f_s = slot_fracs_school.get(sk, slot_prior[sk][4])
+            f_r = slot_fracs_res.get(sk,     slot_prior[sk][2])
+            f_c = slot_fracs_commute.get(sk, slot_prior[sk][3])
+            f_t = slot_fracs_retail.get(sk,  slot_prior[sk][4])
+            f_s = slot_fracs_school.get(sk,  slot_prior[sk][5])
             mod_eff[i] = (K_res * m_res[i] * Th * f_r
-                          + K_biz * m_biz[i] * Th * f_b
+                          + K_commute * m_commute[i] * Th * f_c
+                          + K_retail * m_retail[i] * Th * f_t
                           + K_sch * m_school[i] * Th * f_s)
         else:
-            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i] + K_sch * m_school[i]) * Th
+            mod_eff[i] = (K_res * m_res[i] + K_commute * m_commute[i]
+                          + K_retail * m_retail[i] + K_sch * m_school[i]) * Th
     else:  # walking: show as vehicles/hour using slot fraction
         n_eff_i = obs_rhs_arr[i]
         if sk is not None and Th > 0 and n_eff_i > 0:
-            f_r = slot_fracs_res.get(sk, slot_prior[sk][2])
-            f_b = slot_fracs_biz.get(sk, slot_prior[sk][3])
-            f_s = slot_fracs_school.get(sk, slot_prior[sk][4])
-            m_r_i, m_b_i, m_s_i = m_res[i], m_biz[i], m_school[i]
-            raw_wtd = m_r_i * f_r + m_b_i * f_b + m_s_i * f_s
-            denom   = m_r_i + m_b_i + m_s_i
-            f_eff   = raw_wtd / denom if denom > 0 else (f_r + f_b + f_s) / 3
+            f_r = slot_fracs_res.get(sk,     slot_prior[sk][2])
+            f_c = slot_fracs_commute.get(sk, slot_prior[sk][3])
+            f_t = slot_fracs_retail.get(sk,  slot_prior[sk][4])
+            f_s = slot_fracs_school.get(sk,  slot_prior[sk][5])
+            m_r_i, m_c_i, m_t_i, m_s_i = m_res[i], m_commute[i], m_retail[i], m_school[i]
+            raw_wtd = m_r_i * f_r + m_c_i * f_c + m_t_i * f_t + m_s_i * f_s
+            denom   = m_r_i + m_c_i + m_t_i + m_s_i
+            f_eff   = raw_wtd / denom if denom > 0 else (f_r + f_c + f_t + f_s) / 4
             obs_eff[i] = n_eff_i / (Th * f_eff)
             sig_eff[i] = math.sqrt(n_eff_i) / (Th * f_eff)
-            mod_eff[i] = K_res * m_r_i + K_biz * m_b_i + K_sch * m_s_i   # combined AADT
+            mod_eff[i] = (K_res * m_r_i + K_commute * m_c_i
+                          + K_retail * m_t_i + K_sch * m_s_i)   # combined AADT
         else:
             obs_eff[i] = n_eff_i / max(Th, 1e-9)
             sig_eff[i] = math.sqrt(n_eff_i) / max(Th, 1e-9)
-            mod_eff[i] = (K_res * m_res[i] + K_biz * m_biz[i] + K_sch * m_school[i])
+            mod_eff[i] = (K_res * m_res[i] + K_commute * m_commute[i]
+                          + K_retail * m_retail[i] + K_sch * m_school[i])
 resid = np.where(sig_eff > 0, (mod_eff - obs_eff) / sig_eff, 0.0)
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
 _theta_str = f"  THETA={THETA:.4f}" if THETA is not None else ""
-K_tot = K_res + K_biz + K_sch
-phi_biz_out = K_biz / K_tot if K_tot > 0 else 0.0
-phi_sch_out = K_sch / K_tot if K_tot > 0 else 0.0
-print(f"  K_res={K_res:.4e}  K_biz={K_biz:.4e}  K_sch={K_sch:.4e}  (K={K:.4e})")
-print(f"  phi_biz={phi_biz_out:.3f}  phi_sch={phi_sch_out:.3f}")
-print(f"  W_BIZ={W_BIZ:.4f}  P={P:.2f}s  ALPHA={ALPHA:.4f}  BETA={BETA:.4f}"
-      f"  P_biz={P_biz:.2f}s  ALPHA_biz={ALPHA_biz:.4f}{_theta_str}")
+K_tot = K_res + K_commute + K_retail + K_sch
+phi_com_out = K_commute / K_tot if K_tot > 0 else 0.0
+phi_ret_out = K_retail  / K_tot if K_tot > 0 else 0.0
+phi_sch_out = K_sch     / K_tot if K_tot > 0 else 0.0
+print(f"  K_res={K_res:.4e}  K_commute={K_commute:.4e}  K_retail={K_retail:.4e}"
+      f"  K_sch={K_sch:.4e}  (K={K:.4e})")
+print(f"  phi_commute={phi_com_out:.3f}  phi_retail={phi_ret_out:.3f}  phi_sch={phi_sch_out:.3f}")
+print(f"  P={P:.2f}s  ALPHA={ALPHA:.4f}  BETA={BETA:.4f}"
+      f"  P_commute={P_commute:.2f}s  ALPHA_commute={ALPHA_commute:.4f}"
+      f"  P_retail={P_retail:.2f}s  ALPHA_retail={ALPHA_retail:.4f}{_theta_str}")
 if _has_school:
     print(f"  P_school={P_school:.2f}s  ALPHA_school={ALPHA_school:.4f}  (school magnitude = K_sch)")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
@@ -1068,21 +1099,19 @@ if prev_chi2_per_n is not None:
 # ── Per-slot fraction table ───────────────────────────────────────────────────
 
 _DT_NAMES = {0: "Wkday", 1: "Sat", 2: "Sun"}
-print(f"\n  Per-slot hourly fractions (res / biz / school vs NTS priors):")
-print(f"  {'Type':<5}  {'Hr':>2}  {'PriorAgg':>9}  {'f_res':>9}  {'f_biz':>9}  {'f_sch':>9}"
-      f"  {'Δres%':>6}  {'Δbiz%':>6}  {'Δsch%':>6}  N")
+print(f"\n  Per-slot hourly fractions (res / commute / retail / school vs NTS priors):")
+print(f"  {'Type':<5}  {'Hr':>2}  {'PriorAgg':>9}  {'f_res':>9}  {'f_com':>9}  {'f_ret':>9}"
+      f"  {'f_sch':>9}  N")
 for sk in sorted(slot_fracs_res):
-    dt, h                    = sk
-    mfa, std_f, mfr, mfb, mfs = slot_prior[sk]
-    f_r                      = slot_fracs_res[sk]
-    f_b                      = slot_fracs_biz[sk]
-    f_s                      = slot_fracs_school[sk]
-    n_in_slot                = len(slot_groups.get(sk, []))
-    dr  = 100.0 * (f_r - mfr) / mfr if mfr > 0 else 0.0
-    db  = 100.0 * (f_b - mfb) / mfb if mfb > 0 else 0.0
-    ds  = 100.0 * (f_s - mfs) / mfs if mfs > 0 else 0.0
-    print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.6f}  {f_r:>9.6f}  {f_b:>9.6f}  {f_s:>9.6f}"
-          f"  {dr:>+5.1f}%  {db:>+5.1f}%  {ds:>+5.1f}%  {n_in_slot}")
+    dt, h                          = sk
+    mfa, std_f, mfr, mfc, mft, mfs = slot_prior[sk]
+    f_r                            = slot_fracs_res[sk]
+    f_c                            = slot_fracs_commute[sk]
+    f_t                            = slot_fracs_retail[sk]
+    f_s                            = slot_fracs_school[sk]
+    n_in_slot                      = len(slot_groups.get(sk, []))
+    print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.6f}  {f_r:>9.6f}  {f_c:>9.6f}  {f_t:>9.6f}"
+          f"  {f_s:>9.6f}  {n_in_slot}")
 
 # ── Goodness-of-fit table (sorted by |z|) ────────────────────────────────────
 
@@ -1101,22 +1130,25 @@ print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 
 tuned = {
     "kernel":    "rational",
-    "K":         float(K),         # K_res + K_biz + K_sch (backward compat); full precision
+    "K":         float(K),         # K_res+K_commute+K_retail+K_sch (compat); full precision
     "K_res":     float(K_res),     # K spans many orders of magnitude — round(x,6) zeroes sub-µ values
-    "K_biz":     float(K_biz),
+    "K_commute": float(K_commute),
+    "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),
-    "W_BIZ":     round(W_BIZ, 6),
-    "P":         round(P, 4),
-    "ALPHA":     round(ALPHA, 6),
-    "BETA":      round(BETA, 6),
-    "P_biz":     round(P_biz, 4),
-    "ALPHA_biz": round(ALPHA_biz, 6),
+    "P":             round(P, 4),
+    "ALPHA":         round(ALPHA, 6),
+    "BETA":          round(BETA, 6),
+    "P_commute":     round(P_commute, 4),
+    "ALPHA_commute": round(ALPHA_commute, 6),
+    "P_retail":      round(P_retail, 4),
+    "ALPHA_retail":  round(ALPHA_retail, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
     **( {"P_school":     round(P_school,     4),
          "ALPHA_school": round(ALPHA_school, 6)} if _has_school else {} ),
-    "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
-    "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
-    "slot_fracs_school": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
+    "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
+    "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
+    "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
+    "slot_fracs_school":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
     "chi2":       round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),
     "n_obs":      n_obs,
@@ -1138,25 +1170,30 @@ try:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    def _kern(K_c, P_c, A_c):
+        u = d_sec / P_c
+        return K_c * (A_c + BETA) * u**BETA / (A_c + BETA * u**(A_c + BETA))
     d_sec    = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
     d_min    = d_sec / 60.0
-    u_res    = d_sec / P
-    u_biz    = d_sec / P_biz
-    k_res_c  = K_res * (ALPHA + BETA)     * u_res**BETA / (ALPHA     + BETA * u_res**(ALPHA     + BETA))
-    k_biz_c  = K_biz * (ALPHA_biz + BETA) * u_biz**BETA / (ALPHA_biz + BETA * u_biz**(ALPHA_biz + BETA))
+    k_res_c  = _kern(K_res, P, ALPHA)
+    k_com_c  = _kern(K_commute, P_commute, ALPHA_commute)
+    k_ret_c  = _kern(K_retail, P_retail, ALPHA_retail)
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.plot(d_min, k_res_c, linewidth=1.8, label=f"Residential  P={P/60:.1f}min  ALPHA={ALPHA:.3f}  K_res={K_res:.3e}")
-    ax.plot(d_min, k_biz_c, linewidth=1.8, linestyle="--",
-            label=f"Business     P_biz={P_biz/60:.1f}min  ALPHA_biz={ALPHA_biz:.3f}  K_biz={K_biz:.3e}")
-    ax.axvline(P     / 60.0, color="C0", linestyle=":", alpha=0.6)
-    ax.axvline(P_biz / 60.0, color="C1", linestyle=":", alpha=0.6)
+    ax.plot(d_min, k_res_c, linewidth=1.8,
+            label=f"Residential  P={P/60:.1f}min  ALPHA={ALPHA:.3f}  K_res={K_res:.3e}")
+    ax.plot(d_min, k_com_c, linewidth=1.8, linestyle="--",
+            label=f"Commute      P={P_commute/60:.1f}min  ALPHA={ALPHA_commute:.3f}  K_com={K_commute:.3e}")
+    ax.plot(d_min, k_ret_c, linewidth=1.8, linestyle="-.",
+            label=f"Retail       P={P_retail/60:.1f}min  ALPHA={ALPHA_retail:.3f}  K_ret={K_retail:.3e}")
+    ax.axvline(P         / 60.0, color="C0", linestyle=":", alpha=0.6)
+    ax.axvline(P_commute / 60.0, color="C1", linestyle=":", alpha=0.6)
+    ax.axvline(P_retail  / 60.0, color="C2", linestyle=":", alpha=0.6)
     if _has_school and P_school is not None:
-        u_sch   = d_sec / P_school
-        k_sch_c = K_sch * (ALPHA_school + BETA) * u_sch**BETA / (ALPHA_school + BETA * u_sch**(ALPHA_school + BETA))
+        k_sch_c = _kern(K_sch, P_school, ALPHA_school)
         ax.plot(d_min, k_sch_c, linewidth=1.8, linestyle=":",
                 label=f"School       P_sch={P_school/60:.1f}min  ALPHA_sch={ALPHA_school:.3f}  K_sch={K_sch:.3e}")
-        ax.axvline(P_school / 60.0, color="C2", linestyle=":", alpha=0.6)
+        ax.axvline(P_school / 60.0, color="C3", linestyle=":", alpha=0.6)
     ax.set_xlabel("Travel time (minutes)")
     ax.set_ylabel("K_c · kernel(d; P_c, ALPHA_c, BETA)")
     ax.set_title(
@@ -1181,20 +1218,23 @@ params = {
     "kernel":    "rational",
     "K":         float(K),
     "K_res":     float(K_res),
-    "K_biz":     float(K_biz),
+    "K_commute": float(K_commute),
+    "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),
-    "W_BIZ":     round(W_BIZ, 6),
-    "P":         round(P, 4),
-    "ALPHA":     round(ALPHA, 6),
-    "BETA":      round(BETA, 6),
-    "P_biz":     round(P_biz, 4),
-    "ALPHA_biz": round(ALPHA_biz, 6),
+    "P":             round(P, 4),
+    "ALPHA":         round(ALPHA, 6),
+    "BETA":          round(BETA, 6),
+    "P_commute":     round(P_commute, 4),
+    "ALPHA_commute": round(ALPHA_commute, 6),
+    "P_retail":      round(P_retail, 4),
+    "ALPHA_retail":  round(ALPHA_retail, 6),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
     **( {"P_school":     round(P_school,     4),
          "ALPHA_school": round(ALPHA_school, 6)} if _has_school else {} ),
-    "slot_fracs_res":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
-    "slot_fracs_biz":    {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_biz.items()},
-    "slot_fracs_school": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
+    "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
+    "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
+    "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
+    "slot_fracs_school":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
 }
 
 history_entry = {
@@ -1213,8 +1253,10 @@ history_entry = {
     "tuner_hyperparams": {
         # phi_* priors anchor the scale-share inside solve_scales (degeneracy break).
         # gamma_coupling_scale is no longer used (f is pinned, no per-slot coupling).
-        "phi_biz_prior":        phi_prior,
-        "phi_biz_std":          phi_std,
+        "phi_commute_prior":    phi_commute_prior,
+        "phi_commute_std":      phi_commute_std,
+        "phi_retail_prior":     phi_retail_prior,
+        "phi_retail_std":       phi_retail_std,
         "phi_school_prior":     phi_school_prior,
         "phi_school_std":       phi_school_std,
         "gravity_lambda":       grav_lam_raw,
@@ -1224,8 +1266,9 @@ history_entry = {
     },
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
-        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8), round(mfb, 8), round(mfs, 8)]
-        for (dt, h), (mfa, std_f, mfr, mfb, mfs) in slot_prior.items()
+        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8),
+                      round(mfc, 8), round(mft, 8), round(mfs, 8)]
+        for (dt, h), (mfa, std_f, mfr, mfc, mft, mfs) in slot_prior.items()
     },
     "observations": [
         {
