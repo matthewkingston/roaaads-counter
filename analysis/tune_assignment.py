@@ -505,9 +505,22 @@ _link_weight_obs  = (np.ascontiguousarray(_link_weight[_scatter_keep])
 # Readback indices remapped into the compact observed-link space.
 _obs_link_idxs_compact = [[int(_link_remap[k]) for k in idxs] for idxs in obs_link_idxs]
 _walk_link_safe_compact = np.where(_walk_valid, _link_remap[_walk_link_safe], 0)
+_kept_entries  = int(_scatter_keep.sum())
+_total_entries = len(link_idx_arr)
 print(f"  Observed-link scatter: {_N_obs_links} links carry "
-      f"{_scatter_keep.sum():,}/{len(link_idx_arr):,} incidence entries "
-      f"({100*_scatter_keep.sum()/len(link_idx_arr):.0f}%) — scatter restricted to these")
+      f"{_kept_entries:,}/{_total_entries:,} incidence entries "
+      f"({100*_kept_entries/_total_entries:.0f}%) — scatter restricted to these")
+
+# Free the full-incidence arrays. They are only needed (a) above, to build the
+# observed-link subset, and (b) in the _has_stoch CSR path — which is dead for the
+# probit cache (_has_stoch is False).  The eval loop touches only the compact *_obs
+# arrays, so on a memory-constrained host these full 66.8M-entry arrays (~800 MB) plus
+# the per-entry compact/keep masks (~600 MB) would otherwise sit resident for the whole
+# optimization and tip the working set into swap (peak RSS ~2.3 GB → ~1.5 GB).
+del _compact_link_idx, _scatter_keep, pair_idx, link_idx_arr
+if _link_weight is not None:
+    del _link_weight
+import gc as _gc; _gc.collect()
 
 # Group slotted observations by (day_type, hour)
 slot_groups = {}
