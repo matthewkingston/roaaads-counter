@@ -951,6 +951,59 @@ if os.environ.get("CALIBRATE_PROBE"):
           f"  data χ²/N={c1/n_obs:7.3f}  opt_λ={lo:6.3f}  χ²/N@optλ={clo/n_obs:7.3f}")
     sys.exit(0)
 
+# ══ DIAGNOSTIC — per-component kernel sweep (SWEEP=res|commute|retail|school) ══
+# NOT part of tuning.  Env-gated; runs one assignment + convex K-solve per grid
+# cell, does NO optimization and NO writes, then sys.exit(0).  Like CALIBRATE_PROBE.
+#   Usage:  SWEEP=res python3 analysis/tune_assignment.py
+#
+# Varies ONLY the target component's (P_c, BETA_c) over a sane grid while the OTHER
+# three kernels stay FIXED at the start params (from tuned_params.json / refs), and
+# reports that component's solved K and the resulting χ²/N per cell.
+#
+# ⚠ READ WITH CARE — the K and χ²/N are CONDITIONAL on the other three components
+# being frozen at their start values.  They are NOT a joint best fit and must not be
+# quoted as an achievable χ²/N or as "the tuned result".  The sweep answers one
+# narrow question: does THIS component's K collapse to ~0 (is any sane kernel for it
+# tolerated), and which way does its preferred P/BETA lean?  For a real fit, run the
+# full tune (no SWEEP env var).
+_sweep_target = os.environ.get("SWEEP")
+if _sweep_target:
+    _COMP_IDX = {"res": (0, 1, 0), "commute": (2, 3, 1),
+                 "retail": (4, 5, 2), "school": (6, 7, 3)}
+    if _sweep_target not in _COMP_IDX:
+        print(f"SWEEP={_sweep_target!r} unknown; use res|commute|retail|school"); sys.exit(1)
+    _pi, _bi, _ki = _COMP_IDX[_sweep_target]
+    print(f"\n=== SWEEP {_sweep_target} (vary its P/BETA, others fixed at start; no writes) ===")
+    _base = list(_unpack_gravity(log_p0))[:8]        # [P,B,Pc,Bc,Pr,Br,Ps,Bs]
+    if not _has_school:
+        _base[6], _base[7] = 1.0, 1.0
+
+    def _sweep_chi(Ks4, ms4):
+        fr = np.array([slot_fracs_res_nts.get(sk, 1/24)     if sk else 1/24 for sk in obs_slot_keys])
+        fc = np.array([slot_fracs_commute_nts.get(sk, 1/24) if sk else 1/24 for sk in obs_slot_keys])
+        ft = np.array([slot_fracs_retail_nts.get(sk, 1/24)  if sk else 1/24 for sk in obs_slot_keys])
+        fs = np.array([slot_fracs_school_nts.get(sk, 0.0)   if sk else 0.0  for sk in obs_slot_keys])
+        Kr, Kc, Kt, Ks = Ks4; mr, mc, mt, ms = ms4
+        p = np.maximum(Kr*mr*obs_Th*fr + Kc*mc*obs_Th*fc + Kt*mt*obs_Th*ft + Ks*ms*obs_Th*fs, 1e-30)
+        cc = float((_gauss_w_arr*(p-obs_rhs_arr)) @ (p-obs_rhs_arr))
+        pw = p[_walk_slotted]; n = _walk_sl_n; pos = np.maximum(n, 1e-300)
+        cc += float(np.sum(2*np.where(n > 0, n*np.log(pos/pw)+(pw-n), pw)))
+        return cc
+
+    P_grid = [120, 180, 300, 480, 720, 1200]
+    B_grid = [0.5, 1.0, 1.5, 2.0, 3.0]
+    print(f"  start params: {[round(x,1) for x in _base]}  [P,B,Pc,Bc,Pr,Br,Ps,Bs]")
+    print(f"  {'P':>6} {'B':>6} {'K_'+_sweep_target:>11} {'phi':>8} {'chi2/N':>8}")
+    for Pv in P_grid:
+        for Bv in B_grid:
+            _args = list(_base); _args[_pi] = Pv; _args[_bi] = Bv
+            ms4 = model_obs_4c(*run_assignment(*_args, None))
+            Ks4 = solve_scales(*ms4)[:4]
+            tot = sum(Ks4)
+            phi = Ks4[_ki] / tot if tot > 0 else 0.0
+            print(f"  {Pv:6.0f} {Bv:6.2f} {Ks4[_ki]:11.4e} {phi:8.3f} {_sweep_chi(Ks4, ms4)/n_obs:8.3f}")
+    sys.exit(0)
+
 # ── Run optimization ──────────────────────────────────────────────────────────
 
 _tol = 5e-5 if fast else 1e-5
