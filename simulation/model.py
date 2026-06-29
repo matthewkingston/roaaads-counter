@@ -576,14 +576,15 @@ def aadt_weights(slot_fracs_res, slot_fracs_commute, slot_fracs_retail,
                  slot_fracs_school=None):
     """Per-component AADT weights for converting a pre-K component flow to a daily total.
 
-    A component flow K_c·m_c is calibrated so that K_c·m_c·f_c[slot] matches the
-    HOURLY count in that slot — so K_c·m_c by itself is NOT a daily total; it is the
-    daily total divided by the component's daily fraction sum.  The annual-average
-    daily contribution is K_c·m_c·W_c with
+    The annual-average daily contribution of component c is K_c·m_c·W_c with
         W_c = (5·Σ_h f_c[weekday,h] + Σ_h f_c[Sat,h] + Σ_h f_c[Sun,h]) / 7,
-    i.e. the day-type-weighted sum of the component's hourly fractions.  W_res+
-    W_commute+W_retail+W_sch ≈ 1 (the components partition the aggregate profile,
-    which sums to ~1/day).
+    the day-type-weighted sum of the component's hourly fractions.
+
+    The temporal profiles (derive_component_profiles.py) are now per-component SHAPES,
+    each normalised so **W_c ≈ 1** (decoupled from magnitude, which generation pins) —
+    so K_c·m_c is itself ≈ the component's daily AADT, and the combined daily AADT is
+    Σ_c K_c·m_c·W_c.  (Pre-decoupling the components partitioned the aggregate profile,
+    so the four W_c summed to ≈1 instead of each being ≈1.)
 
     Returns (W_res, W_commute, W_retail, W_sch).  Components with no slot_fracs
     return 0.0.

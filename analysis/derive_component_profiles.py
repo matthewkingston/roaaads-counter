@@ -1,342 +1,216 @@
 """
-Derive residential, business, and school temporal profile priors for the
-three-component gravity model from NTS trip-purpose data.
+Derive per-component temporal SHAPE profiles for the four-component gravity model.
 
-Sources
--------
-Weekdays — DfT NTS Table NTS0502a, "Trip start time by trip purpose
-  (Monday to Friday only): England, 2002 onwards".
-  Gives P(purpose | start hour, Mon–Fri) as percentages summing to 100.
-  File: data/nts0502.ods
+Under generation pinning (analysis/derive_generation_rates.py) each component's
+absolute magnitude AND the inter-component split are set by data (ρ_c × producers,
+K_c ≈ 1).  The temporal profiles f_c therefore carry ONLY each component's relative
+time-of-day-and-week SHAPE, derived independently — they no longer partition a
+shared aggregate.
 
-Weekends — DfT NTS Table NTS0504b, "Average number of trips by day of the
-  week and purpose (trips per person per year): England, 2002 onwards".
-  Gives absolute trip rates per person per year by day and purpose.
-  Used here for Saturday and Sunday rows only.
-  File: data/nts0504.ods
+For each component c the weekly profile is
+    f_c(dow, h) = V_c(dow) · H_c(daytype(dow), h)
+  - H_c = the within-day hourly shape (Σ_h H = 1):
+       weekday:  ρ-weighted blend of the component's purposes' weekday hourly
+                 distributions (NTS0502a × the aggregate hourly volume);
+       weekend:  the aggregate weekend hourly shape (no per-purpose weekend hourly
+                 data exists), shared across components.
+  - V_c(dow) = the component's relative daily volume Mon–Sun, a ρ-weighted blend of
+       its purposes' day-of-week distributions (NTS0504b), normalised so
+       Σ_{7 days} V_c = 7  ⇒  the day-weighted daily sum W_c = 1.
 
-Both files downloaded from:
-  https://www.gov.uk/government/statistical-data-sets/nts05-trips
+W_c = 1 makes K_c·m_c the component's daily AADT directly (so K_c ≈ 1 with the
+generation-pinned m_c) and matches the existing "rows sum to 7" convention; the
+magnitude/split lives entirely in generation.  The old res+commute+retail+school =
+agg partition constraint is intentionally DROPPED.
 
-Purpose classification
-----------------------
-The gravity model splits work-/shopping-related travel into two independent
-components — commute (attractor = workplace jobs) and retail (attractor = retail
-parking spaces) — each with its own temporal profile.  Trips are classified:
+Mapping: analysis/purpose_mapping.py (shared with derive_generation_rates.py).
+ρ_p (per-purpose car-driver rates) come from analysis/generation_rates.json.
 
-  Commute ("commute"):
-    - Commuting              — direct work trips
-    - Employer's business    — trips made during/for work (deliveries, etc.)
+Sources (DfT NTS, England, 2023/24 rolling avg):
+  NTS0502a (data/nts0502.ods) — weekday trip start-time × purpose; rows sum to 100,
+       i.e. P(purpose | hour).
+  NTS0504b (data/nts0504.ods) — trips/person/year by day-of-week × purpose (Mon–Sun).
+NTS0502a merges some purposes, so each purpose's weekday hourly SHAPE uses a
+best-available proxy column (PROXY_0502 below) — an approximation in the shape only
+(magnitude is exact from generation).
 
-  Retail ("retail"):
-    - Shopping               — trips to retail; shops dominate OSM POIs and
-                               car parks
-
-  School ("school"):
-    - Education              — to/from school or university; DOWNWEIGHTED
-                               × EDU_FACTOR (see below)
-    - Escort education       — taking someone to school; adult car driver
-
-  Residential ("res"):
-    - Other escort and personal business  (GP, bank, etc.)
-    - Visiting friends, entertainment and sport
-    - Holiday, day trip and other
-
-Education downweighting (EDU_FACTOR = 1/5)
-------------------------------------------
-NTS records ALL trips regardless of mode.  The "Education" category is
-predominantly children walking, cycling, or being bussed — not car trips.
-The "Escort education" category captures the adult car driver making the
-school-run trip. The child's own journey ("Education") has far lower
-per-person car trip generation than commuting.
-
-We therefore downweight the Education contribution by EDU_FACTOR = 1/5
-in the school numerator, and reduce the denominator by the same amount
-so that shares of all remaining purposes are proportionally increased.
-
-  commute_numerator = commuting + employer_business
-  retail_numerator  = shopping
-  school_numerator  = education*EDU_FACTOR + escort_education
-  adjusted_total    = all_purposes - education*(1 - EDU_FACTOR)
-  commute_share     = commute_numerator / adjusted_total
-  retail_share      = retail_numerator  / adjusted_total
-  school_share      = school_numerator  / adjusted_total
-  res_share         = 1 - commute_share - retail_share - school_share
-
-For NTS0504b weekends, "Just walk" trips are additionally removed from
-the denominator before this reweighting, because the aggregate traffic
-count profiles we are matching contain no pedestrian trips.
-
-Year choice
------------
-"2023 to 2024" — the most recent rolling average in both files.  Individual
-years 2020–2021 are avoided as COVID anomalies; 2022 is the first
-post-pandemic year; the 2-year rolling average gives a more stable estimate.
-
-Weekday approach (NTS0502a)
----------------------------
-For each hour h, commute_share(h) and retail_share(h) are computed from the
-2023–2024 per-hour purpose percentages with the education downweighting applied.
-This gives distinct shares for every hour of the day.
-
-Weekend approach (NTS0504b)
----------------------------
-NTS0502a covers Monday–Friday only.  NTS0504b provides absolute trip rates
-per person per year for each day of the week, including Saturday and Sunday.
-We extract the Saturday and Sunday rows from the 2023–2024 rolling average,
-remove "Just walk", apply the education downweighting, and compute flat
-commute/retail shares for each weekend day.  The temporal SHAPE within each
-weekend day is inherited from the aggregate mean_fraction profile (which
-already captures the Saturday vs. Sunday difference in volume pattern);
-only the overall component split is estimated from NTS0504b.
-
-Constraint
-----------
-The tuner requires
-  mean_fraction_res + mean_fraction_commute + mean_fraction_retail
-    + mean_fraction_school = mean_fraction
-at every (day_of_week, hour) slot.  This is enforced exactly:
-
-  mean_fraction_commute = mean_fraction × commute_share
-  mean_fraction_retail  = mean_fraction × retail_share
-  mean_fraction_school  = mean_fraction × school_share
-  mean_fraction_res     = mean_fraction × (1 − commute − retail − school shares)
-
-Each component is directly interpretable as the fraction of AADT attributable
-to that traffic type at that slot.  The global scale K absorbs normalisation.
-
-Usage
------
-  python3 analysis/derive_component_profiles.py
-
-Overwrites the mean_fraction_res, mean_fraction_commute, mean_fraction_retail,
-and mean_fraction_school columns in analysis/hourly_fractions.csv.  All other
-columns are preserved.
-Re-run whenever the NTS files change or the purpose classification is revised.
+Usage:  python3 analysis/derive_component_profiles.py
+Overwrites mean_fraction_{res,commute,retail,school} in analysis/hourly_fractions.csv.
+Re-run when the NTS files, the purpose mapping, or generation_rates.json change.
 """
 
-import csv, sys
+import csv, json, os, sys
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from purpose_mapping import COMPONENT_PURPOSES, COMPONENTS, CANONICAL_PURPOSES
 
 NTS0502_FILE = "data/nts0502.ods"
 NTS0504_FILE = "data/nts0504.ods"
 FRACS_FILE   = "analysis/hourly_fractions.csv"
+GEN_RATES    = "analysis/generation_rates.json"
 NTS_YEAR     = "2023 to 2024"
 
-EDU_FACTOR   = 1 / 5   # education trips have ~1/5 the car trip generation of commuting
+# canonical purpose -> NTS0502a column for its weekday hourly SHAPE proxy.  The table
+# merges purposes, so several share a proxy column (shape only; magnitude is from
+# generation): personal_business + other_escort -> col 7 "Other work, other escort and
+# personal business"; leisure -> col 8 "Visiting friends, entertainment and sport"
+# (dominant leisure); other -> col 9 "Holiday, day trip and other".  Education (col 4,
+# the non-vehicle child trip) is NOT used — school uses the Escort-education shape (col 5).
+PROXY_0502 = {
+    "commuting": 2, "business": 3, "education_escort": 5, "shopping": 6,
+    "personal_business": 7, "other_escort": 7, "leisure": 8, "other": 9,
+}
 
-# ── Load NTS0502a (weekday hourly purpose split) ──────────────────────────────
+# canonical purpose -> NTS0504b column(s) for its day-of-week volume.
+DOW_0504 = {
+    "commuting": [2], "business": [3], "education_escort": [5], "shopping": [6],
+    "other_escort": [7], "personal_business": [8],
+    "leisure": [9, 10, 11, 12],   # visit-home + visit-elsewhere + sport/ent + holiday
+    "other": [14],
+}
+_DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+              "Saturday", "Sunday"]
 
-print(f"Loading {NTS0502_FILE} …")
-raw502 = pd.read_excel(NTS0502_FILE, sheet_name="NTS0502a_start_time_by_purpose",
-                       header=None, engine="odf")
 
-# Row 5 = header; data from row 6.
-# Column positions (0-indexed):
-#  0  Year       1  Start time
-#  2  Commuting  3  Business (employer's)  4  Education  5  Escort education
-#  6  Shopping   7  Other…  8  Visiting…  9  Holiday…
-# 10  All purposes (%)     11  Sample size
-C_COMM, C_BIZ_E, C_EDU, C_ESCORT, C_SHOP = 2, 3, 4, 5, 6
-C_ALL = 10
+def _load_0502_pct():
+    """{col_idx: [P(purpose|hour) for h in 0..23]} from NTS0502a (rows sum to 100)."""
+    raw = pd.read_excel(NTS0502_FILE, sheet_name="NTS0502a_start_time_by_purpose",
+                        header=None, engine="odf")
+    d = raw.iloc[6:].copy(); d.columns = range(d.shape[1])
+    yr = d[d[0] == NTS_YEAR].copy()
+    yr = yr[yr[1] != "All day"].copy()
+    if len(yr) != 24:
+        sys.exit(f"ERROR: expected 24 hourly rows in NTS0502a '{NTS_YEAR}', got {len(yr)}")
+    yr["hour"] = yr[1].str[:2].astype(int)
+    yr = yr.sort_values("hour").reset_index(drop=True)
+    cols = sorted(set(PROXY_0502.values()))
+    for c in cols:
+        yr[c] = pd.to_numeric(yr[c], errors="coerce").fillna(0.0)
+    return {c: yr[c].tolist() for c in cols}
 
-data502 = raw502.iloc[6:].copy()
-data502.columns = range(data502.shape[1])
 
-yr502 = data502[data502[0] == NTS_YEAR].copy()
-yr502 = yr502[yr502[1] != "All day"].reset_index(drop=True)
-if len(yr502) != 24:
-    print(f"ERROR: expected 24 rows for '{NTS_YEAR}' in NTS0502a, got {len(yr502)}")
-    sys.exit(1)
+def _load_0504_dayfrac():
+    """{canonical_purpose: [frac(dow) for dow 0..6]} — purpose's Mon–Sun volume
+    distribution from NTS0504b, summing to 1."""
+    raw = pd.read_excel(NTS0504_FILE, sheet_name="NTS0504b_day_purpose",
+                        header=None, engine="odf")
+    d = raw.iloc[6:].copy(); d.columns = range(d.shape[1])
+    yr = d[d[0] == NTS_YEAR].copy()
+    allcols = sorted({c for cols in DOW_0504.values() for c in cols})
+    for c in allcols:
+        yr[c] = pd.to_numeric(yr[c], errors="coerce").fillna(0.0)
+    rowbyday = {row[1]: row for _, row in yr.iterrows()}
+    missing = [day for day in _DAY_ORDER if day not in rowbyday]
+    if missing:
+        sys.exit(f"ERROR: NTS0504b '{NTS_YEAR}' missing days {missing}")
+    out = {}
+    for p, cols in DOW_0504.items():
+        trips = [sum(float(rowbyday[day][c]) for c in cols) for day in _DAY_ORDER]
+        s = sum(trips)
+        out[p] = [t / s for t in trips] if s > 0 else [1.0 / 7] * 7
+    return out
 
-yr502["hour"] = yr502[1].str[:2].astype(int)
-yr502 = yr502.sort_values("hour").reset_index(drop=True)
 
-for c in [C_COMM, C_BIZ_E, C_EDU, C_ESCORT, C_SHOP, C_ALL]:
-    yr502[c] = pd.to_numeric(yr502[c], errors="coerce").fillna(0.0)
+def main():
+    rho = json.load(open(GEN_RATES))["purpose_rates"]   # canonical -> ρ_p
 
-# Education downweighting: remove (1-EDU_FACTOR) × education from denominator
-yr502["adj_total"]     = yr502[C_ALL] - yr502[C_EDU] * (1 - EDU_FACTOR)
-yr502["commute_num"]   = yr502[C_COMM] + yr502[C_BIZ_E]
-yr502["retail_num"]    = yr502[C_SHOP]
-yr502["school_num"]    = yr502[C_EDU] * EDU_FACTOR + yr502[C_ESCORT]
-yr502["commute_share"] = yr502["commute_num"] / yr502["adj_total"]
-yr502["retail_share"]  = yr502["retail_num"]  / yr502["adj_total"]
-yr502["school_share"]  = yr502["school_num"]  / yr502["adj_total"]
+    # ── Aggregate hourly profile (input column) ──────────────────────────────
+    rows = list(csv.DictReader(open(FRACS_FILE, newline="")))
+    fieldnames = rows[0].keys() if rows else []
+    mf = {(int(r["day_of_week"]), int(r["hour"].split(":")[0])): float(r["mean_fraction"])
+          for r in rows}
+    # weekday aggregate hourly weight P(hour) (avg Mon–Fri, normalised) → converts
+    # NTS0502a's P(purpose|hour) into P(hour|purpose).
+    mfwd = [sum(mf[(d, h)] for d in range(5)) / 5 for h in range(24)]
+    s = sum(mfwd); mfwd = [x / s for x in mfwd]
+    # weekend hourly shapes (shared across components — no per-purpose weekend data).
+    def _norm_day(dow):
+        v = [mf[(dow, h)] for h in range(24)]; t = sum(v)
+        return [x / t for x in v] if t > 0 else [1.0 / 24] * 24
+    H_weekend = {5: _norm_day(5), 6: _norm_day(6)}
 
-commute_share_weekday = dict(zip(yr502["hour"], yr502["commute_share"]))
-retail_share_weekday  = dict(zip(yr502["hour"], yr502["retail_share"]))
-school_share_weekday  = dict(zip(yr502["hour"], yr502["school_share"]))
+    # ── Per-purpose weekday hourly distribution g_p(h) = P(hour|purpose) ──────
+    col_pct = _load_0502_pct()
+    g = {}
+    for p in CANONICAL_PURPOSES:
+        raw = [col_pct[PROXY_0502[p]][h] * mfwd[h] for h in range(24)]
+        t = sum(raw)
+        g[p] = [x / t for x in raw] if t > 0 else [1.0 / 24] * 24
 
-print(f"\nNTS {NTS_YEAR} weekday component shares by hour  (education × {EDU_FACTOR})")
-print(f"  {'Hour':>4}  {'com%':>6}  {'ret%':>6}  {'sch%':>6}  {'res%':>6}")
-for h in range(24):
-    cs = commute_share_weekday[h]
-    ts = retail_share_weekday[h]
-    ss = school_share_weekday[h]
-    print(f"  h{h:02d}    {100*cs:5.1f}%  {100*ts:5.1f}%  {100*ss:5.1f}%  {100*(1-cs-ts-ss):5.1f}%")
+    # ── Component weekday hourly shape Hwd_c(h): ρ-weighted blend, Σ_h = 1 ─────
+    Hwd = {}
+    for comp, terms in COMPONENT_PURPOSES.items():
+        blend = [0.0] * 24
+        for p, w in terms:
+            wt = w * rho[p]
+            for h in range(24):
+                blend[h] += wt * g[p][h]
+        t = sum(blend)
+        Hwd[comp] = [x / t for x in blend] if t > 0 else [1.0 / 24] * 24
 
-# ── Load NTS0504b (day-of-week purpose rates, trips/person/year) ──────────────
+    # ── Component day-of-week volume V_c(dow): ρ-weighted, Σ_7 = 7 (⇒ W_c=1) ──
+    dayfrac = _load_0504_dayfrac()
+    V = {}
+    for comp, terms in COMPONENT_PURPOSES.items():
+        vol = [0.0] * 7
+        for p, w in terms:
+            wt = w * rho[p]
+            for dow in range(7):
+                vol[dow] += wt * dayfrac[p][dow]
+        t = sum(vol)
+        V[comp] = [x / t * 7 for x in vol] if t > 0 else [1.0] * 7
 
-print(f"\nLoading {NTS0504_FILE} …")
-raw504 = pd.read_excel(NTS0504_FILE, sheet_name="NTS0504b_day_purpose",
-                       header=None, engine="odf")
+    # ── Assemble f_c(dow, h) = V_c(dow) · H_c(daytype, h) ────────────────────
+    fc = {comp: {} for comp in COMPONENTS}
+    for comp in COMPONENTS:
+        for dow in range(7):
+            H = Hwd[comp] if dow < 5 else H_weekend[dow]
+            for h in range(24):
+                fc[comp][(dow, h)] = V[comp][dow] * H[h]
 
-# Row 5 = header; data from row 6.
-# Column positions (0-indexed):
-#  0  Year          1  Day of the week
-#  2  Commuting     3  Business (employer's)   4  Education   5  Escort education
-#  6  Shopping      7  Other escort            8  Personal business
-#  9  Visit friends at private home           10  Visit friends elsewhere
-# 11  Sport/entertainment                     12  Holiday or day trip
-# 13  Just walk                               14  Other
-# 15  All purposes                            16  Sample size
-C504_COMM, C504_BIZ_E, C504_EDU, C504_ESCORT, C504_SHOP = 2, 3, 4, 5, 6
-C504_WALK = 13
-C504_ALL  = 15
+    # ── Write component columns (drop legacy biz column if present) ───────────
+    for r in rows:
+        dow = int(r["day_of_week"]); h = int(r["hour"].split(":")[0])
+        for comp in COMPONENTS:
+            r[f"mean_fraction_{comp}"] = f"{fc[comp][(dow, h)]:.10f}"
+    comp_cols = [f"mean_fraction_{c}" for c in
+                 ("res", "commute", "retail", "school")]
+    base_cols = [c for c in fieldnames
+                 if c not in comp_cols and c != "mean_fraction_biz"]
+    out_cols = base_cols + comp_cols
+    with open(FRACS_FILE, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=out_cols, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote component shape columns → {FRACS_FILE}")
 
-data504 = raw504.iloc[6:].copy()
-data504.columns = range(data504.shape[1])
+    # ── Diagnostics + verification ───────────────────────────────────────────
+    print("\nWeekday hourly shape (peak hours, % of the day at each hour):")
+    print(f"  {'h':>3} {'commute':>8} {'retail':>7} {'school':>7} {'res':>7}")
+    for h in range(6, 20):
+        print(f"  {h:02d}: {100*Hwd['commute'][h]:7.1f}% {100*Hwd['retail'][h]:6.1f}% "
+              f"{100*Hwd['school'][h]:6.1f}% {100*Hwd['res'][h]:6.1f}%")
+    print("\nDay-of-week volume V_c (Mon→Sun, Σ=7):")
+    for comp in ("commute", "retail", "school", "res"):
+        print(f"  {comp:8s} " + " ".join(f"{v:4.2f}" for v in V[comp]))
 
-yr504 = data504[data504[0] == NTS_YEAR].copy()
-for c in [C504_COMM, C504_BIZ_E, C504_EDU, C504_ESCORT,
-          C504_SHOP, C504_WALK, C504_ALL]:
-    yr504[c] = pd.to_numeric(yr504[c], errors="coerce").fillna(0.0)
+    print("\nVerification (W_c uses the Mon–Fri average, as the model collapses dow→day_type):")
+    ok = True
+    for comp in COMPONENTS:
+        col_sum = sum(fc[comp].values())                       # over 168 rows
+        wd_avg = sum(sum(fc[comp][(d, h)] for h in range(24))
+                     for d in range(5)) / 5.0                  # avg weekday daily sum
+        wc = (5 * wd_avg
+              + sum(fc[comp][(5, h)] for h in range(24))
+              + sum(fc[comp][(6, h)] for h in range(24))) / 7.0
+        flag = "" if abs(col_sum - 7) < 1e-6 and abs(wc - 1) < 1e-6 else "  <-- FAIL"
+        ok = ok and not flag
+        print(f"  {comp:8s} Σ_168 = {col_sum:.4f} (→7)   W_c = {wc:.4f} (→1){flag}")
+    neg = [(c, k) for c in COMPONENTS for k, v in fc[c].items() if v < 0]
+    print("  all non-negative" if not neg else f"  NEGATIVE at {neg[:5]}")
+    print("  ✓ all checks pass" if ok and not neg else "  ✗ CHECK FAILED")
 
-commute_share_weekend = {}
-retail_share_weekend  = {}
-school_share_weekend  = {}
-print(f"\nNTS {NTS_YEAR} weekend component shares from NTS0504b  (education × {EDU_FACTOR}, walk removed)")
-print(f"  {'Day':<10}  {'com_trips':>9}  {'ret_trips':>9}  {'sch_trips':>9}  {'adj_total':>9}"
-      f"  {'com%':>6}  {'ret%':>6}  {'sch%':>6}  {'res%':>6}")
 
-for day in ["Saturday", "Sunday"]:
-    row = yr504[yr504[1] == day]
-    if row.empty:
-        print(f"ERROR: '{day}' not found in NTS0504b for year '{NTS_YEAR}'")
-        sys.exit(1)
-    row = row.iloc[0]
-
-    comm    = float(row[C504_COMM])
-    biz_e   = float(row[C504_BIZ_E])
-    edu     = float(row[C504_EDU])
-    escort  = float(row[C504_ESCORT])
-    shop    = float(row[C504_SHOP])
-    walk    = float(row[C504_WALK])
-    all_p   = float(row[C504_ALL])
-
-    # Remove walking trips (not in vehicle counts), then downweight education
-    no_walk     = all_p - walk
-    adj_total   = no_walk - edu * (1 - EDU_FACTOR)
-    commute_num = comm + biz_e
-    retail_num  = shop
-    school_num  = edu * EDU_FACTOR + escort
-
-    cs = commute_num / adj_total
-    ts = retail_num  / adj_total
-    ss = school_num  / adj_total
-    commute_share_weekend[day] = cs
-    retail_share_weekend[day]  = ts
-    school_share_weekend[day]  = ss
-
-    print(f"  {day:<10}  {commute_num:9.3f}  {retail_num:9.3f}  {school_num:9.3f}  {adj_total:9.3f}"
-          f"  {100*cs:5.1f}%  {100*ts:5.1f}%  {100*ss:5.1f}%  {100*(1-cs-ts-ss):5.1f}%")
-
-# ── Load hourly fractions CSV ─────────────────────────────────────────────────
-
-print(f"\nLoading {FRACS_FILE} …")
-rows = []
-with open(FRACS_FILE, newline="") as f:
-    reader = csv.DictReader(f)
-    fieldnames = reader.fieldnames
-    for row in reader:
-        rows.append(row)
-
-# ── Compute and write component columns ──────────────────────────────────────
-
-DOW_TO_DAY = {5: "Saturday", 6: "Sunday"}
-
-for row in rows:
-    dow = int(row["day_of_week"])
-    h   = int(row["hour"].split(":")[0])
-    mfa = float(row["mean_fraction"])
-
-    if dow <= 4:
-        cs = commute_share_weekday[h]
-        ts = retail_share_weekday[h]
-        ss = school_share_weekday[h]
-    else:
-        cs = commute_share_weekend[DOW_TO_DAY[dow]]
-        ts = retail_share_weekend[DOW_TO_DAY[dow]]
-        ss = school_share_weekend[DOW_TO_DAY[dow]]
-
-    row["mean_fraction_commute"] = f"{mfa * cs:.10f}"
-    row["mean_fraction_retail"]  = f"{mfa * ts:.10f}"
-    row["mean_fraction_school"]  = f"{mfa * ss:.10f}"
-    row["mean_fraction_res"]     = f"{mfa * (1 - cs - ts - ss):.10f}"
-
-_comp_cols = ("mean_fraction_res", "mean_fraction_commute",
-              "mean_fraction_retail", "mean_fraction_school",
-              "mean_fraction_biz")   # drop legacy biz column if present
-base_cols = [c for c in fieldnames if c not in _comp_cols]
-out_cols = base_cols + ["mean_fraction_res", "mean_fraction_commute",
-                        "mean_fraction_retail", "mean_fraction_school"]
-
-with open(FRACS_FILE, "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=out_cols, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(rows)
-
-print(f"\nWrote updated component columns → {FRACS_FILE}")
-
-# ── Sanity checks ─────────────────────────────────────────────────────────────
-
-print("\nSanity checks:")
-
-errors = 0
-for row in rows:
-    mfa = float(row["mean_fraction"])
-    mfr = float(row["mean_fraction_res"])
-    mfc = float(row["mean_fraction_commute"])
-    mft = float(row["mean_fraction_retail"])
-    mfs = float(row["mean_fraction_school"])
-    diff = abs(mfr + mfc + mft + mfs - mfa)
-    if diff > 1e-9:
-        print(f"  FAIL: dow={row['day_of_week']} h={row['hour']} "
-              f"res+com+ret+sch={mfr+mfc+mft+mfs:.10f} vs mfa={mfa:.10f} (Δ={diff:.2e})")
-        errors += 1
-if errors == 0:
-    print("  ✓  res + commute + retail + school = agg for all 168 rows")
-
-neg = [(r["day_of_week"], r["hour"]) for r in rows
-       if (float(r["mean_fraction_res"]) < 0 or float(r["mean_fraction_commute"]) < 0
-           or float(r["mean_fraction_retail"]) < 0 or float(r["mean_fraction_school"]) < 0)]
-if neg:
-    print(f"  FAIL: negative fractions at {neg}")
-else:
-    print("  ✓  all fractions non-negative")
-
-print("\n  Weekday component shares by hour (Mon shown; other weekdays identical):")
-wkday_rows = sorted([r for r in rows if int(r["day_of_week"]) == 0],
-                    key=lambda r: int(r["hour"].split(":")[0]))
-for r in wkday_rows:
-    h   = int(r["hour"].split(":")[0])
-    mfa = float(r["mean_fraction"])
-    mfc = float(r["mean_fraction_commute"])
-    mft = float(r["mean_fraction_retail"])
-    mfs = float(r["mean_fraction_school"])
-    cs  = mfc / mfa if mfa > 0 else 0
-    ts  = mft / mfa if mfa > 0 else 0
-    ss  = mfs / mfa if mfa > 0 else 0
-    bar_c = "█" * int(cs * 30)
-    bar_t = "▓" * int(ts * 30)
-    bar_s = "░" * int(ss * 30)
-    print(f"  h{h:02d}  com={100*cs:4.1f}%  ret={100*ts:4.1f}%  sch={100*ss:4.1f}%  {bar_c}{bar_t}{bar_s}")
-
-print("\n  Weekend flat shares applied:")
-for dow, day in DOW_TO_DAY.items():
-    cs = commute_share_weekend[day]
-    ts = retail_share_weekend[day]
-    ss = school_share_weekend[day]
-    print(f"  {day}: com={100*cs:.1f}%  ret={100*ts:.1f}%  sch={100*ss:.1f}%  "
-          f"res={100*(1-cs-ts-ss):.1f}%")
+if __name__ == "__main__":
+    main()

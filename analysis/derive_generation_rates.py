@@ -54,29 +54,32 @@ Re-run whenever data/nts0409.ods changes or the purpose mapping is revised.
 """
 
 import json
+import os
 import sys
 
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from purpose_mapping import COMPONENT_PURPOSES, LEISURE_RETAIL_FRAC, CANONICAL_PURPOSES
 
 NTS0409_FILE = "data/nts0409.ods"
 OUT_FILE     = "analysis/generation_rates.json"
 NTS_YEARS    = [2023, 2024]
 VEHICLE_MODES = ["Car or van driver", "Motorcycle", "Taxi or minicab"]
 
-# JUDGMENT ALLOCATION — fraction of Leisure trips treated as venue (retail);
-# remainder is home-visiting (res).  No NTS car-driver sub-split exists; 0.5 is an
-# assumption and the largest single source of allocation uncertainty here.
-LEISURE_RETAIL_FRAC = 0.5
-
-# Component → list of (NTS0409a purpose column, weight).  Leisure appears in both
-# retail and res via LEISURE_RETAIL_FRAC.  See the module docstring for rationale.
-PURPOSE_MAP = {
-    "commute": [("Commuting", 1.0)],
-    "retail":  [("Shopping", 1.0), ("Business", 1.0), ("Personal business", 1.0),
-                ("Leisure", LEISURE_RETAIL_FRAC)],
-    "school":  [("Education or escort education", 1.0)],
-    "res":     [("Other escort", 1.0), ("Other", 1.0),
-                ("Leisure", 1.0 - LEISURE_RETAIL_FRAC)],
+# Canonical purpose key (purpose_mapping.py) → NTS0409a column display name.
+# The purpose→component mapping itself lives in purpose_mapping.COMPONENT_PURPOSES
+# (shared with derive_component_profiles.py); here we only resolve the canonical
+# keys to this table's columns.
+NTS0409_COL = {
+    "commuting":         "Commuting",
+    "business":          "Business",
+    "education_escort":  "Education or escort education",
+    "shopping":          "Shopping",
+    "other_escort":      "Other escort",
+    "personal_business": "Personal business",
+    "leisure":           "Leisure",
+    "other":             "Other",
 }
 
 
@@ -103,16 +106,16 @@ def main():
         sys.exit(f"ERROR: expected {n_expected} (year×mode) rows, got {len(sub)} "
                  f"— check years {NTS_YEARS} and modes {VEHICLE_MODES} exist")
 
-    # Per-person/day rate for each purpose = Σ(year,mode) trips/yr ÷ n_years ÷ 365.
+    # Per-person/day rate for an NTS0409a purpose column = Σ(year,mode) trips/yr ÷ n_years ÷ 365.
     def purpose_rate(name):
         col = _resolve_col(df, name)
         return sub[col].astype(float).sum() / len(NTS_YEARS) / 365.0
 
-    all_purposes = sorted({p for terms in PURPOSE_MAP.values() for p, _ in terms})
-    rate = {p: purpose_rate(p) for p in all_purposes}
-
-    rates = {comp: sum(w * rate[p] for p, w in terms)
-             for comp, terms in PURPOSE_MAP.items()}
+    # Per-canonical-purpose car-driver rate ρ_p (consumed by derive_component_profiles.py
+    # to ρ-weight each component's temporal-shape blend) and per-component rates.
+    purpose_rates = {p: purpose_rate(NTS0409_COL[p]) for p in CANONICAL_PURPOSES}
+    rates = {comp: sum(w * purpose_rates[p] for p, w in terms)
+             for comp, terms in COMPONENT_PURPOSES.items()}
 
     # Sanity: components should partition All purposes (vehicle modes only).
     total_comp = sum(rates.values())
@@ -136,6 +139,7 @@ def main():
             ],
         },
         "rates": rates,
+        "purpose_rates": purpose_rates,
     }
     with open(OUT_FILE, "w") as f:
         json.dump(out, f, indent=2)
