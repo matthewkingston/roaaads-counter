@@ -30,6 +30,7 @@ grav_ref     = config["gravity_ref"]
 GRAVITY_KEYS = tuple(grav_ref)                       # all shape params in the ref
 SCALE_KEYS   = ("K_res", "K_commute", "K_retail", "K_sch")
 STALE_KEYS   = ("K", "K_biz", "W_BIZ", "W_SCHOOL", "P_biz", "ALPHA_biz",
+                "ALPHA", "ALPHA_commute", "ALPHA_retail", "ALPHA_school",
                 "MU", "SIGMA")
 
 existing = {}

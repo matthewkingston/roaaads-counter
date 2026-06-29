@@ -310,11 +310,24 @@ def _rational_kernel(d, P, ALPHA, BETA):
         return (ALPHA + BETA) / denom
 
 
+def _tanner_kernel(d, P, BETA):
+    """Tanner deterrence in the same normalised u=d/P form as _rational_kernel, but
+    with an EXPONENTIAL tail instead of a power-law one:
+        u = d/P;  f(u) = u^BETA · exp(BETA·(1 − u)).
+    Peak f(P)=1 (at u=1), rise ~u^BETA near the origin, tail ~exp(−BETA·d/P) — fast
+    enough that long trips are cheap to suppress (well-conditioned), unlike the rational
+    kernel's heavy 1/d^ALPHA tail.  Numerically safe: exp(−BETA·u) underflows to 0 long
+    before u^BETA could overflow; d=0 ⇒ u=0 ⇒ 0 (BETA>0).  γ = BETA/P (decay scale 1/γ)."""
+    u = d / P
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        return u ** BETA * np.exp(BETA * (1.0 - u))
+
+
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_pop, w_workplace, w_retail, w_school,
-                         P, ALPHA, BETA,
-                         P_commute, ALPHA_commute, P_retail, ALPHA_retail,
-                         P_school=None, ALPHA_school=None, with_school=False,
+                         P, BETA,
+                         P_commute, BETA_commute, P_retail, BETA_retail,
+                         P_school=None, BETA_school=None, with_school=False,
                          self_src=None, self_dist=None, self_w=None,
                          w_commute_prod=None, w_school_prod=None,
                          gen_scale=None):
@@ -329,9 +342,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
     split with its OWN kernel — NO weight parameter and NO self/cross term
     (the old single business component's W_BIZ and biz×biz term are gone):
-      commute (kernel P_commute/ALPHA_commute): producer = resident commuters
+      commute (Tanner kernel P_commute/BETA_commute): producer = resident commuters
         (w_commute_prod), attractor = workplace jobs (w_workplace).
-      retail  (kernel P_retail/ALPHA_retail):   producer = population,
+      retail  (Tanner kernel P_retail/BETA_retail):   producer = population,
         attractor = retail parking spaces (w_retail).
 
     Denominators are summed over the FULL destination set of each origin (all od
@@ -366,9 +379,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     gs_sch_out = gs.get("sch_out", 1.0)
     gs_sch_ret = gs.get("sch_ret", 1.0)
 
-    F_res = _rational_kernel(od_dist, P,         ALPHA,         BETA)
-    F_com = _rational_kernel(od_dist, P_commute, ALPHA_commute, BETA)
-    F_ret = _rational_kernel(od_dist, P_retail,  ALPHA_retail,  BETA)
+    F_res = _tanner_kernel(od_dist, P,         BETA)
+    F_com = _tanner_kernel(od_dist, P_commute, BETA_commute)
+    F_ret = _tanner_kernel(od_dist, P_retail,  BETA_retail)
 
     pop_s  = w_pop[src];       pop_d  = w_pop[dst]
     work_s = w_workplace[src]; work_d = w_workplace[dst]
@@ -376,9 +389,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
 
     _has_self = self_src is not None and len(self_src) > 0
     if _has_self:
-        F_res_self = _rational_kernel(self_dist, P,         ALPHA,         BETA)
-        F_com_self = _rational_kernel(self_dist, P_commute, ALPHA_commute, BETA)
-        F_ret_self = _rational_kernel(self_dist, P_retail,  ALPHA_retail,  BETA)
+        F_res_self = _tanner_kernel(self_dist, P,         BETA)
+        F_com_self = _tanner_kernel(self_dist, P_commute, BETA_commute)
+        F_ret_self = _tanner_kernel(self_dist, P_retail,  BETA_retail)
     else:
         F_res_self = F_com_self = F_ret_self = None
 
@@ -418,8 +431,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     )
 
     if with_school and w_school is not None and w_school.sum() > 0:
-        F_sch = _rational_kernel(od_dist, P_school, ALPHA_school, BETA)
-        F_sch_self = _rational_kernel(self_dist, P_school, ALPHA_school, BETA) if _has_self else None
+        F_sch = _tanner_kernel(od_dist, P_school, BETA_school)
+        F_sch_self = _tanner_kernel(self_dist, P_school, BETA_school) if _has_self else None
         sch_s = w_school[src]; sch_d = w_school[dst]
         iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop,    F_sch_self)   # school-cross leg school→pop: attraction = pop
         iD_sch_sch = _inv_denom(sch_d, F_sch, w_school, F_sch_self)   # school-cross leg pop→school: attraction = school

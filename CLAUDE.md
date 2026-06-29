@@ -37,7 +37,7 @@ python3 analysis/aggregate_counts.py         # combine per-session AADT → link
 python3 analysis/derive_generation_rates.py                # regenerate generation_rates.json — NTS0409a vehicle-driver trips/person/day + per-purpose ρ_p (re-run when NTS0409 or the purpose mapping changes)
 python3 analysis/derive_component_profiles.py              # regenerate hourly_fractions.csv per-component shape columns (reads generation_rates.json ρ_p; run AFTER derive_generation_rates.py)
 
-python3 analysis/tune_assignment.py                        # tune gravity params (9 shape params, 4 production-constrained scales; external zones fixed from census)
+python3 analysis/tune_assignment.py                        # tune gravity params (8 Tanner shape params P_c/BETA_c, 4 production-constrained scales; external zones fixed from census)
 python3 analysis/tune_assignment.py --fast                 # looser tolerances (~2× faster, minimal precision loss)
 python3 analysis/tune_assignment.py --note "description"   # optional human label in history
 
@@ -84,15 +84,15 @@ than restart.
 | `simulation/build_osrm_profile.py` | Generates `car_roaaads.lua` — the road-class-biased OSRM car profile. Pulls the default `car.lua` from the `osrm/osrm-backend` Docker image, injects a block after the `forward_rate` assignment that divides `forward_speed`/`forward_rate` by `HIGHWAY_COST_FACTOR` (matching internal Dijkstra biasing). Re-run whenever `HIGHWAY_COST_FACTOR` changes, then re-preprocess OSRM (`osrm-extract -p car_roaaads.lua`, `osrm-partition`, `osrm-customize`). Output: `/home/matthew/Documents/CodingFun/osrm/car_roaaads.lua`. |
 | `simulation/reduce_deadends.py` | Collapses "residential dead-end" regions in the consolidated routing graph to shrink node count (speeds up `build_paths.py`/tuning, enables a larger core area). A region R (entrance E ∉ R) qualifies iff: (1) R connects to the rest of the network through exactly one cut vertex E; (2) R contains no boundary node and no school-demand node (both *protected* — never absorbed — which enforces the no-boundary and zero-school rules structurally); (3) max directed journey time E→n over n∈R < `T_MAX` (default 60 routing-cost seconds); (4) total workplace+retail demand < `BIZ_CAP` (default 100; residential pop unbounded); (5) `|R| ≥ 2` (single-node spurs skipped — 1→1 saves nothing). **Algorithm:** every valid region is a protected-free connected component of H−a (H = undirected simple projection) for some articulation point a, so it enumerates all such (entrance, region) candidates, filters by constraints 2–5 + directed reachability both ways, and selects the *maximal feasible* regions (laminar family ⇒ disjoint; naturally descends into an oversized branch to find the largest collapsible sub-pockets — catches cyclic closes that leaf-pruning would miss). Each region → one super-node S (=min id, summed pop/workplace/retail/school, pop-weighted UTM centroid) joined to E by directed links E→S, S→E whose travel times are population-weighted means of the intra-region directed times. **Intra-region times use the same OSRM-equivalent `(class×band)` edge model as `build_paths.py`** (`build_cost_digraph(G, spec)` via `simulation/edge_speed.py`), so the collapse/`T_MAX` decisions match the speeds the reduced graph is later routed on. Synthetic edges use `highway="deadend_collapsed"` (factor 1.0 in `build_paths.py`) with `maxspeed`+`length` set so osmnx's `add_edge_speeds`/`add_edge_travel_times` (re-run by `build_paths.py`) reproduce that target time. **Run after `build_demographics.py` (needs pop/biz/school + boundary) and before `build_paths.py`.** Outputs (gitignored): `newtownards_reduced.graphml`, `node_weights_reduced.json`, `deadend_map.json` (provenance: super-node→absorbed nodes + times), `deadend_broken_obs.json` (observed/count links whose endpoints were eaten — **manual review before adoption**; observed-link endpoints are deliberately *not* protected). Params: `--t-max`, `--biz-cap`. **Wired into the pipeline:** `build_paths.py` (`CONS_GRAPH`), `build_assignment.py` (`CONS_GRAPH`), `tune_assignment.py` (`CONS_GRAPH`) read `newtownards_reduced.graphml`, and `model.WEIGHTS_FILE`/`ROUTING_GRAPH` point at the reduced files — so this step must run after `build_demographics.py`. The 6 absorbed walking observations (Westmount Park, Old Belfast Road) are discarded via `EXCLUDE_LINKS` in `model.py`. **Map caveat:** `build_map.py` still draws the *full* consolidated graph, so flow on collapsed interior streets is not shown on the map (demand layers are unaffected; main-road flows and the fit are unaffected). Re-mapping collapsed regions via their super-nodes is a possible follow-up. |
 | `simulation/edit_network.py` | Manual network edits (node deletions etc.). |
-| `simulation/tuner_config.json` | **Tracked in git.** Gravity param regularization and scale-share priors. `gravity_lambda` + `gravity_ref` regularise the 9 shape params (P/ALPHA/BETA/P_commute/ALPHA_commute/P_retail/ALPHA_retail/P_school/ALPHA_school); `phi_commute_prior`/`phi_commute_std`, `phi_retail_prior`/`phi_retail_std`, `phi_school_prior`/`phi_school_std` set Gaussian priors on the commute/retail/school **scale shares** (`φ = K_c/ΣK`) inside `solve_scales` (degeneracy break). `gamma_coupling_scale` and `lambda` are unused dead keys left in the file. External demand layers (workplace, retail_spaces, school_demand, commute/school producers) are measured per zone in `census_zones.json` — no external scale factors. |
+| `simulation/tuner_config.json` | **Tracked in git.** Gravity param regularization and scale-share priors. `gravity_lambda` + `gravity_ref` regularise the 8 Tanner shape params (per-component peak+shape: P/BETA/P_commute/BETA_commute/P_retail/BETA_retail/P_school/BETA_school); `phi_commute_prior`/`phi_commute_std`, `phi_retail_prior`/`phi_retail_std`, `phi_school_prior`/`phi_school_std` set Gaussian priors on the commute/retail/school **scale shares** (`φ = K_c/ΣK`) inside `solve_scales` (degeneracy break). `gamma_coupling_scale` and `lambda` are unused dead keys left in the file. External demand layers (workplace, retail_spaces, school_demand, commute/school producers) are measured per zone in `census_zones.json` — no external scale factors. |
 | `analysis/parse_official_hourly.py` | Parses sheets 444/507/508 from the 2023 NI ODS traffic count file → `data/official_hourly.json`. **Imports `model.COUNT_SITES` as the single source of truth for site geometry** (`SITE_MAP`) — it stamps each site's `node`/`links` from COUNT_SITES into the output. **Re-run when the ODS file OR a COUNT_SITES site location changes** (otherwise `official_hourly.json`, which the tuner reads, drifts stale from COUNT_SITES). Weekday sigma = max(between-day std, 10% relative, √count); weekend sigma = max(√count, 15% relative). The √count floor prevents unrealistically tight sigmas at overnight low-count hours. |
 | `analysis/ingest_counts.py` | Reads all CSVs from `data/counts/`, snaps GPS tracks to road links, estimates per-session AADT via hourly fraction profile. Idempotent: skips already-processed sessions. Loads manual link overrides from `data/manual_link_overrides.json`. After every new link assignment, validates each non-null count direction against the directed graph; raises `ValueError` if the edge doesn't exist. |
 | `analysis/manual_assign_link.py` | CLI tool to manually assign a session to a specific directed link, bypassing GPS snap. Usage: `python3 analysis/manual_assign_link.py <session_id> <from_node> <to_node>`. Validates both nodes exist and checks count-edge consistency. Writes to `data/manual_link_overrides.json` and patches `counts_processed.json` directly. After correcting an assignment, re-run `aggregate_counts.py` then `tune_assignment.py`. |
 | `analysis/aggregate_counts.py` | Combines per-session AADT estimates into per-link estimates using inverse-variance weighting. Always regenerates from scratch. Each observation entry carries `n_eff` (Jeffreys count = n + 0.5) and `duration_s`. Output: `data/link_aadt.json`. |
-| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Four-component, production-constrained model:** gravity flows split into residential (`flow_res`), commute (`flow_commute`), retail (`flow_retail`), and school (`flow_school`) components, each singly (production) constrained. Tunes **9 gravity params** (P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail, P_school, ALPHA_school) — no `W_BIZ`/`W_SCHOOL`. External zone values are fixed from census data and are not tuned. Producer weights are scaled to vehicle-driver trips/day via `model.compute_generation_scales` (generation pinning ⇒ each `K_c ≈ 1`). **Inner calibration = direct-K convex scale solve (`solve_scales`):** the temporal fractions `f_res/f_commute/f_retail/f_school` are **pinned at the NTS profile** (never tuned), so with `f` fixed each prediction is linear in `(K_res, K_commute, K_retail, K_sch)` and the inner objective (Gaussian WLS + Poisson identity-link deviance + scale-share prior) is **convex**, solved by a damped-Newton + line-search step — **monotone, no K-collapse, no best-iterate hack**. `run_assignment` calls `model.constrained_od_flows` and scatters via the probit routing incidence. **Observed-link scatter restriction (tuner-only):** the objective reads modelled flow on only the ~230 observed links, so `run_assignment` scatters just the incidence entries landing on those links (≈32% of the ~62M), precomputed once into a compact observed-link space — bit-identical results, ~3× faster per eval (`build_assignment.py` keeps the full scatter for the map). Once the compact arrays are built the tuner frees the full-incidence cache arrays (`pair_idx`/`link_idx`/`link_weight`) to keep steady-state memory low. **Performance:** ~1.85 s/eval (run_assignment-dominated; more under memory pressure). A full Powell run is a few thousand evals (e.g. run `868d9604` = 4217 evals ⇒ **~2 hours**), so it is a heavy, long-running pass — not a quick verify. `CALIBRATE_PROBE=1` is an env-gated diagnostic that reports the post-calibrate residual global scale λ. |
+| `analysis/tune_assignment.py` | Powell's method parameter tuning. **Four-component, production-constrained model:** gravity flows split into residential (`flow_res`), commute (`flow_commute`), retail (`flow_retail`), and school (`flow_school`) components, each singly (production) constrained. Tunes **8 gravity params** — per-component Tanner kernel `f(u)=u^BETA·exp(BETA·(1−u))`, u=d/P_c (peak P_c + shape BETA_c each): P, BETA, P_commute, BETA_commute, P_retail, BETA_retail, P_school, BETA_school — no `W_BIZ`/`W_SCHOOL`, no shared BETA, no ALPHA. External zone values are fixed from census data and are not tuned. Producer weights are scaled to vehicle-driver trips/day via `model.compute_generation_scales` (generation pinning ⇒ each `K_c ≈ 1`). **Inner calibration = direct-K convex scale solve (`solve_scales`):** the temporal fractions `f_res/f_commute/f_retail/f_school` are **pinned at the NTS profile** (never tuned), so with `f` fixed each prediction is linear in `(K_res, K_commute, K_retail, K_sch)` and the inner objective (Gaussian WLS + Poisson identity-link deviance + scale-share prior) is **convex**, solved by a damped-Newton + line-search step — **monotone, no K-collapse, no best-iterate hack**. `run_assignment` calls `model.constrained_od_flows` and scatters via the probit routing incidence. **Observed-link scatter restriction (tuner-only):** the objective reads modelled flow on only the ~230 observed links, so `run_assignment` scatters just the incidence entries landing on those links (≈32% of the ~62M), precomputed once into a compact observed-link space — bit-identical results, ~3× faster per eval (`build_assignment.py` keeps the full scatter for the map). Once the compact arrays are built the tuner frees the full-incidence cache arrays (`pair_idx`/`link_idx`/`link_weight`) to keep steady-state memory low. **Performance:** ~1.85 s/eval (run_assignment-dominated; more under memory pressure). A full Powell run is a few thousand evals (e.g. run `868d9604` = 4217 evals ⇒ **~2 hours**), so it is a heavy, long-running pass — not a quick verify. `CALIBRATE_PROBE=1` is an env-gated diagnostic that reports the post-calibrate residual global scale λ. |
 | `analysis/report_tune.py` | Generate a structured report from a tuning history entry. Writes `reports/tune_report_{id}.txt` and `reports/slot_pulls_{id}.png`. Echoes the labels the tuner stored in history, so street names appear only after a fresh tune run regenerates `tuning_history.jsonl`. |
 | `simulation/restore_params.py` | Restore `tuned_params.json` from any history entry by run ID. `--list` shows all runs; partial ID prefix matching is supported. |
-| `simulation/reset_gravity_params.py` | Reset the gravity params in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`: every `gravity_ref` shape param (P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail, THETA, P_school, ALPHA_school — iterates `gravity_ref`, so no rename drift) plus the four scales `K_res/K_commute/K_retail/K_sch` → 1.0. Strips the dead 3-component keys (`K`, `K_biz`, `W_BIZ`, `W_SCHOOL`, `P_biz`, `ALPHA_biz`, `MU`, `SIGMA`). External params and `slot_fracs_*` are preserved. |
+| `simulation/reset_gravity_params.py` | Reset the gravity params in `tuned_params.json` to the `gravity_ref` anchors in `tuner_config.json`: every `gravity_ref` shape param (Tanner: P, BETA, P_commute, BETA_commute, P_retail, BETA_retail, THETA, P_school, BETA_school — iterates `gravity_ref`, so no rename drift) plus the four scales `K_res/K_commute/K_retail/K_sch` → 1.0. Strips dead keys (`K`, `K_biz`, `W_BIZ`, `W_SCHOOL`, `P_biz`, `ALPHA_biz`, the rational-kernel tail exponents `ALPHA`/`ALPHA_commute`/`ALPHA_retail`/`ALPHA_school`, `MU`, `SIGMA`). External params and `slot_fracs_*` are preserved. |
 | `data/counts/*.csv` | Raw walking count CSVs from the recorder app. Add new files and re-run `ingest_counts.py`. |
 | `analysis/hourly_fractions.csv` | **Tracked in git.** Per-component temporal-**shape** profiles (168 rows = 7 days × 24 h): `mean_fraction_res`, `mean_fraction_commute`, `mean_fraction_retail`, `mean_fraction_school`, plus the aggregate `mean_fraction` (input). **Derived from NTS** via `analysis/derive_component_profiles.py`. Each component column is an **independent shape** normalised so its day-weighted daily sum `W_c = 1` (⇒ each column sums to 7.0 over the 168 rows) — **no** aggregate-partition constraint (magnitude/split is generation's job, see "Generation pinning"). Re-run `derive_component_profiles.py` when the NTS files, the purpose mapping, or `generation_rates.json` change. |
 | `analysis/derive_component_profiles.py` | Derives the per-component hourly-**shape** columns of `hourly_fractions.csv`. Each component's weekly profile `f_c(dow,h) = V_c(dow)·H_c(daytype,h)`: weekday hourly shape `H_c` = ρ-weighted blend (ρ_p from `generation_rates.json`) of its purposes' NTS0502a hourly distributions; day-of-week volume `V_c` from NTS0504b (Mon–Sun × purpose), normalised so `Σ_7 V_c = 7` (⇒ `W_c = 1`); weekend hourly shape from the aggregate (no per-purpose weekend data), shared. Purpose→component map shared with `derive_generation_rates.py` via `analysis/purpose_mapping.py`; school uses the **escort-education** shape (the car school-run). Re-run when NTS files / the mapping / generation rates change. |
@@ -183,17 +183,21 @@ the generation/distribution conflation). The four components (residential / comm
 school), their producer/attractor weights and per-component kernels are detailed in "Four-component
 flow decomposition" below. See the agent memory note `project_production_constrained_gravity`.
 
-Generalised rational kernel (shared form, own P/ALPHA per component): `u = d/P; f(u) = (ALPHA+BETA) × u^BETA / (ALPHA + BETA × u^(ALPHA+BETA))`
+**Tanner deterrence kernel** (`model._tanner_kernel`; per component, own peak `P_c` + shape `BETA_c`):
+`u = d/P; f(u) = u^BETA · exp(BETA·(1 − u))`.
 
-Properties: f(P) = 1 (peak always at d = P seconds, for any positive ALPHA, BETA), f(0) = 0,
-tail ~ 1/d^ALPHA for large d, rise ~ u^BETA near origin.
-BETA=1 recovers the original kernel `(ALPHA+1) × u / (ALPHA + u^(ALPHA+1))`.
-ALPHA controls the right-side tail decay; BETA controls the left-side approach to the peak.
-(A Tanner deterrence `c^β·exp(−γc)` is the planned replacement for the power-law tail — memory
-`project-tanner-kernel-tld`.)
+Properties: peak f(P) = 1 (at d = P seconds), f(0) = 0, rise ~ u^BETA near origin, and an
+**exponential tail** `~exp(−BETA·d/P)` for large d (characteristic decay `1/γ = P/BETA`). This is
+the "keep the form (u=d/P, peak at P), swap the tail" replacement for the old rational kernel's heavy
+power-law tail `~1/d^ALPHA` (Phase 1, 2026; memory `project-tanner-kernel-tld`) — the power-law tail
+was ill-conditioned (the optimiser drove `ALPHA` to extremes on a flat ridge, over-concentrating
+external flow). Each component has its own `P_c`, `BETA_c` (**8 shape params**; no shared BETA, no
+ALPHA). Phase 2 (later) will anchor the shape to surveyed trip-length distributions instead of
+free-fitting. The kernel is **model-layer** (applied to `od_dist` in `constrained_od_flows`, not
+routing) — changing it needs no `build_paths` rebuild, only a re-tune.
 
-(`model.gravity_assign` retains an unconstrained product kernel for back-compatibility with old
-pre-split param files; it is not used by the current model.)
+(`model._rational_kernel` + `model.gravity_assign` retain the unconstrained power-law kernel for
+back-compatibility with old pre-split param files; not used by the current model.)
 
 Distances are least-time shortest paths (seconds). For external→internal OD pairs, the path traverses an OSRM-derived external edge (X→B, fixed weight) then the internal road network (B→J). Dijkstra selects the optimal boundary entry node for each destination.
 
@@ -230,15 +234,15 @@ tuner evaluation (per-pair pre-K flows from `model.constrained_od_flows`, scatte
 components are independent clones: a symmetric pop↔activity split, each leg per-origin-normalised,
 with **no weight parameter and no self/cross term**:
 
-- **Residential** (`flow_res`, kernel P/ALPHA/BETA): `T^res_ij = pop_i·pop_j·f_res/D^res,pop_i` —
+- **Residential** (`flow_res`, Tanner kernel P/BETA): `T^res_ij = pop_i·pop_j·f_res/D^res,pop_i` —
   pop×pop trips. Single leg (i→j and j→i are separate OD pairs, so both directions are covered).
-- **Commute** (`flow_commute`, kernel P_commute/ALPHA_commute/BETA): home→work producer =
+- **Commute** (`flow_commute`, Tanner kernel P_commute/BETA_commute): home→work producer =
   `commute_producers`, attractor = `workplace`; return work→home producer = `workplace`, attractor
   = pop — `f_com·( commprod_i·work_j/D^com,work_i + work_i·pop_j/D^com,pop_i )`.
-- **Retail** (`flow_retail`, kernel P_retail/ALPHA_retail/BETA): home→shop producer = pop, attractor
+- **Retail** (`flow_retail`, Tanner kernel P_retail/BETA_retail): home→shop producer = pop, attractor
   = `retail_spaces`; return shop→home producer = `retail_spaces`, attractor = pop —
   `f_ret·( pop_i·ret_j/D^ret,ret_i + ret_i·pop_j/D^ret,pop_i )`.
-- **School** (`flow_school`, kernel P_school/ALPHA_school/BETA): home→school producer =
+- **School** (`flow_school`, Tanner kernel P_school/BETA_school): home→school producer =
   `school_producers` (census resident students), attractor = `school_demand` (OSM school places);
   return school→home producer = `school_demand`, attractor = pop —
   `f_sch·( schoolprod_i·school_j/D^sch,sch_i + school_i·pop_j/D^sch,pop_i )`. External
@@ -257,7 +261,7 @@ OSRM-samples `M=30` uniform intra-zonal point-pairs per external zone → `data/
 over the sample, `E[f]`, not `f(mean)`). It is **denominator-only** — no link flow — and applies to
 **external zones only** (internal road nodes have no zone area). Direct OSRM sampling avoids any
 characteristic-distance constant, speed assumption, or zone-shape model (real per-zone times carry local
-speed + network detour). Effect is **strongly ALPHA-dependent**: under a sharp kernel tail an external
+speed + network detour). Effect is **strongly kernel-tail-dependent** (sharper `BETA` under the Tanner kernel): under a sharp kernel tail an external
 zone's short intra-zonal times give a large `f(t_intra)` that dominates its denominator, substantially
 cutting exported external→core flow — concentrated on the near/mid SDZs that carry essentially all
 core-bound flow (the far DEAs already contribute ~0 core-bound flow, so they barely move). Wired into
@@ -280,7 +284,7 @@ Producer weights are carried in absolute **vehicle-driver trips/day** so each co
 scale **K_c should land at ≈ 1.0** — a *verification anchor*, not a fit knob (a `K_c` away from 1
 diagnoses local car-mobilisation vs the national average, to be refined later). This is a
 **model-layer** change (no paths-cache rebuild). Independent of, and a prerequisite for, the
-planned Tanner kernel (see memory `project-tanner-kernel-tld`).
+Tanner kernel (now implemented, Phase 1; see memory `project-tanner-kernel-tld`).
 
 **Rates `ρ_c`** (`analysis/generation_rates.json`, written by `analysis/derive_generation_rates.py`
 from England NTS0409a, 2023/24 avg, vehicle-driver modes = *Car or van driver + Motorcycle + Taxi
@@ -417,12 +421,15 @@ Per-run history — params, χ²/N, N obs, and notes — is logged one line per 
 `simulation/tuning_history.jsonl` (the authoritative record). Inspect it with
 `simulation/restore_params.py --list` or `analysis/report_tune.py`; it is not duplicated here.
 
-The current open modelling concern is the **school component**: it is weakly identified (walking obs
-mostly fall in slots with `f_school≈0`, so it is pinned almost entirely by the official school-peak
-hours) and under a sharp kernel tail it can act as an AM/PM-peak fitter, pushing `ALPHA_school` and the
-school share to extremes that the `gravity_lambda`/`phi_school` regularization cannot fully restrain.
-Reining this in is a model-structure question (kernel tail shape / school-peak count data), not a
-prior-strength one — and a prerequisite for the planned Tanner kernel (memory `project-tanner-kernel-tld`).
+The **Tanner kernel** (Phase 1) is now in place — the rational power-law tail (which drove the
+diagnosed `ALPHA` blow-up / external over-concentration) is replaced by the exponential-tail Tanner
+form. A 4-component / generation-pinned / Tanner re-tune is the next step to confirm it resolves the
+pathology (see memory `project-tanner-kernel-tld`); Phase 2 (TLD anchoring) is the follow-up.
+
+A carry-forward open concern is the **school component**: it is weakly identified (walking obs mostly
+fall in slots with `f_school≈0`, so it is pinned almost entirely by the official school-peak hours)
+and can act as an AM/PM-peak fitter, pushing the school share up — to be re-evaluated under the Tanner
+kernel (kernel tail shape / school-peak count data is the lever, not prior strength).
 
 ## Paths Cache
 
@@ -472,7 +479,7 @@ changed and telling you to re-run `build_paths.py`. Helper lives in `simulation/
   network, and adds "ghost" edges to the STRtree; buildings snapping to a ghost edge have all their
   demand attributed to the surviving junction node (the only network entry point for that street).
   Demand-allocation only — no effect on `build_paths.py`, `model.py`, or the paths cache.
-- **`tuned_params.json` structure:** the four scales `K_res`/`K_commute`/`K_retail`/`K_sch`, the 9 shape params (P, ALPHA, BETA, P_commute, ALPHA_commute, P_retail, ALPHA_retail, P_school, ALPHA_school), and `slot_fracs_res`/`slot_fracs_commute`/`slot_fracs_retail`/`slot_fracs_school` (dicts keyed `"dt,h"`, the pinned NTS profile). `reset_gravity_params.py` regenerates this clean structure; old pre-split param files fall back to the legacy `gravity_assign` mode in `build_assignment.py`.
+- **`tuned_params.json` structure:** the four scales `K_res`/`K_commute`/`K_retail`/`K_sch`, the 8 Tanner shape params (P, BETA, P_commute, BETA_commute, P_retail, BETA_retail, P_school, BETA_school), `"kernel": "tanner"`, and `slot_fracs_res`/`slot_fracs_commute`/`slot_fracs_retail`/`slot_fracs_school` (dicts keyed `"dt,h"`, the pinned NTS profile). `reset_gravity_params.py` regenerates this clean structure; old pre-split param files fall back to the legacy `gravity_assign` mode in `build_assignment.py`.
 
 ---
 

@@ -190,8 +190,8 @@ def _section_gravity(e, prev_entry, config):
 
     # Determine initial gravity: prefer entry's own field, else previous entry, else grav_ref
     init_src = "run start"
-    _all_grav_keys = ("W_BIZ", "P", "ALPHA", "BETA", "P_biz", "ALPHA_biz", "THETA",
-                      "W_SCHOOL", "P_school", "ALPHA_school")
+    _all_grav_keys = ("P", "BETA", "P_commute", "BETA_commute", "P_retail",
+                      "BETA_retail", "THETA", "P_school", "BETA_school")
 
     if "initial_gravity" in e:
         init_g = e["initial_gravity"]
