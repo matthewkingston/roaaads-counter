@@ -6,9 +6,14 @@ Output (gitignored): `data/cache_admin_schools_island.geojson` — one Point fea
               enrolment (school-age pupils), geocode_method, geocode_score, needs_review
   geometry:   Point(lon,lat) in WGS84, or null for the unmatched NI tail (manual/Nominatim later)
 
-This is **school-age only** — third-level stays in the OSM/curated path for now (the lumped
-Stage-1 milestone; tertiary is split out and FT-curated in Stage 2). Level is tagged per school
-so the eventual primary/post-primary/tertiary split needs no re-ingest.
+This is the **unified island school-demand cache** consumed by `build_census_zones.py` (external
+zones) and `build_demographics.py` (internal `node_school_demand`) via
+`demographics_config.SCHOOL_ISLAND_CACHE`. **School-age** (primary/post_primary/special) comes from
+the admin rolls; **third-level** (level `tertiary`) is appended from the OSM cache as-is — the
+lumped Stage-1 milestone (tertiary students are in the census producer, so the attractor must
+include them; FT-rebased + curated in Stage 2). Every school is **level-tagged**, so the eventual
+primary/post-primary/tertiary split needs no re-ingest. Pre-school/kindergarten is excluded on both
+the admin and OSM sides (matches the producer).
 
 Data sources (gitignored, on disk):
   NI  `data/ni_data/School level - {Primary…,post primary…,special…}.{xlsx,XLSX}`
@@ -301,6 +306,26 @@ def main():
             k = ("RoI", level)
             stats[k]["n"] += 1; stats[k]["enrol"] += s["enrolment"]
             stats[k]["tail"] += not has
+
+    # ── Third-level: keep the OSM/curated POI path (college + university) ──
+    # Stage-1 lumped school component. Admin rolls cover only school-age; tertiary students
+    # are in the census producer, so the attractor must include third-level too. Taken as-is
+    # from the OSM school cache (enrolment via school_demand.assign_enrolments) — FT-rebased and
+    # curated in Stage 2. Kindergartens (pre-school) are excluded, matching the producer.
+    print("Appending OSM third-level (college/university) …")
+    for f in json.load(open(OSM_CACHE))["features"]:
+        pr = f["properties"]; g = f["geometry"]
+        if pr.get("amenity") not in ("college", "university") or g["type"] != "Point":
+            continue
+        lon, lat = g["coordinates"]
+        juris = "NI" if (NI_LON0 < lon < NI_LON1 and NI_LAT0 < lat < NI_LAT1) else "RoI"
+        enrol = round(float(pr.get("enrolment") or 0.0), 1)
+        features.append({"type": "Feature", "geometry": g, "properties": {
+            "jurisdiction": juris, "level": "tertiary", "name": pr.get("name"),
+            "enrolment": enrol, "geocode_method": "osm_tertiary", "geocode_score": None,
+            "matched_osm_name": None, "needs_review": False}})
+        k = (juris, "tertiary")
+        stats[k]["n"] += 1; stats[k]["enrol"] += enrol
 
     # ── Manual coordinate overrides (authoritative; survive rebuilds) ──
     import os

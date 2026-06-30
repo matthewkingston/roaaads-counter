@@ -49,7 +49,9 @@ POI_CACHE            = "data/cache_osm_pois.geojson"
 BUILDING_CACHE       = "data/cache_osm_buildings.geojson"
 PARKING_CACHE        = "data/cache_osm_parking.geojson"          # legacy per-CENTRE Overpass cache (unused)
 PARKING_ISLAND_CACHE = "data/cache_osm_parking_island.geojson"   # island-wide parking (build_parking.py)
-SCHOOL_ISLAND_CACHE  = "data/cache_osm_schools_island.geojson"   # island-wide schools + enrolment (build_schools.py)
+# Unified island school-demand cache: admin-roll school-age + OSM third-level (build_admin_schools.py).
+# (build_schools.py still produces cache_osm_schools_island.geojson, the OSM source it draws on.)
+SCHOOL_ISLAND_CACHE  = "data/cache_admin_schools_island.geojson"
 CENSUS_ZONES_FILE    = "data/census_zones.json"
 TUNER_CONFIG_FILE    = "simulation/tuner_config.json"
 NODE_WEIGHTS_FILE    = "simulation/node_weights.json"
