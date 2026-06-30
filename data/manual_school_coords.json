@@ -1,0 +1,16 @@
+[
+  {
+    "jurisdiction": "NI",
+    "name": "St Patrick's Primary School, Newry",
+    "lat": 54.1859757,
+    "lon": -6.3493745,
+    "note": "manual: Google pin; auto-match rejected a same-name school 10km away"
+  },
+  {
+    "jurisdiction": "RoI",
+    "name": "Lucan Community Special School",
+    "lat": 53.33962,
+    "lon": -6.43229,
+    "note": "manual: new school, no Nominatim result"
+  }
+]

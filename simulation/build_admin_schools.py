@@ -53,6 +53,7 @@ ROI_POST    = "data/ireland_data/Data_on_Individual_Schools_post_primary.xlsx"
 OSM_CACHE   = "data/cache_osm_schools_island.geojson"
 DZ_BOUNDARY = "simulation/dz2021/DZ2021.geojson"
 OUT         = "data/cache_admin_schools_island.geojson"
+MANUAL      = "data/manual_school_coords.json"   # authoritative manual coords (tracked in git)
 
 NI_LON0, NI_LON1, NI_LAT0, NI_LAT1 = -8.3, -5.3, 54.0, 55.4
 FUZZY_CONFIDENT = 0.85   # exact or ≥ this → no review flag
@@ -301,6 +302,21 @@ def main():
             stats[k]["n"] += 1; stats[k]["enrol"] += s["enrolment"]
             stats[k]["tail"] += not has
 
+    # ── Manual coordinate overrides (authoritative; survive rebuilds) ──
+    import os
+    n_manual = 0
+    if os.path.exists(MANUAL):
+        man = {(m["jurisdiction"], m["name"]): m for m in json.load(open(MANUAL))}
+        for f in features:
+            p = f["properties"]
+            m = man.get((p["jurisdiction"], p["name"]))
+            if m:
+                f["geometry"] = mapping(Point(m["lon"], m["lat"]))
+                p["geocode_method"] = "manual"; p["geocode_score"] = None
+                p["matched_osm_name"] = m.get("note"); p["needs_review"] = False
+                n_manual += 1
+        print(f"Applied {n_manual}/{len(man)} manual coordinate overrides from {MANUAL}")
+
     with open(OUT, "w") as f:
         json.dump({"type": "FeatureCollection", "features": features}, f)
 
@@ -314,9 +330,10 @@ def main():
               f"{int(st['fuzzy']):6} {int(st['tail']):5}")
         tot_n += st["n"]; tot_e += st["enrol"]; tot_t += st["tail"]
     print(f"{'TOTAL':22} {int(tot_n):5} {int(tot_e):9,} {'':6} {int(tot_t):5}")
-    print(f"\nGeocoded: {int(tot_n - tot_t)}/{int(tot_n)} ({100*(tot_n-tot_t)/tot_n:.1f}%); "
-          f"{int(tot_t)} tail (null geometry — manual/Nominatim). "
-          f"'fuzzy' = accepted same-school variants (audit via matched_osm_name).")
+    placed = sum(1 for f in features if f["geometry"])   # post-manual-override truth
+    print(f"\nGeocoded (incl. {n_manual} manual): {placed}/{len(features)} "
+          f"({100*placed/len(features):.1f}%); {len(features)-placed} tail (null geometry → "
+          f"geocode_school_tail.py / manual). 'fuzzy' = accepted same-school variants.")
 
 
 if __name__ == "__main__":
