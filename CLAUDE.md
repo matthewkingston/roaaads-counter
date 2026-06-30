@@ -1,8 +1,21 @@
 # Newtownards Traffic Model — Project Overview
 
-A gravity-model traffic assignment pipeline for Newtownards, calibrated against
-walking count data and official AADT figures. The pipeline is fully reproducible:
-running the scripts in order regenerates all outputs from raw data.
+A gravity-model traffic assignment pipeline, calibrated against walking count data and
+official AADT figures. The pipeline is fully reproducible: running the scripts in order
+regenerates all outputs from raw data.
+
+**⚠️ THE MODEL IS LOCATION-PORTABLE — read before designing any data layer.** `CENTRE`
+(`simulation/zones_config.py`) is a **free parameter**: the core/study area can be relocated to
+**any centre on the island of Ireland**. **Newtownards is only the current calibration centre, not
+the model's scope.** Therefore **every data layer is built island-wide** (census
+producers/attractors, schools, parking, road network) so a new centre needs **no per-location data
+work**, and **no per-location manual step may be the mechanism** for anything (no hand-picking "the
+schools near Newtownards", no verifying a *fixed handful* of core POIs, no location-specific
+overrides as the primary path) — when CENTRE moves, a *different* set of areas becomes core, so any
+location-specific step silently breaks the new deployment. Design every layer **and every
+quality/precision step** (geocoding, snapping, estimators) for **"whichever areas fall in the
+active core", uniformly island-wide**; manual overrides are only a targeted backstop. See agent
+memory `feedback-model-is-portable` and `project-model-transferability`.
 
 **Agent instruction:** Keep this file up to date. After any tuning run, count data
 ingest, model change, or reference value update, edit the relevant sections before
