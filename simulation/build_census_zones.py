@@ -43,6 +43,7 @@ from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
 from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE, SCHOOL_ISLAND_CACHE
 from parking_demand import parking_spaces
 import census_supply
+import census_attractor
 from ingest_ni_census import load_ni_census
 from ingest_roi_census import load_roi_census
 
@@ -77,6 +78,14 @@ dz["school_producers"]  = dz["area_code"].map(lambda c: _supply.get(c, {}).get("
 _n_missing = int((~dz["area_code"].isin(_supply)).sum())
 print(f"Producers: matched {len(dz) - _n_missing}/{len(dz)} small areas to census_supply"
       + (f" — {_n_missing} unmatched (treated as 0)" if _n_missing else ""))
+
+# Per-small-area car-commute attractor (jobs reached by car) — NI DZ + RoI SA, island-wide.
+_attractor = census_attractor.load_attractor()
+dz["commute_attractor"] = dz["area_code"].map(lambda c: _attractor.get(c, 0.0))
+_n_attr_missing = int((~dz["area_code"].isin(_attractor)).sum())
+print(f"Commute attractor: matched {len(dz) - _n_attr_missing}/{len(dz)} small areas to "
+      f"census_attractor" + (f" — {_n_attr_missing} unmatched (treated as 0)"
+                             if _n_attr_missing else ""))
 
 # ── Hierarchy lookups ────────────────────────────────────────────────────────
 # small-area code → parent intermediate-zone code
@@ -168,6 +177,7 @@ for _, row in sdz_external.iterrows():
         "centroid_utm_y": round(utm_y, 1),
         "population":     int(round(pop)),
         "workplace_pop":  int(round(wp)),
+        "commute_attractor": int(round(child_sa["commute_attractor"].sum())),
         "commute_producers": int(round(child_sa["commute_producers"].sum())),
         "school_producers":  int(round(child_sa["school_producers"].sum())),
     })
@@ -196,6 +206,7 @@ for _, row in orphan_sa.iterrows():
         "centroid_utm_y": round(cy,    1),
         "population":     int(round(row["population"])),
         "workplace_pop":  int(round(row["workplace_pop"])),
+        "commute_attractor": int(round(row["commute_attractor"])),
         "commute_producers": int(round(row["commute_producers"])),
         "school_producers":  int(round(row["school_producers"])),
     })
@@ -212,13 +223,14 @@ for _, row in dea_external.iterrows():
     child_sa        = dz[dz["area_code"].isin(child_sa_codes)]
     pop = child_sa["population"].sum()
     wp  = child_sa["workplace_pop"].sum()
+    cattr = child_sa["commute_attractor"].sum()
     cprod = child_sa["commute_producers"].sum()
     sprod = child_sa["school_producers"].sum()
     if len(child_sa) == 0:
         cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
         lon, lat = to_wgs.transform(cx, cy)
         utm_x, utm_y = cx, cy
-        pop, wp, cprod, sprod = 0, 0, 0, 0
+        pop, wp, cattr, cprod, sprod = 0, 0, 0, 0, 0
     else:
         lat, lon, utm_x, utm_y = weighted_centroid_wgs(
             child_sa.geometry.values, child_sa["population"].values)
@@ -232,6 +244,7 @@ for _, row in dea_external.iterrows():
         "centroid_utm_y": round(utm_y, 1),
         "population":     int(round(pop)),
         "workplace_pop":  int(round(wp)),
+        "commute_attractor": int(round(cattr)),
         "commute_producers": int(round(cprod)),
         "school_producers":  int(round(sprod)),
     })
@@ -239,6 +252,7 @@ print(f"  {len(external_nodes) - n_outer_start} outer external nodes (DEA/LEA)")
 print(f"  {len(external_nodes)} external nodes total")
 print(f"  Total external pop: {sum(n['population'] for n in external_nodes):,}")
 print(f"  Total external wp:  {sum(n['workplace_pop'] for n in external_nodes):,}")
+print(f"  Total external commute attractor: {sum(n['commute_attractor'] for n in external_nodes):,}")
 print(f"  Total external commute producers: {sum(n['commute_producers'] for n in external_nodes):,}")
 print(f"  Total external school producers:  {sum(n['school_producers'] for n in external_nodes):,}")
 

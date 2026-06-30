@@ -35,6 +35,7 @@ from demographics_config import (
 )
 from parking_demand import parking_spaces
 from census_supply import load_supply
+import census_attractor
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 _ap = argparse.ArgumentParser(
@@ -89,6 +90,7 @@ if args.zones_only:
         w["node_population"][str(nid)]    = float(ext["population"])
         w["node_retail_spaces"][str(nid)] = _retail
         w["node_workplace"][str(nid)]     = float(ext["workplace_pop"])
+        w.setdefault("node_commute_attractor", {})[str(nid)] = float(ext.get("commute_attractor", 0.0))
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = float(ext.get("school_demand", 0.0))
         w.setdefault("node_commute_producers", {})[str(nid)] = float(ext.get("commute_producers", 0.0))
@@ -501,6 +503,24 @@ else:
     total_wp = sum(node_workplace.values())
     print(f"  {active_wp_nodes} nodes with workplace jobs · total {total_wp:.0f} workplace pop attributed")
 
+    # Car-commute attractor (jobs reached by car) — the commute component's attractor. Sourced
+    # island-wide per census area by census_attractor.load_attractor() (NI: apwp001 × SDZ
+    # car-share; RoI: WZ driver count), then distributed across each area's nodes by the SAME
+    # edge-snapped POI weights as node_workplace. Portable: no apwp001 read, no NI assumption.
+    _commute_attr = census_attractor.load_attractor()
+    node_commute_attractor = {}
+    for dz_code, nodes_in_dz in dz_to_nodes.items():
+        dz_car = float(_commute_attr.get(dz_code, 0.0))
+        poi_weights_dz = {n: node_poi_weight.get(n, 0.0) for n in nodes_in_dz}
+        total_weight = sum(poi_weights_dz.values())
+        for n in nodes_in_dz:
+            if total_weight > 0:
+                node_commute_attractor[n] = dz_car * poi_weights_dz[n] / total_weight
+            else:
+                node_commute_attractor[n] = dz_car / len(nodes_in_dz)
+    print(f"  internal commute attractor (car jobs) total "
+          f"{sum(node_commute_attractor.values()):.0f}")
+
     # ── Trip producers (commute, school) — census per-DZ counts distributed to nodes ──
     # Residents → distribute each DZ's producer totals across its nodes by population share.
     # Stored as separate layers; the school component uses node_school_producers as its
@@ -658,6 +678,7 @@ else:
             node_population[nid]      = float(ext["population"])
             node_retail_spaces[nid]   = _retail
             node_workplace[nid]       = float(ext["workplace_pop"])
+            node_commute_attractor[nid] = float(ext.get("commute_attractor", 0.0))
             node_school_demand[nid]   = float(ext.get("school_demand", 0.0))
             node_commute_producers[nid] = float(ext.get("commute_producers", 0.0))
             node_school_producers[nid]  = float(ext.get("school_producers", 0.0))
@@ -674,6 +695,7 @@ else:
         json.dump({
             "node_population":      {str(k): v for k, v in node_population.items()},
             "node_workplace":       {str(k): v for k, v in node_workplace.items()},
+            "node_commute_attractor": {str(k): v for k, v in node_commute_attractor.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
             "node_commute_producers": {str(k): v for k, v in node_commute_producers.items()},

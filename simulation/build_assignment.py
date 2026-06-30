@@ -52,6 +52,7 @@ with open(WEIGHTS_FILE) as f:
 _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_population        = {_pnid(k): v for k, v in weights["node_population"].items()}
 node_workplace         = {_pnid(k): v for k, v in weights["node_workplace"].items()}
+node_commute_attractor = {_pnid(k): v for k, v in weights.get("node_commute_attractor", {}).items()}
 node_retail_spaces     = {_pnid(k): v for k, v in weights.get("node_retail_spaces", {}).items()}
 node_school_demand     = {_pnid(k): v for k, v in weights.get("node_school_demand", {}).items()}
 node_commute_producers = {_pnid(k): v for k, v in weights.get("node_commute_producers", {}).items()}
@@ -147,6 +148,9 @@ else:
 
 w_pop       = np.array([node_population.get(nid, 0)        for nid in node_ids_arr], dtype=np.float64)
 w_workplace = np.array([node_workplace.get(nid, 0)         for nid in node_ids_arr], dtype=np.float64)
+# Commute attractor = car-only jobs (node_commute_attractor); w_workplace (all jobs) is kept
+# for the legacy kernel + map output only.
+w_commute_attr = np.array([node_commute_attractor.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
 w_retail    = np.array([node_retail_spaces.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
 w_school    = np.array([node_school_demand.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
 w_commute_prod = np.array([node_commute_producers.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
@@ -156,7 +160,7 @@ if w_commute_prod.sum() == 0:
 if w_school_prod.sum() == 0:
     w_school_prod = None    # fall back to population producer (legacy weights)
 print(f"  {len(node_ids_arr)} nodes  pop {w_pop.sum():,.0f}  workplace {w_workplace.sum():,.0f}"
-      f"  retail {w_retail.sum():,.0f}")
+      f"  commute_attr {w_commute_attr.sum():,.0f}  retail {w_retail.sum():,.0f}")
 
 # Generation pinning: per-leg producer scales (NTS0409a vehicle-driver trips/day) so the
 # tuned K_c are interpreted against ≈ 1.0.  Island anchors summed from the weights dict.
@@ -183,7 +187,7 @@ if _use_4c:
     # routing incidence and apply K_res/K_commute/K_retail/K_sch.
     t_res, t_commute, t_retail, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
-        w_pop, w_workplace, w_retail, w_school,
+        w_pop, w_commute_attr, w_retail, w_school,
         TAU_res, TAU_commute, TAU_retail,
         TAU_school=TAU_school, with_school=_use_school,
         self_src=self_src, self_dist=self_dist, self_w=self_w,

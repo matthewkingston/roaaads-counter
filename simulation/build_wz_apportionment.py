@@ -55,6 +55,16 @@ _WORK_DIR        = os.path.join(OSRM_ROOT, "wz_pois")
 
 SLIVER_AREA_M2   = 100     # intersection pieces smaller than this are dropped
 
+# Car-commute attractor: WZ daytime driver columns (CSO SAPS Table 2, present in the shapefile).
+#   T2_M5 = Motorcycle/scooter, T2_M6 = Car driver, T2_M8 = Van.
+WZ_DRIVER_COLS   = ["T2_M5", "T2_M6", "T2_M8"]
+# National work-driver share — nets out self-driving 3rd-level students mixed into the daytime
+# WZ driver count (the WZ daytime population is work + college). Computed nationally from the
+# RoI producer side (SAP2022 T11T1): drivers "…to work" / (drivers "…to work" + drivers "…to
+# school/college") = 1,354,227 / (1,354,227 + 58,165) = 0.9588. National (not regional) on
+# purpose — student inflation is a destination property; ~4% total effect.
+WORK_DRIVER_SHARE = 0.9588
+
 # ── Coordinate transformer (WGS84 → ITM) ─────────────────────────────────────
 
 _to_itm = Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
@@ -196,10 +206,16 @@ def main():
     # NOT T1_T, which is the WZ's "(Age) Total" = total daytime/resident population (≈ RoI
     # population, ~2.4× the workforce). T11_C1 is the workplace attractor, matching NI's
     # APWP001 place-of-work count.
-    wz = gpd.read_file(WZ_FILE)[["WORKPLACE", "T11_C1", "geometry"]]
+    wz = gpd.read_file(WZ_FILE)[["WORKPLACE", "T11_C1", *WZ_DRIVER_COLS, "geometry"]]
     wz = wz.to_crs(PROJECTED_CRS)   # already ITM; this is a no-op but defensive
+    # Daytime drivers per WZ (destination-side): car driver + van + motorcycle.
+    for _c in WZ_DRIVER_COLS:
+        wz[_c] = pd.to_numeric(wz[_c], errors="coerce").fillna(0.0)
+    wz["wz_driver"] = wz[WZ_DRIVER_COLS].sum(axis=1)
     wz_total = wz["T11_C1"].sum()
-    print(f"  {len(wz):,} WZs  |  total workers (T11_C1): {wz_total:,.0f}")
+    wz_driver_total = wz["wz_driver"].sum()
+    print(f"  {len(wz):,} WZs  |  total workers (T11_C1): {wz_total:,.0f}  |  "
+          f"daytime drivers (M5+M6+M8): {wz_driver_total:,.0f}")
 
     # ── Load SA boundaries (only the code + geometry needed for overlay) ──────
     sa_files = glob.glob(SA_BOUNDARY_GLOB)
@@ -257,18 +273,28 @@ def main():
     )
 
     # ── Apportion and aggregate ────────────────────────────────────────────────
-    pieces["sa_wp_contrib"] = pieces["T11_C1"] * pieces["split_w"]
+    # Both the all-jobs total (T11_C1) and the car-commute attractor (drivers × work-share)
+    # use the identical split weight per intersection piece.
+    pieces["sa_wp_contrib"]  = pieces["T11_C1"]   * pieces["split_w"]
+    pieces["sa_car_contrib"] = pieces["wz_driver"] * pieces["split_w"]
     sa_workplace = (
-        pieces.groupby("SA_PUB2022")["sa_wp_contrib"]
+        pieces.groupby("SA_PUB2022")[["sa_wp_contrib", "sa_car_contrib"]]
         .sum()
         .reset_index()
         .rename(columns={"SA_PUB2022": "sa_code", "sa_wp_contrib": "workplace_pop"})
     )
+    # National student-driver correction (~4% shave) on the car-commute attractor only.
+    sa_workplace["commute_car"] = sa_workplace["sa_car_contrib"] * WORK_DRIVER_SHARE
+    sa_workplace = sa_workplace.drop(columns=["sa_car_contrib"])
 
     apportioned_total = sa_workplace["workplace_pop"].sum()
+    car_total = sa_workplace["commute_car"].sum()
     print(f"\nConservation check:")
-    print(f"  WZ total workers (T11_C1): {wz_total:>12,.0f}")
-    print(f"  SA apportioned total:     {apportioned_total:>12,.0f}")
+    print(f"  WZ total workers (T11_C1):   {wz_total:>12,.0f}")
+    print(f"  SA apportioned total:        {apportioned_total:>12,.0f}")
+    print(f"  WZ daytime drivers:          {wz_driver_total:>12,.0f}")
+    print(f"  SA commute_car (×{WORK_DRIVER_SHARE}): {car_total:>12,.0f}  "
+          f"(= {wz_driver_total * WORK_DRIVER_SHARE:,.0f} expected)")
     diff = abs(wz_total - apportioned_total)
     if diff > 1.0:
         print(f"  WARNING: discrepancy of {diff:.1f} "
@@ -276,7 +302,8 @@ def main():
 
     # ── Write ─────────────────────────────────────────────────────────────────
     sa_workplace.to_csv(SA_WP_OUT, index=False)
-    print(f"\nWrote {SA_WP_OUT}  ({len(sa_workplace):,} SAs)")
+    print(f"\nWrote {SA_WP_OUT}  ({len(sa_workplace):,} SAs; cols: sa_code, workplace_pop, "
+          f"commute_car)")
     print("Next: python3 simulation/build_census_zones.py")
 
 

@@ -192,17 +192,19 @@ with open(WEIGHTS_FILE) as f:
 
 _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_pop_full       = {_pnid(k): v for k, v in wdata["node_population"].items()}
-node_workplace_full = {_pnid(k): v for k, v in wdata["node_workplace"].items()}
+# Commute attractor = car-only jobs (node_commute_attractor); the all-jobs node_workplace layer
+# is no longer the commute attractor.
+node_commute_attr_full = {_pnid(k): v for k, v in wdata.get("node_commute_attractor", {}).items()}
 node_retail_full    = {_pnid(k): v for k, v in wdata.get("node_retail_spaces", {}).items()}
 node_school_full    = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
 node_commute_prod_full = {_pnid(k): v for k, v in wdata.get("node_commute_producers", {}).items()}
 node_school_prod_full  = {_pnid(k): v for k, v in wdata.get("node_school_producers", {}).items()}
 
 # Precomputed base weight arrays (from census + OSM demand; external zones fixed).
-# Clean separate layers: workplace jobs (commute attractor) and retail spaces (retail
-# attractor) replace the old conflated node_business_demand.
+# Clean separate layers: car-commute jobs (commute attractor, node_commute_attractor) and
+# retail spaces (retail attractor) — the all-jobs node_workplace is no longer an attractor.
 base_w_pop       = np.array([node_pop_full.get(nid, 0.0)       for nid in node_ids], dtype=np.float64)
-base_w_workplace = np.array([node_workplace_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
+base_w_commute_attr = np.array([node_commute_attr_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 base_w_retail    = np.array([node_retail_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_school    = np.array([node_school_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_commute_prod = np.array([node_commute_prod_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
@@ -635,7 +637,7 @@ def run_assignment(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA=None):
     """
     t_res, t_commute, t_retail, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
-        base_w_pop, base_w_workplace, base_w_retail, base_w_school,
+        base_w_pop, base_w_commute_attr, base_w_retail, base_w_school,
         TAU_res, TAU_commute, TAU_retail,
         TAU_school=TAU_school, with_school=_has_school,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,

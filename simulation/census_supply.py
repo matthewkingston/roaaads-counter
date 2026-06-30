@@ -8,11 +8,14 @@ business→commute/retail split).
 
 Definitions
 -----------
-commute_producers = resident workers who physically commute (exclude work-from-home; keep
-  "not stated" = in-scope non-response):
-    RoI  SAP2022 T11T1, statistic "travel to work": Total − "Work mainly at or from home".
-    NI   distance_to_work: Σ "Work within/outside NI/UK" bands + "No fixed place of work"
-         (exclude "Work mainly at or from home" and "No code required" = not in employment).
+commute_producers = resident workers who physically *drive* to work — car-driver modes only
+  (the model assigns car flow), matching the vehicle-driver modes in
+  analysis/derive_generation_rates.py.  WFH and not-in-employment are excluded structurally —
+  they are their own travel-method categories and are simply not selected:
+    RoI  SAP2022 T11T1, statistic "travel to work": Car Driver + Van + Motorcycle/scooter
+         (RoI has no separate Taxi mode — it sits in "Other (incl. lorry)" and is excluded).
+    NI   transport_to_workplace: "Driving a car or van" + "Motorcycle, scooter or moped"
+         + "Taxi".
 
 school_producers = student headcount (all ages, incl. third-level — matches the
   university-inclusive school attractor):
@@ -30,9 +33,9 @@ import glob
 import json
 import csv
 
-ROI_TRAVEL_GLOB = "data/ireland_census/SAP2022T11T1SA*.json"
-NI_DIST_GLOB    = "data/ni_census/*distance_to_work*.csv"
-NI_EDU_GLOB     = "data/ni_census/*in_full_time_education*.csv"
+ROI_TRAVEL_GLOB   = "data/ireland_census/SAP2022T11T1SA*.json"
+NI_TRANSPORT_GLOB = "data/ni_census/*transport_to_workplace*.csv"
+NI_EDU_GLOB       = "data/ni_census/*in_full_time_education*.csv"
 
 def _one(glob_pat):
     hits = glob.glob(glob_pat)
@@ -65,7 +68,10 @@ def _roi_supply():
     si_work = find(stat_keys, stat_lab, lambda s: "travel to work" in s and "school" not in s)
     si_sch  = find(stat_keys, stat_lab, lambda s: "school" in s)
     mi_tot  = find(mean_keys, mean_lab, lambda s: s == "total")
-    mi_wfh  = find(mean_keys, mean_lab, lambda s: "home" in s)
+    # Car-driver modes (the model assigns car flow). No separate Taxi in RoI.
+    mi_cd   = find(mean_keys, mean_lab, lambda s: s == "car driver")
+    mi_van  = find(mean_keys, mean_lab, lambda s: s == "van")
+    mi_moto = find(mean_keys, mean_lab, lambda s: "motorcycle" in s)
 
     def cell(si, sa, mi):
         v = val[(si * nSA + sa) * nM + mi]
@@ -73,7 +79,8 @@ def _roi_supply():
 
     out = {}
     for sa, k in enumerate(sa_keys):
-        commute = cell(si_work, sa, mi_tot) - cell(si_work, sa, mi_wfh)
+        commute = (cell(si_work, sa, mi_cd) + cell(si_work, sa, mi_van)
+                   + cell(si_work, sa, mi_moto))
         school  = cell(si_sch, sa, mi_tot)
         # The SA dimension includes one national "State" aggregate row (~2M) equal to the
         # sum of all real SAs; a real SA never exceeds a few thousand. Drop it so the
@@ -99,13 +106,14 @@ def _ni_csv(path):
 
 
 def _ni_supply():
-    """NI per-DZ producers from distance_to_work + in_full_time_education (1×)."""
+    """NI per-DZ producers from transport_to_workplace + in_full_time_education (1×)."""
     commute = {}
-    _EXCL = ("work mainly at or from home", "no code required")
-    for dz, label, n in _ni_csv(_one(NI_DIST_GLOB)):
-        if label.lower() in _EXCL:
+    # Car-driver modes only (WFH/no-code are separate labels, structurally excluded).
+    _CAR = ("driving a car or van", "motorcycle, scooter or moped", "taxi")
+    for dz, label, n in _ni_csv(_one(NI_TRANSPORT_GLOB)):
+        if label.lower() not in _CAR:
             continue
-        commute[dz] = commute.get(dz, 0.0) + n   # distance bands + outside + no-fixed-place
+        commute[dz] = commute.get(dz, 0.0) + n   # car driver + motorcycle + taxi
     school = {}
     for dz, label, n in _ni_csv(_one(NI_EDU_GLOB)):
         if label.lower() == "full-time student or schoolchild":

@@ -107,6 +107,7 @@ def main():
     workplace = nw["node_workplace"]
     sch = nw["node_school_demand"]
     park = nw.get("node_retail_spaces", {})
+    cattr = nw.get("node_commute_attractor", {})
     cprod = nw.get("node_commute_producers", {})
     sprod = nw.get("node_school_producers", {})
 
@@ -226,6 +227,7 @@ def main():
               for k, v in nw.items()}
     pop_o, work_o, sch_o, park_o = (nw_out["node_population"], nw_out["node_workplace"],
                                     nw_out["node_school_demand"], nw_out.get("node_retail_spaces", {}))
+    cattr_o = nw_out.get("node_commute_attractor", {})
     cprod_o = nw_out.get("node_commute_producers", {})
     sprod_o = nw_out.get("node_school_producers", {})
     internal = set(int(x) for x in nw_out.get("internal_node_ids", []))
@@ -251,14 +253,15 @@ def main():
         absorbed_orig = []
         rwork_sum = rsch_sum = rpark_sum = 0.0
         rpop_sum = 0.0
-        rcprod_sum = rsprod_sum = 0.0
+        rcattr_sum = rcprod_sum = rsprod_sum = 0.0
         for n in region_nodes:
             o = G.nodes[n].get("osmid_original", str(n))
             absorbed_orig.append(str(o))
             rpop_sum += w(pop, n); rwork_sum += w(workplace, n)
             rsch_sum += w(sch, n); rpark_sum += w(park, n)
+            rcattr_sum += w(cattr, n)
             rcprod_sum += w(cprod, n); rsprod_sum += w(sprod, n)
-            for d in (pop_o, work_o, sch_o, park_o, cprod_o, sprod_o):
+            for d in (pop_o, work_o, sch_o, park_o, cattr_o, cprod_o, sprod_o):
                 d.pop(str(n), None)
             internal.discard(n)
             G.remove_node(n)
@@ -272,6 +275,7 @@ def main():
         sch_o[str(S)] = rsch_sum
         if park_o is not None:
             park_o[str(S)] = rpark_sum
+        cattr_o[str(S)] = rcattr_sum
         cprod_o[str(S)] = rcprod_sum
         sprod_o[str(S)] = rsprod_sum
 

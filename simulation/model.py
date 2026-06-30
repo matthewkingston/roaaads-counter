@@ -504,8 +504,8 @@ def compute_generation_scales(node_weights, rates, verbose=False):
         raise ValueError("compute_generation_scales: Σ node_population is zero")
 
     anchors = {
-        "k_commuters": _sum("node_commute_producers") / pop_tot,
-        "k_jobs":      _sum("node_workplace")         / pop_tot,
+        "k_commuters": _sum("node_commute_producers")  / pop_tot,
+        "k_jobs":      _sum("node_commute_attractor")   / pop_tot,
         "k_retail":    _sum("node_retail_spaces")     / pop_tot,
         "k_students":  _sum("node_school_producers")  / pop_tot,
         "k_enrolment": _sum("node_school_demand")     / pop_tot,
