@@ -1,12 +1,12 @@
 {
   "lambda": 1,
   "gamma_coupling_scale": 1.0,
-  "phi_commute_prior": 0.22,
-  "phi_commute_std":   0.10,
-  "phi_retail_prior":  0.22,
-  "phi_retail_std":    0.10,
-  "phi_school_prior": 0.10,
-  "phi_school_std":   0.04,
+  "K_prior_std": {
+    "res":     0.5,
+    "commute": 0.5,
+    "retail":  0.5,
+    "school":  0.5
+  },
   "gravity_lambda": {
     "TAU":         1.0,
     "TAU_commute": 1.0,

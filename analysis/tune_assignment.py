@@ -270,20 +270,22 @@ with open(TUNER_CONFIG) as f:
 lam                  = config["lambda"]
 gamma_coupling_scale = config.get("gamma_coupling_scale",
                                    config.get("gamma_coupling", 1.0))
-# Scale-share priors anchor each component's K-share (degeneracy break inside
-# solve_scales): commute, retail and school (res = remainder).  commute/retail
-# priors are placeholder clones of the old combined business prior pending the
-# planned prior/profile revamp.
-phi_commute_prior = config.get("phi_commute_prior",
-                               config.get("phi_biz_prior", config.get("phi_prior", 0.35)))
-phi_commute_std   = config.get("phi_commute_std",
-                               config.get("phi_biz_std",   config.get("phi_std",   0.15)))
-phi_retail_prior  = config.get("phi_retail_prior",
-                               config.get("phi_biz_prior", config.get("phi_prior", 0.35)))
-phi_retail_std    = config.get("phi_retail_std",
-                               config.get("phi_biz_std",   config.get("phi_std",   0.15)))
-phi_school_prior  = config.get("phi_school_prior",  0.10)
-phi_school_std    = config.get("phi_school_std",    0.08)
+# Generation-anchored K-prior (degeneracy break inside solve_scales): every
+# component scale is softly pulled toward K_PRIOR_ANCHOR = 1.0 — the value
+# generation pinning predicts (producer weights are in vehicle-driver trips/day,
+# so a nationally-average town gives K_c ≈ 1).  This does double duty — it both
+# anchors magnitude to generation and pins the otherwise-flat commute↔retail
+# direction the old φ-share prior guarded, so no separate share prior is needed.
+# The anchor is fixed at 1 by construction (NOT a config knob, so it can't drift
+# into placeholder rot); only the per-component width σ_c — the belief in how far
+# local car-mobilisation departs from the national average — is configurable
+# (tuner_config "K_prior_std", default 0.5).  Replaces the old φ-share prior.
+K_PRIOR_ANCHOR      = 1.0
+_k_prior_std        = config.get("K_prior_std", {})
+k_prior_std_res     = _k_prior_std.get("res",     0.5)
+k_prior_std_commute = _k_prior_std.get("commute", 0.5)
+k_prior_std_retail  = _k_prior_std.get("retail",  0.5)
+k_prior_std_school  = _k_prior_std.get("school",  0.5)
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam_raw = config.get("gravity_lambda", 0.0)
@@ -682,9 +684,10 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
       • Gaussian WLS over the official-hourly obs (convex quadratic),
       • Poisson identity-link deviance 2·Σ(n·log(n/pred)+pred−n) over the slotted
         walking obs (convex in the mean pred>0),
-      • scale-share priors on φ_commute/φ_retail/φ_sch (= K_c/ΣK) — they anchor each
-        component's share (degeneracy break); res is the remainder.  The priors
-        regularise the inner K-solve only and are NOT part of the reported χ².
+      • a generation-anchored K-prior Σ_c iv_c·(K_c − 1)² over every active
+        component — softly pulls each scale toward the generation value 1 (anchor
+        + degeneracy break in one); regularises the inner K-solve only and is NOT
+        part of the reported χ².
 
     Solved by damped (Levenberg) Newton with a backtracking line search on the
     full objective — monotone by construction, so there is no K-collapse and no
@@ -707,12 +710,14 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
     nw = _walk_sl_n
     nw_pos = np.maximum(nw, 1e-300)
 
-    # Scale-share priors: (component index, mu, inv_var).  res (index 0) is the
-    # remainder and carries no prior.
-    priors = [(1, phi_commute_prior, 1.0 / (phi_commute_std ** 2)),
-              (2, phi_retail_prior,  1.0 / (phi_retail_std ** 2))]
+    # Generation-anchored K-prior: (component index, inv_var); anchor = 1 for all.
+    # Applies to every active component (res included) — pulls each K toward the
+    # generation value and pins the otherwise-flat commute↔retail direction.
+    priors = [(0, 1.0 / (k_prior_std_res     ** 2)),
+              (1, 1.0 / (k_prior_std_commute ** 2)),
+              (2, 1.0 / (k_prior_std_retail  ** 2))]
     if _has_school:
-        priors.append((3, phi_school_prior, 1.0 / (phi_school_std ** 2)))
+        priors.append((3, 1.0 / (k_prior_std_school ** 2)))
     active = np.array([True, True, True, _has_school])
 
     def objval(K):
@@ -722,11 +727,9 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
         pw = np.maximum(pred[wm], 1e-30)
         Lp = float(np.sum(2.0 * np.where(
             nw > 0, nw * np.log(nw_pos / pw) + (pw - nw), pw)))
-        S  = K.sum()
         Lpr = 0.0
-        if S > 1e-300:
-            for j, mu, iv in priors:
-                Lpr += iv * (K[j] / S - mu) ** 2
+        for j, iv in priors:
+            Lpr += iv * (K[j] - K_PRIOR_ANCHOR) ** 2
         return Lg + Lp + Lpr
 
     def grad_hess(K):
@@ -738,21 +741,18 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
         pw = np.maximum(pred[wm], 1e-30)
         g += Cw.T @ (2.0 * (1.0 - nw / pw))
         H += (Cw.T * (2.0 * nw / (pw * pw))) @ Cw
-        # Scale-share priors (Gauss-Newton PSD surrogate for the Hessian).
-        # φ_j = K_j/S ⇒ ∂φ_j/∂K_k = (δ_jk·S − K_j)/S².
-        S = K.sum()
-        if S > 1e-300:
-            S2 = S * S
-            for j, mu, iv in priors:
-                jac = -K[j] / S2 * np.ones(4)
-                jac[j] = (S - K[j]) / S2
-                g += 2.0 * iv * (K[j] / S - mu) * jac
-                H += 2.0 * iv * np.outer(jac, jac)
+        # Generation-anchored K-prior: L = Σ iv·(K_j − anchor)² ⇒
+        # g_j += 2·iv·(K_j − anchor), H_jj += 2·iv (diagonal, PSD).
+        for j, iv in priors:
+            g[j] += 2.0 * iv * (K[j] - K_PRIOR_ANCHOR)
+            H[j, j] += 2.0 * iv
         return g, H
 
-    # ── Init: single global scale from a moment fit, split by the prior shares.
-    # K spans many orders of magnitude as the kernel params change, so a data-driven
-    # magnitude is essential to land in the right basin before Newton refines.
+    # ── Init: single global scale from a moment fit, applied uniformly to every
+    # component (pred = s0·cc matches the moment fit; s0 ≈ 1 ⇒ each K starts at the
+    # generation anchor when the model magnitude is calibrated).  K spans many orders
+    # of magnitude as the kernel params change, so a data-driven magnitude is
+    # essential to land in the right basin before Newton refines.
     cc    = a + b + c + d
     den_g = float((wg * cc) @ cc)
     num_g = float((wg * cc) @ y)
@@ -762,10 +762,7 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
         cw_sum = float(cc[wm].sum())
         s0 = (float(nw.sum()) / cw_sum) if cw_sum > 0 else 1.0   # Poisson moment
     s0   = max(s0, 1e-30)
-    sh_school = phi_school_prior if _has_school else 0.0
-    sh_res    = max(1.0 - phi_commute_prior - phi_retail_prior - sh_school, 1e-6)
-    K = np.array([s0 * sh_res, s0 * phi_commute_prior,
-                  s0 * phi_retail_prior, s0 * sh_school])
+    K = np.full(4, s0)
     K = np.maximum(K, 1e-30)
     if not _has_school:
         K[3] = 0.0
@@ -1249,14 +1246,14 @@ history_entry = {
     "chi2_per_n": round(chi2_per_n, 4),
     "params":    params,
     "tuner_hyperparams": {
-        # phi_* priors anchor the scale-share inside solve_scales (degeneracy break).
+        # Generation-anchored K-prior (anchor 1) regularises solve_scales — per-
+        # component widths σ_c (degeneracy break + magnitude anchor).
         # gamma_coupling_scale is no longer used (f is pinned, no per-slot coupling).
-        "phi_commute_prior":    phi_commute_prior,
-        "phi_commute_std":      phi_commute_std,
-        "phi_retail_prior":     phi_retail_prior,
-        "phi_retail_std":       phi_retail_std,
-        "phi_school_prior":     phi_school_prior,
-        "phi_school_std":       phi_school_std,
+        "K_prior_anchor":       K_PRIOR_ANCHOR,
+        "K_prior_std_res":      k_prior_std_res,
+        "K_prior_std_commute":  k_prior_std_commute,
+        "K_prior_std_retail":   k_prior_std_retail,
+        "K_prior_std_school":   k_prior_std_school,
         "gravity_lambda":       grav_lam_raw,
         "lambda":               lam,
         "fast":                 fast,
