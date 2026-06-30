@@ -1,8 +1,10 @@
-# Newtownards Traffic Model — Project Overview
+# All-Ireland Gravity Traffic Model — Project Overview
 
-A gravity-model traffic assignment pipeline, calibrated against walking count data and
-official AADT figures. The pipeline is fully reproducible: running the scripts in order
-regenerates all outputs from raw data.
+A gravity-model traffic assignment pipeline for **any centre on the island of Ireland**,
+calibrated against walking count data and official AADT figures. The pipeline is fully
+reproducible: running the scripts in order regenerates all outputs from raw data.
+**Newtownards is the current calibration centre, not the model's scope** (see the portability
+rule below).
 
 **⚠️ THE MODEL IS LOCATION-PORTABLE — read before designing any data layer.** `CENTRE`
 (`simulation/zones_config.py`) is a **free parameter**: the core/study area can be relocated to
@@ -14,8 +16,19 @@ schools near Newtownards", no verifying a *fixed handful* of core POIs, no locat
 overrides as the primary path) — when CENTRE moves, a *different* set of areas becomes core, so any
 location-specific step silently breaks the new deployment. Design every layer **and every
 quality/precision step** (geocoding, snapping, estimators) for **"whichever areas fall in the
-active core", uniformly island-wide**; manual overrides are only a targeted backstop. See agent
-memory `feedback-model-is-portable` and `project-model-transferability`.
+active core", uniformly island-wide**; manual overrides are only a targeted backstop.
+
+**Failure mode to avoid (this is the one agents keep hitting):** **do not sequence, scope, defer,
+or judge the relevance of any work by its impact on the Newtownards fit.** That silently
+re-privileges one centre. The count fit at Newtownards is a *falsification test* of a transferable
+model — not the objective — so "this barely moves the current fit" is **never** a reason to do
+something coarsely, defer it, or skip a jurisdiction. **"External" nodes = areas outside the
+*currently selected* core** (a per-centre partition that changes when CENTRE moves), **not** a
+lesser or peripheral category: the Republic of Ireland is the *core* for some centres, NI for
+others. Every jurisdiction, zone, and data layer is equally load-bearing; build and refine them
+symmetrically. Before deferring/prioritizing/scoping, check: *is my criterion "the current fit"? If
+so, stop and re-justify island-wide.* See agent memory `feedback-model-is-portable` and
+`project-model-transferability`.
 
 **Agent instruction:** Keep this file up to date. After any tuning run, count data
 ingest, model change, or reference value update, edit the relevant sections before
