@@ -20,7 +20,7 @@ All optimizer parameters are stored in log-space to enforce positivity.
 Tunes 4 gravity params (with school): per-component willingness TAU_c (= 1/γ, seconds) for the
 mode-substitution × willingness kernel f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c) — the
 mode-substitution rise + speed are shared/data-derived (model._modesub_kernel), only TAU_c is tuned.
-TAU (res), TAU_commute, TAU_retail, TAU_school.  Commute and retail are independent clones of the school component — each a symmetric two-leg,
+TAU_res, TAU_commute, TAU_retail, TAU_school.  Commute and retail are independent clones of the school component — each a symmetric two-leg,
 per-origin-normalised split with NO weight parameter and NO self/cross term (the old
 single business component's W_BIZ and biz×biz are gone).
 Production-constrained per component: each origin's trip production is fixed by its
@@ -293,7 +293,7 @@ grav_lam_raw = config.get("gravity_lambda", 0.0)
 # mode-substitution × willingness kernel f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c).
 # The mode-substitution rise + speed are shared/data-derived (model._modesub_kernel); only
 # TAU_c is tuned — no P/BETA (the peak emerges from driveShare × exp).
-_grav_param_names = ["TAU", "TAU_commute", "TAU_retail"]
+_grav_param_names = ["TAU_res", "TAU_commute", "TAU_retail"]
 if _has_stoch:
     _grav_param_names.append("THETA")
 if _has_school:
@@ -615,7 +615,7 @@ slot_fracs_school_nts  = {sk: float(_slot_mfs[si]) for si, (sk, _) in enumerate(
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(TAU, TAU_commute, TAU_retail, TAU_school, THETA=None):
+def run_assignment(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA=None):
     """Production-constrained gravity assignment.
 
     Returns (flow_res, flow_commute, flow_retail, flow_school).  Each component is
@@ -627,7 +627,7 @@ def run_assignment(TAU, TAU_commute, TAU_retail, TAU_school, THETA=None):
 
     Each component uses the mode-substitution × willingness kernel
     f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c) with its own willingness TAU_c:
-    flow_res = pop→pop (TAU); flow_commute = commuters↔workplace (TAU_commute);
+    flow_res = pop→pop (TAU_res); flow_commute = commuters↔workplace (TAU_commute);
     flow_retail = pop↔retail (TAU_retail); flow_school = students↔school (TAU_school).
     No weight parameter, no self/cross term.
 
@@ -636,7 +636,7 @@ def run_assignment(TAU, TAU_commute, TAU_retail, TAU_school, THETA=None):
     t_res, t_commute, t_retail, t_sch = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
         base_w_pop, base_w_workplace, base_w_retail, base_w_school,
-        TAU, TAU_commute, TAU_retail,
+        TAU_res, TAU_commute, TAU_retail,
         TAU_school=TAU_school, with_school=_has_school,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
         w_commute_prod=base_w_commute_prod, w_school_prod=base_w_school_prod,
@@ -811,22 +811,22 @@ t0         = time.time()
 def _unpack_gravity(log_params):
     """Unpack the gravity log-param vector → kernel scalars (single source of truth
     for index layout, shared by objective / probe / final eval)."""
-    TAU          = math.exp(log_params[0])
+    TAU_res          = math.exp(log_params[0])
     TAU_commute  = math.exp(log_params[1])
     TAU_retail   = math.exp(log_params[2])
     THETA        = math.exp(log_params[3]) if _has_stoch else None
     _sch_off     = 4 if _has_stoch else 3
     TAU_school   = math.exp(log_params[_sch_off]) if _has_school else None
-    return (TAU, TAU_commute, TAU_retail, TAU_school, THETA)
+    return (TAU_res, TAU_commute, TAU_retail, TAU_school, THETA)
 
 
 def objective(log_params, log_ref=None):
     log_params = np.clip(log_params, -100, 100)
-    (TAU, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_params)
+    (TAU_res, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_params)
     _ts = TAU_school if _has_school else 1.0
 
     flow_res, flow_commute, flow_retail, flow_school = run_assignment(
-        TAU, TAU_commute, TAU_retail, _ts, THETA)
+        TAU_res, TAU_commute, TAU_retail, _ts, THETA)
     m_res, m_commute, m_retail, m_school = model_obs_4c(
         flow_res, flow_commute, flow_retail, flow_school)
     K_res, K_commute, K_retail, K_sch = solve_scales(
@@ -927,7 +927,7 @@ if os.environ.get("CALIBRATE_PROBE"):
             return cc
         ls=np.logspace(-1,2,2000); cs=[ch(l) for l in ls]; lo=ls[int(np.argmin(cs))]
         return ch(1.0),lo,ch(lo)
-    print(f"  params (willingness s): TAU={_T:.0f} TAU_commute={_Tc:.0f} TAU_retail={_Tr:.0f}"
+    print(f"  params (willingness s): TAU_res={_T:.0f} TAU_commute={_Tc:.0f} TAU_retail={_Tr:.0f}"
           + (f" TAU_school={_Ts0:.0f}" if _has_school else ""))
     Kr,Kc,Kt,Ks = solve_scales(_mr,_mc,_mt,_ms)[:4]
     c1,lo,clo=_probe_eval(Kr,Kc,Kt,Ks)
@@ -952,12 +952,12 @@ if os.environ.get("CALIBRATE_PROBE"):
 # full tune (no SWEEP env var).
 _sweep_target = os.environ.get("SWEEP")
 if _sweep_target:
-    _COMP_IDX = {"res": 0, "commute": 1, "retail": 2, "school": 3}   # index into [TAU,TAUc,TAUr,TAUs]
+    _COMP_IDX = {"res": 0, "commute": 1, "retail": 2, "school": 3}   # index into [TAU_res,TAUc,TAUr,TAUs]
     if _sweep_target not in _COMP_IDX:
         print(f"SWEEP={_sweep_target!r} unknown; use res|commute|retail|school"); sys.exit(1)
     _ki = _COMP_IDX[_sweep_target]
-    print(f"\n=== SWEEP {_sweep_target} (vary its TAU, others fixed at start; no writes) ===")
-    _base = list(_unpack_gravity(log_p0))[:4]        # [TAU, TAU_commute, TAU_retail, TAU_school]
+    print(f"\n=== SWEEP {_sweep_target} (vary its τ, others fixed at start; no writes) ===")
+    _base = list(_unpack_gravity(log_p0))[:4]        # [TAU_res, TAU_commute, TAU_retail, TAU_school]
     if not _has_school:
         _base[3] = 1.0
 
@@ -974,7 +974,7 @@ if _sweep_target:
         return cc
 
     TAU_grid = [120, 240, 360, 480, 720, 1080, 1500, 2400, 3600]   # willingness time (s)
-    print(f"  start TAU (s): {[round(x) for x in _base]}  [res, commute, retail, school]")
+    print(f"  start τ (s): {[round(x) for x in _base]}  [res, commute, retail, school]")
     print(f"  {'TAU_s':>6} {'TAU_min':>7} {'K_'+_sweep_target:>11} {'phi':>8} {'chi2/N':>8}")
     for Tv in TAU_grid:
         _args = list(_base); _args[_ki] = Tv
@@ -1007,12 +1007,12 @@ log_best = best["log_params"]
 
 # ── Unpack best params ────────────────────────────────────────────────────────
 
-(TAU, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_best)
+(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_best)
 
 # Final evaluation for clean chi2, the four K's, and slot_fracs (no L2 term)
 _ts_final = 1.0 if not _has_school else TAU_school
 flow_res, flow_commute, flow_retail, flow_school = run_assignment(
-    TAU, TAU_commute, TAU_retail, _ts_final, THETA)
+    TAU_res, TAU_commute, TAU_retail, _ts_final, THETA)
 m_res, m_commute, m_retail, m_school = model_obs_4c(
     flow_res, flow_commute, flow_retail, flow_school)
 (K_res, K_commute, K_retail, K_sch,
@@ -1094,7 +1094,7 @@ phi_sch_out = K_sch     / K_tot if K_tot > 0 else 0.0
 print(f"  K_res={K_res:.4e}  K_commute={K_commute:.4e}  K_retail={K_retail:.4e}"
       f"  K_sch={K_sch:.4e}  (K={K:.4e})")
 print(f"  phi_commute={phi_com_out:.3f}  phi_retail={phi_ret_out:.3f}  phi_sch={phi_sch_out:.3f}")
-print(f"  willingness TAU (s): res={TAU:.0f}  commute={TAU_commute:.0f}  retail={TAU_retail:.0f}{_theta_str}")
+print(f"  willingness τ (s): res={TAU_res:.0f}  commute={TAU_commute:.0f}  retail={TAU_retail:.0f}{_theta_str}")
 if _has_school:
     print(f"  TAU_school={TAU_school:.0f}s  (school magnitude = K_sch)")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
@@ -1144,7 +1144,7 @@ tuned = {
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),
-    "TAU":           round(TAU, 4),
+    "TAU_res":           round(TAU_res, 4),
     "TAU_commute":   round(TAU_commute, 4),
     "TAU_retail":    round(TAU_retail, 4),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
@@ -1179,13 +1179,13 @@ try:
     d_min    = d_sec / 60.0
     def _kern(K_c, tau_c):
         return K_c * _modesub_kernel(d_sec, tau_c)
-    k_res_c  = _kern(K_res, TAU)
+    k_res_c  = _kern(K_res, TAU_res)
     k_com_c  = _kern(K_commute, TAU_commute)
     k_ret_c  = _kern(K_retail, TAU_retail)
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(d_min, k_res_c, linewidth=1.8,
-            label=f"Residential  τ={TAU/60:.1f}min  K_res={K_res:.3e}")
+            label=f"Residential  τ={TAU_res/60:.1f}min  K_res={K_res:.3e}")
     ax.plot(d_min, k_com_c, linewidth=1.8, linestyle="--",
             label=f"Commute      τ={TAU_commute/60:.1f}min  K_com={K_commute:.3e}")
     ax.plot(d_min, k_ret_c, linewidth=1.8, linestyle="-.",
@@ -1221,7 +1221,7 @@ params = {
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),
-    "TAU":           round(TAU, 4),
+    "TAU_res":           round(TAU_res, 4),
     "TAU_commute":   round(TAU_commute, 4),
     "TAU_retail":    round(TAU_retail, 4),
     **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),

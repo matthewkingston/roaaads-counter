@@ -32,7 +32,7 @@ SCALE_KEYS   = ("K_res", "K_commute", "K_retail", "K_sch")
 STALE_KEYS   = ("K", "K_biz", "W_BIZ", "W_SCHOOL", "P_biz", "ALPHA_biz",
                 "ALPHA", "ALPHA_commute", "ALPHA_retail", "ALPHA_school",
                 "P", "BETA", "P_commute", "BETA_commute", "P_retail", "BETA_retail",
-                "P_school", "BETA_school", "MU", "SIGMA")
+                "P_school", "BETA_school", "MU", "SIGMA", "TAU")
 
 existing = {}
 if os.path.exists(TUNED_PARAMS):

@@ -346,7 +346,7 @@ def _modesub_kernel(d, TAU):
 
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_pop, w_workplace, w_retail, w_school,
-                         TAU, TAU_commute, TAU_retail,
+                         TAU_res, TAU_commute, TAU_retail,
                          TAU_school=None, with_school=False,
                          self_src=None, self_dist=None, self_w=None,
                          w_commute_prod=None, w_school_prod=None,
@@ -399,7 +399,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     gs_sch_out = gs.get("sch_out", 1.0)
     gs_sch_ret = gs.get("sch_ret", 1.0)
 
-    F_res = _modesub_kernel(od_dist, TAU)
+    F_res = _modesub_kernel(od_dist, TAU_res)
     F_com = _modesub_kernel(od_dist, TAU_commute)
     F_ret = _modesub_kernel(od_dist, TAU_retail)
 
@@ -409,7 +409,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
 
     _has_self = self_src is not None and len(self_src) > 0
     if _has_self:
-        F_res_self = _modesub_kernel(self_dist, TAU)
+        F_res_self = _modesub_kernel(self_dist, TAU_res)
         F_com_self = _modesub_kernel(self_dist, TAU_commute)
         F_ret_self = _modesub_kernel(self_dist, TAU_retail)
     else:

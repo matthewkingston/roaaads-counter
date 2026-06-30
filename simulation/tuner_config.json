@@ -8,14 +8,14 @@
     "school":  0.5
   },
   "gravity_lambda": {
-    "TAU":         1.0,
+    "TAU_res":         1.0,
     "TAU_commute": 1.0,
     "TAU_retail":  1.0,
     "THETA":       0.5,
     "TAU_school":  1.0
   },
   "gravity_ref": {
-    "TAU":         480.0,
+    "TAU_res":         480.0,
     "TAU_commute": 1500.0,
     "TAU_retail":  720.0,
     "THETA":       1.0,
