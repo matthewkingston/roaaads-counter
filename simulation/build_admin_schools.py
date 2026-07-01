@@ -64,7 +64,7 @@ NI_LON0, NI_LON1, NI_LAT0, NI_LAT1 = -8.3, -5.3, 54.0, 55.4
 FUZZY_CONFIDENT = 0.85   # exact or ≥ this → no review flag
 FUZZY_ACCEPT    = 0.70   # below this (or no compatible POI in DZ) → unmatched tail
 # admin level → compatible OSM amenity tags (school-age never matches college/university)
-COMPAT = {"primary": {"school", "kindergarten"},
+COMPAT = {"primary": {"school"},
           "post_primary": {"school"},
           "special": {"school"}}
 
@@ -307,22 +307,27 @@ def main():
             stats[k]["n"] += 1; stats[k]["enrol"] += s["enrolment"]
             stats[k]["tail"] += not has
 
-    # ── Third-level: keep the OSM/curated POI path (college + university) ──
-    # Stage-1 lumped school component. Admin rolls cover only school-age; tertiary students
-    # are in the census producer, so the attractor must include third-level too. Taken as-is
-    # from the OSM school cache (enrolment via school_demand.assign_enrolments) — FT-rebased and
-    # curated in Stage 2. Kindergartens (pre-school) are excluded, matching the producer.
-    print("Appending OSM third-level (college/university) …")
+    # ── Third-level (college + university) — curated live from the OSM POIs ──
+    # Stage-1 lumped school component. Admin rolls cover only school-age; tertiary students are
+    # in the census producer, so the attractor must include third-level. Enrolment is (re)computed
+    # here by school_demand._assign_tertiary from the OSM POI NAMES (curated HE/FE full-time
+    # figures; drops junk / part-time FET-adult / mis-tagged second-level) — so tertiary curation
+    # takes effect on this run, no build_schools.py (Docker/pbf) rebuild needed. Kindergartens
+    # (pre-school) are excluded, matching the producer.
+    import school_demand as _sd
+    print("Curating OSM third-level (college/university) via school_demand …")
+    _osm_ter = []
     for f in json.load(open(OSM_CACHE))["features"]:
         pr = f["properties"]; g = f["geometry"]
-        if pr.get("amenity") not in ("college", "university") or g["type"] != "Point":
-            continue
-        lon, lat = g["coordinates"]
+        if pr.get("amenity") in ("college", "university") and g["type"] == "Point":
+            _osm_ter.append({"amenity": pr["amenity"], "name": pr.get("name"), "x": 0.0, "y": 0.0,
+                             "lon": g["coordinates"][0], "lat": g["coordinates"][1]})
+    for feat, enrol in _sd._assign_tertiary(_osm_ter):
+        lon, lat = feat["lon"], feat["lat"]
         juris = "NI" if (NI_LON0 < lon < NI_LON1 and NI_LAT0 < lat < NI_LAT1) else "RoI"
-        enrol = round(float(pr.get("enrolment") or 0.0), 1)
-        features.append({"type": "Feature", "geometry": g, "properties": {
-            "jurisdiction": juris, "level": "tertiary", "name": pr.get("name"),
-            "enrolment": enrol, "geocode_method": "osm_tertiary", "geocode_score": None,
+        features.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"jurisdiction": juris, "level": "tertiary", "name": feat["name"],
+            "enrolment": round(enrol, 1), "geocode_method": "osm_tertiary", "geocode_score": None,
             "matched_osm_name": None, "needs_review": False}})
         k = (juris, "tertiary")
         stats[k]["n"] += 1; stats[k]["enrol"] += enrol

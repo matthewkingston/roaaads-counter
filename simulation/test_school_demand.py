@@ -3,7 +3,8 @@ Run from simulation/:  python3 simulation/test_school_demand.py
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from school_demand import assign_enrolments, _INST_TOTAL, SCHOOL_ENROLL, SEN_ENROLL
+from school_demand import (assign_enrolments, _INST_TOTAL, _FE_TOTAL, ROI_FE_TOTAL,
+                            SCHOOL_ENROLL, SEN_ENROLL)
 
 fails = []
 
@@ -58,19 +59,35 @@ r = assign_enrolments([feat("university", "Trinity College Dublin", 0, 0),
 check("Trinity split sums to total", total(r), _INST_TOTAL["Trinity"])
 check("Trinity per-POI share", r[0][1], _INST_TOTAL["Trinity"] / 3)
 
-# 7. Unmatched university → 300; unmatched college → 700
-check("unmatched university → 300", total(assign_enrolments([feat("university", "Some Private College Dublin", 0, 0)])), 300)
-check("unmatched college → 700", total(assign_enrolments([feat("college", "Local FE College", 0, 0)])), 700)
+# 7. Curated-only: unmatched third-level is DROPPED (no fallback)
+check("unmatched university dropped", total(assign_enrolments([feat("university", "Some Random Uni", 0, 0)])), 0)
+check("unmatched college dropped", total(assign_enrolments([feat("college", "Random Private Academy", 0, 0)])), 0)
 
-# 8. Non-teaching dropped
+# 8. Non-teaching / junk dropped (curated-only)
 check("research station dropped", total(assign_enrolments([feat("university", "Moorepark Food Research Centre", 0, 0)])), 0)
 check("accommodation dropped", total(assign_enrolments([feat("university", "Rock Mills Student Accommodation", 0, 0)])), 0)
 
-# 9. kindergarten → 40
-check("kindergarten → 40", total(assign_enrolments([feat("kindergarten", "Little Tots", 0, 0)])), 40)
+# 9. kindergarten (pre-school) EXCLUDED
+check("kindergarten excluded", total(assign_enrolments([feat("kindergarten", "Little Tots", 0, 0)])), 0)
 
-# 10. college-tagged curated institution still matches
+# 10. college-tagged curated HE institution still matches
 check("MIC as college matches curated", total(assign_enrolments([feat("college", "Mary Immaculate College", 0, 0)])), _INST_TOTAL["MIC"])
+
+# 11. Ulster campus split (Belfast campus → its campus FT)
+check("Ulster Belfast campus FT",
+      total(assign_enrolments([feat("university", "Ulster University, Belfast Campus", 0, 0, juris="NI")])), 10300)
+
+# 12. NI FE college → per-college total (DfE Table A4)
+check("Belfast Met FE total",
+      total(assign_enrolments([feat("college", "Belfast Metropolitan College", 0, 0, juris="NI")])), _FE_TOTAL["BelfastMet"])
+
+# 13. RoI public FE, single POI → full national total (1 institution × 1 POI, method a)
+check("RoI public FE method-a",
+      total(assign_enrolments([feat("college", "Ballyfermot College of Further Education", 0, 0)])), ROI_FE_TOTAL)
+
+# 14. mis-tagged second-level 'college' dropped (avoids double-count with admin rolls)
+check("community college (2nd-level) dropped",
+      total(assign_enrolments([feat("college", "Clonturk Community College", 0, 0)])), 0)
 
 print()
 if fails:
