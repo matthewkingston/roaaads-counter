@@ -99,18 +99,15 @@ if args.zones_only:
         w["node_retail_spaces"][str(nid)] = _retail
         w["node_workplace"][str(nid)]     = float(ext["workplace_pop"])
         w.setdefault("node_commute_attractor", {})[str(nid)] = float(ext.get("commute_attractor", 0.0))
-        if "node_school_demand" in w:
-            w["node_school_demand"][str(nid)] = float(ext.get("school_demand", 0.0))
         for _lyr in SCHOOL_LEVEL_LAYERS:
             w.setdefault(_lyr, {})[str(nid)] = float(ext.get("school_demand_" + _lyr.split("_")[-1], 0.0))
         w.setdefault("node_commute_producers", {})[str(nid)] = float(ext.get("commute_producers", 0.0))
-        w.setdefault("node_school_producers", {})[str(nid)]  = float(ext.get("school_producers", 0.0))
         for _lyr in SCHOOL_PRODUCER_LAYERS:
             w.setdefault(_lyr, {})[str(nid)] = float(ext.get("school_producers_" + _lyr.split("_")[-1], 0.0))
+        _sch_tot = sum(float(ext.get("school_demand_" + l, 0.0)) for l in SCHOOL_LEVELS)
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
-              f"retail_sp={_retail:>8,.0f}  "
-              f"school={w['node_school_demand'][str(nid)]:>8,.1f}")
+              f"retail_sp={_retail:>8,.0f}  school={_sch_tot:>8,.1f}")
     with open(weights_path, "w") as f:
         json.dump(w, f)
     print(f"Saved {len(ext_nodes)} external nodes → {weights_path}")
@@ -535,28 +532,26 @@ else:
 
     # ── Trip producers (commute, school) — census per-DZ counts distributed to nodes ──
     # Residents → distribute each DZ's producer totals across its nodes by population share.
-    # Stored as separate layers; the school component uses node_school_producers as its
-    # producing weight, node_commute_producers feeds the commute component (business split).
+    # Stored as separate layers; the school components use node_school_producers_<level> as their
+    # producing weights, node_commute_producers feeds the commute component.
     _supply = load_supply()                                   # commute producers (census_supply)
     _school_prod = census_school_producers.load_school_producers()   # per-level school producers
     node_commute_producers = {}
-    node_school_producers  = {}                                # total (= sum of levels), back-compat
     node_school_prod_levels = {lyr: {} for lyr in SCHOOL_PRODUCER_LAYERS}
     for dz_code, nodes_in_dz in dz_to_nodes.items():
         _com = float(_supply.get(dz_code, {}).get("commute", 0.0))
         _sp = _school_prod.get(dz_code, {})
         _lvl_vals = [float(_sp.get(l, 0.0)) for l in SCHOOL_LEVELS]  # aligned w/ SCHOOL_PRODUCER_LAYERS
-        _sch_tot = sum(_lvl_vals)
         pops = {n: node_population.get(n, 0.0) for n in nodes_in_dz}
         tot = sum(pops.values())
         for n in nodes_in_dz:
             frac = (pops[n] / tot) if tot > 0 else (1.0 / len(nodes_in_dz))
             node_commute_producers[n] = node_commute_producers.get(n, 0.0) + _com * frac
-            node_school_producers[n]  = node_school_producers.get(n, 0.0) + _sch_tot * frac
             for _lyr, _v in zip(SCHOOL_PRODUCER_LAYERS, _lvl_vals):
                 node_school_prod_levels[_lyr][n] = node_school_prod_levels[_lyr].get(n, 0.0) + _v * frac
+    _sch_prod_tot = sum(sum(d.values()) for d in node_school_prod_levels.values())
     print(f"  internal producers: commute {sum(node_commute_producers.values()):.0f}, "
-          f"school {sum(node_school_producers.values()):.0f} "
+          f"school {_sch_prod_tot:.0f} "
           f"(" + " / ".join(f"{lyr.split('_')[-1]} {sum(node_school_prod_levels[lyr].values()):.0f}"
                             for lyr in SCHOOL_PRODUCER_LAYERS) + ")")
 
@@ -626,8 +621,7 @@ else:
     _sch_utm["centroid_geom"] = _sch_utm.geometry.centroid
     _sch_utm = _sch_utm[_sch_utm["centroid_geom"].within(core_poly_utm)].copy()
 
-    # total + the three per-level layers, all snapped to the same road node(s) per POI
-    node_school_demand = {}
+    # Three per-level school-demand layers, all snapped to the same road node(s) per POI.
     node_school_levels = {lyr: {} for lyr in SCHOOL_LEVEL_LAYERS}
     _n_school = 0
     def _add(_d, _k, _v):
@@ -641,14 +635,11 @@ else:
         _lvl_vals = [float(_row[c]) for c in LEVEL_ENROL_COLS]   # aligned with SCHOOL_LEVEL_LAYERS
         if _eidx in _ghost_junction:
             _junc = _ghost_junction[_eidx]
-            _add(node_school_demand, _junc, _enrollment)
             for _lyr, _v in zip(SCHOOL_LEVEL_LAYERS, _lvl_vals):
                 _add(node_school_levels[_lyr], _junc, _v)
         else:
             _eu, _ev = _edge_keys[_eidx]
             _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
-            _add(node_school_demand, _eu, _enrollment * (1.0 - _t))
-            _add(node_school_demand, _ev, _enrollment * _t)
             for _lyr, _v in zip(SCHOOL_LEVEL_LAYERS, _lvl_vals):
                 _add(node_school_levels[_lyr], _eu, _v * (1.0 - _t))
                 _add(node_school_levels[_lyr], _ev, _v * _t)
@@ -656,9 +647,8 @@ else:
 
     # External zone nodes get their school demand from census_zones.json (set in the
     # external node weight block below); internal core schools are snapped above.
-    _tot_sch = sum(node_school_demand.values())
-    print(f"  {_n_school} school POIs in core → {len(node_school_demand)} nodes  "
-          f"total enrolment={_tot_sch:.0f} pupils "
+    _tot_sch = sum(sum(d.values()) for d in node_school_levels.values())
+    print(f"  {_n_school} school POIs in core → total enrolment={_tot_sch:.0f} pupils "
           f"(" + " / ".join(f"{lyr.split('_')[-1]} {sum(node_school_levels[lyr].values()):.0f}"
                             for lyr in SCHOOL_LEVEL_LAYERS) + ")")
 
@@ -713,11 +703,9 @@ else:
             node_retail_spaces[nid]   = _retail
             node_workplace[nid]       = float(ext["workplace_pop"])
             node_commute_attractor[nid] = float(ext.get("commute_attractor", 0.0))
-            node_school_demand[nid]   = float(ext.get("school_demand", 0.0))
             for _lyr in SCHOOL_LEVEL_LAYERS:            # school_demand_<lvl> → node_school_demand_<lvl>
                 node_school_levels[_lyr][nid] = float(ext.get("school_demand_" + _lyr.split("_")[-1], 0.0))
             node_commute_producers[nid] = float(ext.get("commute_producers", 0.0))
-            node_school_producers[nid]  = float(ext.get("school_producers", 0.0))
             for _lyr in SCHOOL_PRODUCER_LAYERS:        # school_producers_<lvl> → node_school_producers_<lvl>
                 node_school_prod_levels[_lyr][nid] = float(ext.get("school_producers_" + _lyr.split("_")[-1], 0.0))
         if _missing_retail:
@@ -734,11 +722,9 @@ else:
             "node_population":      {str(k): v for k, v in node_population.items()},
             "node_workplace":       {str(k): v for k, v in node_workplace.items()},
             "node_commute_attractor": {str(k): v for k, v in node_commute_attractor.items()},
-            "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
             **{lyr: {str(k): v for k, v in node_school_levels[lyr].items()} for lyr in SCHOOL_LEVEL_LAYERS},
             "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
             "node_commute_producers": {str(k): v for k, v in node_commute_producers.items()},
-            "node_school_producers":  {str(k): v for k, v in node_school_producers.items()},
             **{lyr: {str(k): v for k, v in node_school_prod_levels[lyr].items()} for lyr in SCHOOL_PRODUCER_LAYERS},
             "boundary_node_ids":      sorted(_boundary_ids),
             "boundary_node_ids_cons": sorted(_boundary_ids_cons),

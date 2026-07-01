@@ -64,7 +64,12 @@ _pnid = lambda k: (int(k) if k.lstrip("-").isdigit() else k)
 node_population      = {_pnid(k): v for k, v in _w["node_population"].items()}
 node_workplace       = {_pnid(k): v for k, v in _w["node_workplace"].items()}
 node_retail_spaces   = {_pnid(k): v for k, v in _w.get("node_retail_spaces", {}).items()}
-node_school_demand   = {_pnid(k): v for k, v in _w.get("node_school_demand", {}).items()}
+# School demand shown combined (sum of the three per-level layers) — one school map layer for now.
+node_school_demand   = {}
+for _slvl in ("primary", "postprimary", "tertiary"):
+    for _sk, _sv in _w.get(f"node_school_demand_{_slvl}", {}).items():
+        _spk = _pnid(_sk)
+        node_school_demand[_spk] = node_school_demand.get(_spk, 0.0) + float(_sv)
 _boundary_ids        = set(int(x) for x in _w.get("boundary_node_ids", []))
 _boundary_ids_cons   = set(int(x) for x in _w.get("boundary_node_ids_cons", _w.get("boundary_node_ids", [])))
 print("Loading DZ boundaries …")
@@ -389,7 +394,11 @@ if os.path.exists(_flows_path):
     _link_flow_res     = _parse_flows("flows_res")
     _link_flow_commute = _parse_flows("flows_commute")
     _link_flow_retail  = _parse_flows("flows_retail")
-    _link_flow_school  = _parse_flows("flows_school")
+    # School shown as ONE combined layer (sum of the three per-level flow layers) for now.
+    _link_flow_school  = {}
+    for _lvl in ("primary", "postprimary", "tertiary"):
+        for _lnk, _fv in _parse_flows(f"flows_school_{_lvl}").items():
+            _link_flow_school[_lnk] = _link_flow_school.get(_lnk, 0.0) + _fv
     _has_components    = bool(_link_flow_res)
     _has_school_layer  = bool(_link_flow_school)
     _ext_node_trips    = _flows_data.get("ext_node_trips", {})
@@ -572,7 +581,9 @@ if os.path.exists(_flows_path):
         _sf_res     = _parse_sf("slot_fracs_res")
         _sf_commute = _parse_sf("slot_fracs_commute")
         _sf_retail  = _parse_sf("slot_fracs_retail")
-        _sf_sch     = _parse_sf("slot_fracs_school")
+        # Combined school layer uses the primary (escort) shape as its representative temporal
+        # profile for the residuals display (tertiary differs; the map is a combined view for now).
+        _sf_sch     = _parse_sf("slot_fracs_school_primary")
 
         if not (_sf_res and _sf_commute and _sf_retail):
             print("Residuals layer skipped: slot_fracs_res/commute/retail missing from tuned_params.json")

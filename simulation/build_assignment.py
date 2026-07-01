@@ -16,7 +16,7 @@ import json, time, os
 import numpy as np
 import osmnx as ox
 from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
-                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY,
+                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY, SCHOOL_LEVELS,
                    gravity_assign, constrained_od_flows, scatter_od_to_links,
                    load_self_terms, aadt_weights,
                    load_generation_rates, compute_generation_scales,
@@ -54,15 +54,19 @@ node_population        = {_pnid(k): v for k, v in weights["node_population"].ite
 node_workplace         = {_pnid(k): v for k, v in weights["node_workplace"].items()}
 node_commute_attractor = {_pnid(k): v for k, v in weights.get("node_commute_attractor", {}).items()}
 node_retail_spaces     = {_pnid(k): v for k, v in weights.get("node_retail_spaces", {}).items()}
-node_school_demand     = {_pnid(k): v for k, v in weights.get("node_school_demand", {}).items()}
 node_commute_producers = {_pnid(k): v for k, v in weights.get("node_commute_producers", {}).items()}
-node_school_producers  = {_pnid(k): v for k, v in weights.get("node_school_producers", {}).items()}
+# Per-level school attractor + producer layers.
+node_school_demand    = {lvl: {_pnid(k): v for k, v in weights.get(f"node_school_demand_{lvl}", {}).items()}
+                         for lvl in SCHOOL_LEVELS}
+node_school_producers = {lvl: {_pnid(k): v for k, v in weights.get(f"node_school_producers_{lvl}", {}).items()}
+                         for lvl in SCHOOL_LEVELS}
 
 THETA          = None
 K_res          = None
 K_commute      = None
 K_retail       = None
 K_sch          = None
+K_school       = {lvl: 0.0 for lvl in SCHOOL_LEVELS}
 TAU_res            = None
 TAU_commute    = None
 TAU_retail     = None
@@ -70,7 +74,7 @@ TAU_school     = None
 slot_fracs_res     = {}
 slot_fracs_commute = {}
 slot_fracs_retail  = {}
-slot_fracs_school  = {}
+slot_fracs_school  = {lvl: {} for lvl in SCHOOL_LEVELS}
 
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
@@ -89,12 +93,13 @@ if os.path.exists(TUNED_PARAMS):
         K_commute = _tp["K_commute"]
         K_retail  = _tp["K_retail"]
         K_sch     = _tp.get("K_sch", 0.0)
+        K_school  = {lvl: _tp.get(f"K_{lvl}", 0.0) for lvl in SCHOOL_LEVELS}
         _parse_sf = lambda key: {tuple(int(x) for x in k.split(",")): v
                                  for k, v in _tp.get(key, {}).items()}
         slot_fracs_res     = _parse_sf("slot_fracs_res")
         slot_fracs_commute = _parse_sf("slot_fracs_commute")
         slot_fracs_retail  = _parse_sf("slot_fracs_retail")
-        slot_fracs_school  = _parse_sf("slot_fracs_school")
+        slot_fracs_school  = {lvl: _parse_sf(f"slot_fracs_school_{lvl}") for lvl in SCHOOL_LEVELS}
     print(f"  [tuned: stage={_tp.get('stage','?')}  χ²/N={_tp.get('chi2_per_n','?')}"
           + (f"  THETA={THETA:.4f}" if THETA is not None else "")
           + (f"  K_res={K_res:.3e}  K_commute={K_commute:.3e}  K_retail={K_retail:.3e}"
@@ -152,13 +157,17 @@ w_workplace = np.array([node_workplace.get(nid, 0)         for nid in node_ids_a
 # for the legacy kernel + map output only.
 w_commute_attr = np.array([node_commute_attractor.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
 w_retail    = np.array([node_retail_spaces.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
-w_school    = np.array([node_school_demand.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
 w_commute_prod = np.array([node_commute_producers.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
-w_school_prod  = np.array([node_school_producers.get(nid, 0)  for nid in node_ids_arr], dtype=np.float64)
 if w_commute_prod.sum() == 0:
     w_commute_prod = None   # fall back to population producer (legacy weights)
-if w_school_prod.sum() == 0:
-    w_school_prod = None    # fall back to population producer (legacy weights)
+# Per-level school attractor + producer arrays.
+w_school_levels = {lvl: np.array([node_school_demand[lvl].get(nid, 0) for nid in node_ids_arr],
+                                 dtype=np.float64) for lvl in SCHOOL_LEVELS}
+w_school_prod_levels = {lvl: np.array([node_school_producers[lvl].get(nid, 0) for nid in node_ids_arr],
+                                      dtype=np.float64) for lvl in SCHOOL_LEVELS}
+for lvl in SCHOOL_LEVELS:
+    if w_school_prod_levels[lvl].sum() == 0:
+        w_school_prod_levels[lvl] = None    # fall back to population producer
 print(f"  {len(node_ids_arr)} nodes  pop {w_pop.sum():,.0f}  workplace {w_workplace.sum():,.0f}"
       f"  commute_attr {w_commute_attr.sum():,.0f}  retail {w_retail.sum():,.0f}")
 
@@ -176,40 +185,42 @@ self_src, self_dist, self_w = load_self_terms(list(node_ids_arr))
 # Four-component mode requires the four K's and the commute/retail kernels.
 _use_4c  = (K_res is not None and K_commute is not None and K_retail is not None
             and TAU_commute is not None and TAU_retail is not None)
-# School sub-component is active when K_sch>0, the school kernel is present, and there
-# is school demand.
-_use_school = (_use_4c and K_sch is not None and K_sch > 0
-               and TAU_school is not None and w_school.sum() > 0)
+# School levels active when their K>0, the shared school kernel is present, and demand exists.
+_active_school = [lvl for lvl in SCHOOL_LEVELS
+                  if K_school.get(lvl, 0.0) > 0 and w_school_levels[lvl].sum() > 0]
+_use_school = _use_4c and TAU_school is not None and len(_active_school) > 0
 
 if _use_4c:
     # Production-constrained assignment (singly-constrained per component).
     # Per-OD-pair pre-K component flows, then scatter onto links via the probit
     # routing incidence and apply K_res/K_commute/K_retail/K_sch.
-    t_res, t_commute, t_retail, t_sch = constrained_od_flows(
+    t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
-        w_pop, w_commute_attr, w_retail, w_school,
+        w_pop, w_commute_attr, w_retail,
         TAU_res, TAU_commute, TAU_retail,
         TAU_school=TAU_school, with_school=_use_school,
+        w_school_levels=w_school_levels, w_school_prod_levels=w_school_prod_levels,
         self_src=self_src, self_dist=self_dist, self_w=self_w,
-        w_commute_prod=w_commute_prod, w_school_prod=w_school_prod,
+        w_commute_prod=w_commute_prod,
         gen_scale=_GEN_SCALE)
     raw_res     = scatter_od_to_links(t_res,     pair_idx, link_idx, link_weight, N_links)
     raw_commute = scatter_od_to_links(t_commute, pair_idx, link_idx, link_weight, N_links)
     raw_retail  = scatter_od_to_links(t_retail,  pair_idx, link_idx, link_weight, N_links)
-    raw_sch     = (scatter_od_to_links(t_sch, pair_idx, link_idx, link_weight, N_links)
-                   if _use_school else np.zeros(N_links))
-    _nonzero = (raw_res + raw_commute + raw_retail + raw_sch) > 0
+    raw_sch     = {lvl: scatter_od_to_links(t_sch_by_level[lvl], pair_idx, link_idx, link_weight, N_links)
+                   for lvl in SCHOOL_LEVELS}
+    _nonzero = (raw_res + raw_commute + raw_retail + sum(raw_sch.values())) > 0
     _mk = lambda raw, K_c: {(int(link_u[k]), int(link_v[k])): raw[k] * K_c
                             for k in range(N_links) if _nonzero[k]}
     link_flow_res     = _mk(raw_res,     K_res)
     link_flow_commute = _mk(raw_commute, K_commute)
     link_flow_retail  = _mk(raw_retail,  K_retail)
-    link_flow_school  = _mk(raw_sch, K_sch) if _use_school else None
-    _all_keys = (set(link_flow_res) | set(link_flow_commute) | set(link_flow_retail)
-                 | (set(link_flow_school) if link_flow_school else set()))
+    link_flow_school  = {lvl: _mk(raw_sch[lvl], K_school[lvl]) for lvl in SCHOOL_LEVELS}   # {level: dict}
+    _all_keys = set(link_flow_res) | set(link_flow_commute) | set(link_flow_retail)
+    for lvl in SCHOOL_LEVELS:
+        _all_keys |= set(link_flow_school[lvl])
+    def _sch_at(lnk): return sum(link_flow_school[lvl].get(lnk, 0.0) for lvl in SCHOOL_LEVELS)
     link_flow = {lnk: (link_flow_res.get(lnk, 0.0) + link_flow_commute.get(lnk, 0.0)
-                       + link_flow_retail.get(lnk, 0.0)
-                       + (link_flow_school.get(lnk, 0.0) if link_flow_school else 0.0))
+                       + link_flow_retail.get(lnk, 0.0) + _sch_at(lnk))
                  for lnk in _all_keys}
 
     # ── True AADT (daily) link flows ──────────────────────────────────────────
@@ -219,28 +230,29 @@ if _use_4c:
     # These weighted dicts are what is REPORTED/SERIALISED as AADT; the unweighted
     # link_flow_* still feed compute_chi2 (which applies f_c itself — do not double
     # weight).  W_res+W_commute+W_retail+W_sch ≈ 1.
-    W_res, W_commute, W_retail, W_sch = aadt_weights(
+    W_res, W_commute, W_retail, W_school = aadt_weights(
         slot_fracs_res, slot_fracs_commute, slot_fracs_retail, slot_fracs_school)
+    W_sch = sum(W_school.values())   # display total
     aadt_res     = {lnk: v * W_res     for lnk, v in link_flow_res.items()}
     aadt_commute = {lnk: v * W_commute for lnk, v in link_flow_commute.items()}
     aadt_retail  = {lnk: v * W_retail  for lnk, v in link_flow_retail.items()}
-    aadt_school  = ({lnk: v * W_sch for lnk, v in link_flow_school.items()}
-                    if link_flow_school else None)
+    aadt_school  = {lvl: {lnk: v * W_school[lvl] for lnk, v in link_flow_school[lvl].items()}
+                    for lvl in SCHOOL_LEVELS}
+    def _aadt_sch_at(lnk): return sum(aadt_school[lvl].get(lnk, 0.0) for lvl in SCHOOL_LEVELS)
     aadt_combined = {lnk: (aadt_res.get(lnk, 0.0) + aadt_commute.get(lnk, 0.0)
-                           + aadt_retail.get(lnk, 0.0)
-                           + (aadt_school.get(lnk, 0.0) if aadt_school else 0.0))
+                           + aadt_retail.get(lnk, 0.0) + _aadt_sch_at(lnk))
                      for lnk in _all_keys}
-    print(f"  AADT weights: W_res={W_res:.3f} W_commute={W_commute:.3f} "
-          f"W_retail={W_retail:.3f} W_sch={W_sch:.3f}"
-          f"  (sum={W_res+W_commute+W_retail+W_sch:.3f})")
+    print(f"  AADT weights: W_res={W_res:.3f} W_commute={W_commute:.3f} W_retail={W_retail:.3f} "
+          + "W_school[" + " ".join(f"{lvl[:4]}={W_school[lvl]:.3f}" for lvl in SCHOOL_LEVELS) + "]")
 
     # Per-external-node trip totals (routed pairs only: through = transiting ext→ext).
     # AADT-weighted per component so these are true daily trips.
     _n_routed = int(cache.get("n_routed_pairs", len(od_src)))
     _is_ext   = np.array([isinstance(nid, str) for nid in node_ids_arr])
     _t_total  = (t_res * K_res * W_res + t_commute * K_commute * W_commute
-                 + t_retail * K_retail * W_retail
-                 + (t_sch * K_sch * W_sch if _use_school else np.zeros(len(t_res))))
+                 + t_retail * K_retail * W_retail)
+    for lvl in SCHOOL_LEVELS:
+        _t_total = _t_total + t_sch_by_level[lvl] * K_school[lvl] * W_school[lvl]
     _src_r    = od_src[:_n_routed]
     _dst_r    = od_dst[:_n_routed]
     _t_r      = _t_total[:_n_routed]
@@ -309,11 +321,11 @@ rows, chi2, n_obs, n_eff = compute_chi2(
     exclude_links=EXCLUDE_LINKS,
     link_flow_commute_dict=link_flow_commute if _use_4c else None,
     link_flow_retail_dict=link_flow_retail   if _use_4c else None,
-    link_flow_school_dict=link_flow_school    if _use_school else None,
+    link_flow_school_dicts=link_flow_school    if _use_school else None,
     slot_fracs_res=slot_fracs_res         if _use_4c else None,
     slot_fracs_commute=slot_fracs_commute if _use_4c else None,
     slot_fracs_retail=slot_fracs_retail   if _use_4c else None,
-    slot_fracs_school=slot_fracs_school   if _use_school else None,
+    slot_fracs_school_levels=slot_fracs_school if _use_school else None,
 )
 print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 
@@ -332,15 +344,17 @@ if _use_4c:
     out["K_res"]     = K_res
     out["K_commute"] = K_commute
     out["K_retail"]  = K_retail
-    out["aadt_weights"] = {"res": W_res, "commute": W_commute,
-                           "retail": W_retail, "school": W_sch}
+    out["aadt_weights"] = {"res": W_res, "commute": W_commute, "retail": W_retail,
+                           **{f"school_{lvl}": W_school[lvl] for lvl in SCHOOL_LEVELS}}
     out["flows_res"]     = {f"{u},{v}": flow for (u, v), flow in aadt_res.items()}
     out["flows_commute"] = {f"{u},{v}": flow for (u, v), flow in aadt_commute.items()}
     out["flows_retail"]  = {f"{u},{v}": flow for (u, v), flow in aadt_retail.items()}
     out["ext_node_trips"] = ext_node_trips
 if _use_school:
     out["K_sch"] = K_sch
-    out["flows_school"] = {f"{u},{v}": flow for (u, v), flow in aadt_school.items()}
+    for lvl in SCHOOL_LEVELS:
+        out[f"K_{lvl}"] = K_school[lvl]
+        out[f"flows_school_{lvl}"] = {f"{u},{v}": flow for (u, v), flow in aadt_school[lvl].items()}
 with open(flows_path, "w") as f:
     json.dump(out, f)
 _comp_str = ("+ res/commute/retail/school" if _use_school

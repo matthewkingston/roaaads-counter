@@ -105,11 +105,19 @@ def main():
         nw = json.load(f)
     pop = nw["node_population"]
     workplace = nw["node_workplace"]
-    sch = nw["node_school_demand"]
     park = nw.get("node_retail_spaces", {})
     cattr = nw.get("node_commute_attractor", {})
     cprod = nw.get("node_commute_producers", {})
-    sprod = nw.get("node_school_producers", {})
+    # School attractor/producer are per-level; keep combined dicts (sum over levels) for the
+    # protection test + display (a node is protected if it has ANY school-level demand).
+    def _merge_levels(dicts):
+        out = {}
+        for d in dicts:
+            for k, v in d.items():
+                out[k] = out.get(k, 0.0) + float(v)
+        return out
+    sch   = _merge_levels(nw.get(f"node_school_demand_{lvl}", {})    for lvl in model.SCHOOL_LEVELS)
+    sprod = _merge_levels(nw.get(f"node_school_producers_{lvl}", {}) for lvl in model.SCHOOL_LEVELS)
 
     def w(d, n):
         return float(d.get(str(n), 0.0))
@@ -225,11 +233,13 @@ def main():
     # ── Rewrite graph + weights ───────────────────────────────────────────────
     nw_out = {k: dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v
               for k, v in nw.items()}
-    pop_o, work_o, sch_o, park_o = (nw_out["node_population"], nw_out["node_workplace"],
-                                    nw_out["node_school_demand"], nw_out.get("node_retail_spaces", {}))
+    pop_o, work_o, park_o = (nw_out["node_population"], nw_out["node_workplace"],
+                             nw_out.get("node_retail_spaces", {}))
     cattr_o = nw_out.get("node_commute_attractor", {})
     cprod_o = nw_out.get("node_commute_producers", {})
-    sprod_o = nw_out.get("node_school_producers", {})
+    # Per-level school attractor + producer dicts (each re-bucketed onto super-nodes).
+    sch_o_levels   = {lvl: nw_out.setdefault(f"node_school_demand_{lvl}", {})    for lvl in model.SCHOOL_LEVELS}
+    sprod_o_levels = {lvl: nw_out.setdefault(f"node_school_producers_{lvl}", {}) for lvl in model.SCHOOL_LEVELS}
     internal = set(int(x) for x in nw_out.get("internal_node_ids", []))
 
     deadend_map = {}
@@ -251,18 +261,24 @@ def main():
         clon, clat = utm_to_wgs.transform(cx, cy)
 
         absorbed_orig = []
-        rwork_sum = rsch_sum = rpark_sum = 0.0
+        rwork_sum = rpark_sum = 0.0
         rpop_sum = 0.0
-        rcattr_sum = rcprod_sum = rsprod_sum = 0.0
+        rcattr_sum = rcprod_sum = 0.0
+        rsch_lvl   = {lvl: 0.0 for lvl in model.SCHOOL_LEVELS}
+        rsprod_lvl = {lvl: 0.0 for lvl in model.SCHOOL_LEVELS}
         for n in region_nodes:
             o = G.nodes[n].get("osmid_original", str(n))
             absorbed_orig.append(str(o))
             rpop_sum += w(pop, n); rwork_sum += w(workplace, n)
-            rsch_sum += w(sch, n); rpark_sum += w(park, n)
-            rcattr_sum += w(cattr, n)
-            rcprod_sum += w(cprod, n); rsprod_sum += w(sprod, n)
-            for d in (pop_o, work_o, sch_o, park_o, cattr_o, cprod_o, sprod_o):
+            rpark_sum += w(park, n)
+            rcattr_sum += w(cattr, n); rcprod_sum += w(cprod, n)
+            for lvl in model.SCHOOL_LEVELS:
+                rsch_lvl[lvl]   += w(sch_o_levels[lvl], n)
+                rsprod_lvl[lvl] += w(sprod_o_levels[lvl], n)
+            for d in (pop_o, work_o, park_o, cattr_o, cprod_o):
                 d.pop(str(n), None)
+            for lvl in model.SCHOOL_LEVELS:
+                sch_o_levels[lvl].pop(str(n), None); sprod_o_levels[lvl].pop(str(n), None)
             internal.discard(n)
             G.remove_node(n)
 
@@ -272,12 +288,13 @@ def main():
         internal.add(S)
         pop_o[str(S)] = rpop_sum
         work_o[str(S)] = rwork_sum
-        sch_o[str(S)] = rsch_sum
         if park_o is not None:
             park_o[str(S)] = rpark_sum
         cattr_o[str(S)] = rcattr_sum
         cprod_o[str(S)] = rcprod_sum
-        sprod_o[str(S)] = rsprod_sum
+        for lvl in model.SCHOOL_LEVELS:
+            sch_o_levels[lvl][str(S)]   = rsch_lvl[lvl]
+            sprod_o_levels[lvl][str(S)] = rsprod_lvl[lvl]
 
         # synthetic directed links E<->S reproducing t_fwd / t_rev after osmnx re-augment
         def synth_len(t):
@@ -292,7 +309,7 @@ def main():
             "entrance": int(E), "absorbed": [int(n) for n in region_nodes],
             "absorbed_osmid_original": absorbed_orig,
             "pop": round(rpop_sum, 3), "workplace": round(rwork_sum, 3),
-            "retail": round(rpark_sum, 3), "school": round(rsch_sum, 3),
+            "retail": round(rpark_sum, 3), "school": round(sum(rsch_lvl.values()), 3),
             "t_fwd_s": round(t_fwd, 2), "t_rev_s": round(t_rev, 2),
             "maxT_s": round(maxT, 2), "n_nodes": len(region_nodes),
         }
