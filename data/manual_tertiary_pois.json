@@ -1,0 +1,5 @@
+[
+  {"name": "Northern Regional College (Ballymena Campus)",     "amenity": "college", "lat": 54.8683886, "lon": -6.2657432, "note": "NRC campus; manual (missing from OSM). Coleraine campus already in OSM cache."},
+  {"name": "Northern Regional College (Newtownabbey Campus)",  "amenity": "college", "lat": 54.6679556, "lon": -5.9034049, "note": "NRC campus; manual (missing from OSM)."},
+  {"name": "Northern Regional College (Magherafelt Campus)",   "amenity": "college", "lat": 54.7522050, "lon": -6.6113847, "note": "NRC campus; manual (missing from OSM)."}
+]

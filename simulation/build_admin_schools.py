@@ -58,7 +58,10 @@ ROI_POST    = "data/ireland_data/Data_on_Individual_Schools_post_primary.xlsx"
 OSM_CACHE   = "data/cache_osm_schools_island.geojson"
 DZ_BOUNDARY = "simulation/dz2021/DZ2021.geojson"
 OUT         = "data/cache_admin_schools_island.geojson"
-MANUAL      = "data/manual_school_coords.json"   # authoritative manual coords (tracked in git)
+MANUAL      = "data/manual_school_coords.json"     # authoritative school-age coord overrides (tracked)
+MANUAL_TERTIARY = "data/manual_tertiary_pois.json" # supplementary third-level campus POIs missing
+#   from OSM (name + lat/lon [+ amenity]); injected into the tertiary set so their institution's
+#   curated total spreads across all real campuses (e.g. Northern Regional College). Tracked in git.
 
 NI_LON0, NI_LON1, NI_LAT0, NI_LAT1 = -8.3, -5.3, 54.0, 55.4
 FUZZY_CONFIDENT = 0.85   # exact or ≥ this → no review flag
@@ -314,6 +317,7 @@ def main():
     # figures; drops junk / part-time FET-adult / mis-tagged second-level) — so tertiary curation
     # takes effect on this run, no build_schools.py (Docker/pbf) rebuild needed. Kindergartens
     # (pre-school) are excluded, matching the producer.
+    import os
     import school_demand as _sd
     print("Curating OSM third-level (college/university) via school_demand …")
     _osm_ter = []
@@ -322,6 +326,12 @@ def main():
         if pr.get("amenity") in ("college", "university") and g["type"] == "Point":
             _osm_ter.append({"amenity": pr["amenity"], "name": pr.get("name"), "x": 0.0, "y": 0.0,
                              "lon": g["coordinates"][0], "lat": g["coordinates"][1]})
+    if os.path.exists(MANUAL_TERTIARY):                # supplementary campuses missing from OSM
+        _man_ter = json.load(open(MANUAL_TERTIARY))
+        for m in _man_ter:
+            _osm_ter.append({"amenity": m.get("amenity", "college"), "name": m["name"],
+                             "x": 0.0, "y": 0.0, "lon": float(m["lon"]), "lat": float(m["lat"])})
+        print(f"  + {len(_man_ter)} supplementary tertiary POIs from {MANUAL_TERTIARY}")
     for feat, enrol in _sd._assign_tertiary(_osm_ter):
         lon, lat = feat["lon"], feat["lat"]
         juris = "NI" if (NI_LON0 < lon < NI_LON1 and NI_LAT0 < lat < NI_LAT1) else "RoI"
