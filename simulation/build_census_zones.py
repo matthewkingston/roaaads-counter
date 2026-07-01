@@ -44,6 +44,7 @@ from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE, SCHOOL_ISLA
 from parking_demand import parking_spaces
 from school_attractor import add_level_enrolments, LEVEL_ENROL_COLS
 import census_supply
+import census_school_producers
 import census_attractor
 from ingest_ni_census import load_ni_census
 from ingest_roi_census import load_roi_census
@@ -75,7 +76,13 @@ dea = pd.concat([dea_gdf, lea_gdf], ignore_index=True)
 # Per-small-area trip producers (commute, school) — NI DZ + RoI SA, harmonised (RoI ÷2).
 _supply = census_supply.load_supply()
 dz["commute_producers"] = dz["area_code"].map(lambda c: _supply.get(c, {}).get("commute", 0.0))
-dz["school_producers"]  = dz["area_code"].map(lambda c: _supply.get(c, {}).get("school", 0.0))
+# School producers come from census_school_producers (per-level primary/post-primary/tertiary),
+# replacing the lumped census_supply "school" + its childcare subtraction. Total = sum of levels.
+_school_prod = census_school_producers.load_school_producers()
+for _lvl in ("primary", "postprimary", "tertiary"):
+    dz["school_prod_" + _lvl] = dz["area_code"].map(lambda c, _l=_lvl: _school_prod.get(c, {}).get(_l, 0.0))
+dz["school_producers"] = (dz["school_prod_primary"] + dz["school_prod_postprimary"]
+                          + dz["school_prod_tertiary"])
 _n_missing = int((~dz["area_code"].isin(_supply)).sum())
 print(f"Producers: matched {len(dz) - _n_missing}/{len(dz)} small areas to census_supply"
       + (f" — {_n_missing} unmatched (treated as 0)" if _n_missing else ""))
@@ -181,6 +188,9 @@ for _, row in sdz_external.iterrows():
         "commute_attractor": int(round(child_sa["commute_attractor"].sum())),
         "commute_producers": int(round(child_sa["commute_producers"].sum())),
         "school_producers":  int(round(child_sa["school_producers"].sum())),
+        "school_producers_primary":     int(round(child_sa["school_prod_primary"].sum())),
+        "school_producers_postprimary": int(round(child_sa["school_prod_postprimary"].sum())),
+        "school_producers_tertiary":    int(round(child_sa["school_prod_tertiary"].sum())),
     })
 print(f"  {len(external_nodes)} intermediate external nodes (SDZ/ED)")
 
@@ -210,6 +220,9 @@ for _, row in orphan_sa.iterrows():
         "commute_attractor": int(round(row["commute_attractor"])),
         "commute_producers": int(round(row["commute_producers"])),
         "school_producers":  int(round(row["school_producers"])),
+        "school_producers_primary":     int(round(row["school_prod_primary"])),
+        "school_producers_postprimary": int(round(row["school_prod_postprimary"])),
+        "school_producers_tertiary":    int(round(row["school_prod_tertiary"])),
     })
 print(f"  {len(external_nodes) - n_int_start} orphan small-area external nodes (DZ/SA)")
 
@@ -227,11 +240,15 @@ for _, row in dea_external.iterrows():
     cattr = child_sa["commute_attractor"].sum()
     cprod = child_sa["commute_producers"].sum()
     sprod = child_sa["school_producers"].sum()
+    sprod_p  = child_sa["school_prod_primary"].sum()
+    sprod_pp = child_sa["school_prod_postprimary"].sum()
+    sprod_t  = child_sa["school_prod_tertiary"].sum()
     if len(child_sa) == 0:
         cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
         lon, lat = to_wgs.transform(cx, cy)
         utm_x, utm_y = cx, cy
         pop, wp, cattr, cprod, sprod = 0, 0, 0, 0, 0
+        sprod_p = sprod_pp = sprod_t = 0
     else:
         lat, lon, utm_x, utm_y = weighted_centroid_wgs(
             child_sa.geometry.values, child_sa["population"].values)
@@ -248,6 +265,9 @@ for _, row in dea_external.iterrows():
         "commute_attractor": int(round(cattr)),
         "commute_producers": int(round(cprod)),
         "school_producers":  int(round(sprod)),
+        "school_producers_primary":     int(round(sprod_p)),
+        "school_producers_postprimary": int(round(sprod_pp)),
+        "school_producers_tertiary":    int(round(sprod_t)),
     })
 print(f"  {len(external_nodes) - n_outer_start} outer external nodes (DEA/LEA)")
 print(f"  {len(external_nodes)} external nodes total")
