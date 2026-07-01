@@ -35,7 +35,9 @@ best-available proxy column (PROXY_0502 below) — an approximation in the shape
 (magnitude is exact from generation).
 
 Usage:  python3 analysis/derive_component_profiles.py
-Overwrites mean_fraction_{res,commute,retail,school} in analysis/hourly_fractions.csv.
+Overwrites mean_fraction_{res,commute,retail,school_primary,school_postprimary,school_tertiary}
+in analysis/hourly_fractions.csv (primary/post-primary = escort-education shape; tertiary = commute
+shape — three explicit copied columns).
 Re-run when the NTS files, the purpose mapping, or generation_rates.json change.
 """
 
@@ -169,15 +171,24 @@ def main():
             for h in range(24):
                 fc[comp][(dow, h)] = V[comp][dow] * H[h]
 
-    # ── Write component columns (drop legacy biz column if present) ───────────
+    # Per-level school shapes (settled design): primary + post-primary share the escort-education
+    # school-run shape; tertiary uses the commute shape (self-driven — spread AM / later PM).
+    # Written as three explicit copied columns so each level's temporal is self-contained in the CSV
+    # (no relying on documentation to know primary≡post-primary≡escort and tertiary≡commute).
+    fc["school_primary"]     = dict(fc["school"])
+    fc["school_postprimary"] = dict(fc["school"])
+    fc["school_tertiary"]    = dict(fc["commute"])
+
+    # ── Write component columns (drop legacy biz + lumped-school columns) ──────
+    out_components = ["res", "commute", "retail",
+                      "school_primary", "school_postprimary", "school_tertiary"]
     for r in rows:
         dow = int(r["day_of_week"]); h = int(r["hour"].split(":")[0])
-        for comp in COMPONENTS:
+        for comp in out_components:
             r[f"mean_fraction_{comp}"] = f"{fc[comp][(dow, h)]:.10f}"
-    comp_cols = [f"mean_fraction_{c}" for c in
-                 ("res", "commute", "retail", "school")]
+    comp_cols = [f"mean_fraction_{c}" for c in out_components]
     base_cols = [c for c in fieldnames
-                 if c not in comp_cols and c != "mean_fraction_biz"]
+                 if c not in comp_cols and c not in ("mean_fraction_biz", "mean_fraction_school")]
     out_cols = base_cols + comp_cols
     with open(FRACS_FILE, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=out_cols, extrasaction="ignore")
