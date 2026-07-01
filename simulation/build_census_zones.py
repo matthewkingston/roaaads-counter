@@ -42,6 +42,7 @@ import shapely.ops as sops
 from zones_config import CENTRE, CORE_RADIUS, SDZ_ZONE_RADIUS
 from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE, SCHOOL_ISLAND_CACHE
 from parking_demand import parking_spaces
+from school_attractor import add_level_enrolments, LEVEL_ENROL_COLS
 import census_supply
 import census_attractor
 from ingest_ni_census import load_ni_census
@@ -319,14 +320,23 @@ if not os.path.exists(SCHOOL_ISLAND_CACHE):
                      f"Run: python3 simulation/build_schools.py")
 _sch = gpd.read_file(SCHOOL_ISLAND_CACHE).to_crs(PROJECTED_CRS)
 _sch["geometry"] = _sch.geometry.centroid
-_sjoin = gpd.sjoin(_sch[["enrolment", "geometry"]], _zones_gdf, how="inner", predicate="within")
-_school_by_zone = _sjoin.groupby("id")["enrolment"].sum().to_dict()
+_sch = add_level_enrolments(_sch)                      # + enrol_primary/postprimary/tertiary (special split)
+_cols = ["enrolment", *LEVEL_ENROL_COLS]
+_sjoin = gpd.sjoin(_sch[[*_cols, "geometry"]], _zones_gdf, how="inner", predicate="within")
+_by_zone = _sjoin.groupby("id")[_cols].sum()
+_school_by_zone = _by_zone["enrolment"].to_dict()
+_lvl_by_zone = {c: _by_zone[c].to_dict() for c in LEVEL_ENROL_COLS}
 for n in external_nodes:
-    n["school_demand"] = round(float(_school_by_zone.get(n["id"], 0.0)), 1)
+    n["school_demand"] = round(float(_school_by_zone.get(n["id"], 0.0)), 1)  # total (back-compat)
+    for c in LEVEL_ENROL_COLS:                          # school_demand_primary/postprimary/tertiary
+        n["school_demand_" + c.split("_", 1)[1]] = round(float(_lvl_by_zone[c].get(n["id"], 0.0)), 1)
 print(f"  {len(_sch)} school POIs, {sum(_school_by_zone.values()):,.0f} pupils "
       f"matched into {len(_school_by_zone)} zones")
 print(f"  {sum(1 for n in external_nodes if n['school_demand'] == 0)} zones with no mapped school (school_demand=0)")
-print(f"  Total external school demand: {sum(n['school_demand'] for n in external_nodes):,.0f} pupils")
+print(f"  Total external school demand: {sum(n['school_demand'] for n in external_nodes):,.0f} pupils "
+      f"(primary {sum(n['school_demand_primary'] for n in external_nodes):,.0f} / "
+      f"post-primary {sum(n['school_demand_postprimary'] for n in external_nodes):,.0f} / "
+      f"tertiary {sum(n['school_demand_tertiary'] for n in external_nodes):,.0f})")
 
 # ── Serialise core polygon to WGS84 ─────────────────────────────────────────
 

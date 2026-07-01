@@ -34,8 +34,13 @@ from demographics_config import (
     EXCLUDE_AMENITY, POI_WEIGHTS, PROJECTED_CRS,
 )
 from parking_demand import parking_spaces
+from school_attractor import add_level_enrolments, LEVEL_ENROL_COLS
 from census_supply import load_supply
 import census_attractor
+
+# Phase-2 per-level school attractor node layers (primary/post-primary/tertiary), paired with the
+# single node_school_demand total. Layer name for enrol col "enrol_<lvl>" → "node_school_demand_<lvl>".
+SCHOOL_LEVEL_LAYERS = ["node_school_demand_" + c.split("_", 1)[1] for c in LEVEL_ENROL_COLS]
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 _ap = argparse.ArgumentParser(
@@ -93,6 +98,8 @@ if args.zones_only:
         w.setdefault("node_commute_attractor", {})[str(nid)] = float(ext.get("commute_attractor", 0.0))
         if "node_school_demand" in w:
             w["node_school_demand"][str(nid)] = float(ext.get("school_demand", 0.0))
+        for _lyr in SCHOOL_LEVEL_LAYERS:
+            w.setdefault(_lyr, {})[str(nid)] = float(ext.get("school_demand_" + _lyr.split("_")[-1], 0.0))
         w.setdefault("node_commute_producers", {})[str(nid)] = float(ext.get("commute_producers", 0.0))
         w.setdefault("node_school_producers", {})[str(nid)]  = float(ext.get("school_producers", 0.0))
         print(f"  {nid}  {ext['level']}  "
@@ -601,32 +608,45 @@ else:
         sys.exit(1)
     print(f"Loading island schools from cache ({SCHOOL_ISLAND_CACHE}) …")
     _sch_utm = gpd.read_file(SCHOOL_ISLAND_CACHE).to_crs(PROJECTED_CRS).copy()
+    _sch_utm = add_level_enrolments(_sch_utm)          # + enrol_primary/postprimary/tertiary (special split)
     _sch_utm["centroid_geom"] = _sch_utm.geometry.centroid
     _sch_utm = _sch_utm[_sch_utm["centroid_geom"].within(core_poly_utm)].copy()
 
+    # total + the three per-level layers, all snapped to the same road node(s) per POI
     node_school_demand = {}
+    node_school_levels = {lyr: {} for lyr in SCHOOL_LEVEL_LAYERS}
     _n_school = 0
+    def _add(_d, _k, _v):
+        _d[_k] = _d.get(_k, 0.0) + _v
     for _, _row in _sch_utm.iterrows():
         _enrollment = float(_row["enrolment"])
         if _enrollment <= 0:
             continue
         _pt = _row["centroid_geom"]
         _eidx = _edge_strtree.nearest(_pt)
+        _lvl_vals = [float(_row[c]) for c in LEVEL_ENROL_COLS]   # aligned with SCHOOL_LEVEL_LAYERS
         if _eidx in _ghost_junction:
             _junc = _ghost_junction[_eidx]
-            node_school_demand[_junc] = node_school_demand.get(_junc, 0.0) + _enrollment
+            _add(node_school_demand, _junc, _enrollment)
+            for _lyr, _v in zip(SCHOOL_LEVEL_LAYERS, _lvl_vals):
+                _add(node_school_levels[_lyr], _junc, _v)
         else:
             _eu, _ev = _edge_keys[_eidx]
             _t = _edge_geom_list[_eidx].project(_pt, normalized=True)
-            node_school_demand[_eu] = node_school_demand.get(_eu, 0.0) + _enrollment * (1.0 - _t)
-            node_school_demand[_ev] = node_school_demand.get(_ev, 0.0) + _enrollment * _t
+            _add(node_school_demand, _eu, _enrollment * (1.0 - _t))
+            _add(node_school_demand, _ev, _enrollment * _t)
+            for _lyr, _v in zip(SCHOOL_LEVEL_LAYERS, _lvl_vals):
+                _add(node_school_levels[_lyr], _eu, _v * (1.0 - _t))
+                _add(node_school_levels[_lyr], _ev, _v * _t)
         _n_school += 1
 
     # External zone nodes get their school demand from census_zones.json (set in the
     # external node weight block below); internal core schools are snapped above.
     _tot_sch = sum(node_school_demand.values())
     print(f"  {_n_school} school POIs in core → {len(node_school_demand)} nodes  "
-          f"total enrolment={_tot_sch:.0f} pupils")
+          f"total enrolment={_tot_sch:.0f} pupils "
+          f"(" + " / ".join(f"{lyr.split('_')[-1]} {sum(node_school_levels[lyr].values()):.0f}"
+                            for lyr in SCHOOL_LEVEL_LAYERS) + ")")
 
     # ── Auto-detect boundary nodes from core polygon ──────────────────────────
     # Uses the raw (pre-consolidation) graph for OSM node IDs (OSRM-compatible).
@@ -680,6 +700,8 @@ else:
             node_workplace[nid]       = float(ext["workplace_pop"])
             node_commute_attractor[nid] = float(ext.get("commute_attractor", 0.0))
             node_school_demand[nid]   = float(ext.get("school_demand", 0.0))
+            for _lyr in SCHOOL_LEVEL_LAYERS:            # school_demand_<lvl> → node_school_demand_<lvl>
+                node_school_levels[_lyr][nid] = float(ext.get("school_demand_" + _lyr.split("_")[-1], 0.0))
             node_commute_producers[nid] = float(ext.get("commute_producers", 0.0))
             node_school_producers[nid]  = float(ext.get("school_producers", 0.0))
         if _missing_retail:
@@ -697,6 +719,7 @@ else:
             "node_workplace":       {str(k): v for k, v in node_workplace.items()},
             "node_commute_attractor": {str(k): v for k, v in node_commute_attractor.items()},
             "node_school_demand":   {str(k): v for k, v in node_school_demand.items()},
+            **{lyr: {str(k): v for k, v in node_school_levels[lyr].items()} for lyr in SCHOOL_LEVEL_LAYERS},
             "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
             "node_commute_producers": {str(k): v for k, v in node_commute_producers.items()},
             "node_school_producers":  {str(k): v for k, v in node_school_producers.items()},
