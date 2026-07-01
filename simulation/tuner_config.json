@@ -5,7 +5,9 @@
     "res":     0.5,
     "commute": 0.5,
     "retail":  0.5,
-    "school":  0.5
+    "school_primary":     0.5,
+    "school_postprimary": 0.5,
+    "school_tertiary":    0.5
   },
   "gravity_lambda": {
     "TAU_res":         1.0,

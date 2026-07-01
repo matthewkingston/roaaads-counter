@@ -46,7 +46,7 @@ import scipy.optimize
 
 sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
-                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS,
+                   TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, SCHOOL_LEVELS,
                    constrained_od_flows, scatter_od_to_links, load_self_terms,
                    load_generation_rates, compute_generation_scales,
                    print_chi2_table, assert_paths_cache_fresh,
@@ -196,9 +196,12 @@ node_pop_full       = {_pnid(k): v for k, v in wdata["node_population"].items()}
 # is no longer the commute attractor.
 node_commute_attr_full = {_pnid(k): v for k, v in wdata.get("node_commute_attractor", {}).items()}
 node_retail_full    = {_pnid(k): v for k, v in wdata.get("node_retail_spaces", {}).items()}
-node_school_full    = {_pnid(k): v for k, v in wdata.get("node_school_demand", {}).items()}
 node_commute_prod_full = {_pnid(k): v for k, v in wdata.get("node_commute_producers", {}).items()}
-node_school_prod_full  = {_pnid(k): v for k, v in wdata.get("node_school_producers", {}).items()}
+# School attractor + producer are per-level (primary/post-primary/tertiary), each its own layer.
+node_school_full = {lvl: {_pnid(k): v for k, v in wdata.get(f"node_school_demand_{lvl}", {}).items()}
+                    for lvl in SCHOOL_LEVELS}
+node_school_prod_full = {lvl: {_pnid(k): v for k, v in wdata.get(f"node_school_producers_{lvl}", {}).items()}
+                         for lvl in SCHOOL_LEVELS}
 
 # Precomputed base weight arrays (from census + OSM demand; external zones fixed).
 # Clean separate layers: car-commute jobs (commute attractor, node_commute_attractor) and
@@ -206,17 +209,22 @@ node_school_prod_full  = {_pnid(k): v for k, v in wdata.get("node_school_produce
 base_w_pop       = np.array([node_pop_full.get(nid, 0.0)       for nid in node_ids], dtype=np.float64)
 base_w_commute_attr = np.array([node_commute_attr_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 base_w_retail    = np.array([node_retail_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
-base_w_school    = np.array([node_school_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_commute_prod = np.array([node_commute_prod_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
-base_w_school_prod  = np.array([node_school_prod_full.get(nid, 0.0)  for nid in node_ids], dtype=np.float64)
 if base_w_commute_prod.sum() == 0:
     base_w_commute_prod = None   # fall back to population producer (legacy weights)
-if base_w_school_prod.sum() == 0:
-    base_w_school_prod = None    # fall back to population producer (legacy weights)
 
-_has_school = base_w_school.sum() > 0
+# Per-level school attractor + producer arrays (each level fully independent).
+base_w_school_levels = {lvl: np.array([node_school_full[lvl].get(nid, 0.0) for nid in node_ids],
+                                      dtype=np.float64) for lvl in SCHOOL_LEVELS}
+base_w_school_prod_levels = {lvl: np.array([node_school_prod_full[lvl].get(nid, 0.0) for nid in node_ids],
+                                           dtype=np.float64) for lvl in SCHOOL_LEVELS}
+for lvl in SCHOOL_LEVELS:
+    if base_w_school_prod_levels[lvl].sum() == 0:
+        base_w_school_prod_levels[lvl] = None    # fall back to population producer
+_active_school = [lvl for lvl in SCHOOL_LEVELS if base_w_school_levels[lvl].sum() > 0]
+_has_school = len(_active_school) > 0
 if not _has_school:
-    print("  Warning: no node_school_demand in weights — school component disabled")
+    print("  Warning: no per-level node_school_demand in weights — school components disabled")
 
 # Generation pinning: per-leg producer scales (NTS0409a vehicle-driver trips/day) so
 # each K_c should land at ≈ 1.0.  Island per-capita anchors are summed from wdata (the
@@ -287,7 +295,8 @@ _k_prior_std        = config.get("K_prior_std", {})
 k_prior_std_res     = _k_prior_std.get("res",     0.5)
 k_prior_std_commute = _k_prior_std.get("commute", 0.5)
 k_prior_std_retail  = _k_prior_std.get("retail",  0.5)
-k_prior_std_school  = _k_prior_std.get("school",  0.5)
+# Per-level school K-priors (each independently adjustable; default 0.5).
+k_prior_std_school = {lvl: _k_prior_std.get(f"school_{lvl}", 0.5) for lvl in SCHOOL_LEVELS}
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam_raw = config.get("gravity_lambda", 0.0)
@@ -355,7 +364,8 @@ with open(HOURLY_FRACS_FILE, newline="") as _fh:
         _mfr  = float(_row["mean_fraction_res"])      if "mean_fraction_res"      in _row else None
         _mfc  = float(_row["mean_fraction_commute"])  if "mean_fraction_commute"  in _row else None
         _mft  = float(_row["mean_fraction_retail"])   if "mean_fraction_retail"   in _row else None
-        _mfs  = float(_row["mean_fraction_school"])   if "mean_fraction_school"   in _row else None
+        _mfs  = {lvl: (float(_row[f"mean_fraction_school_{lvl}"])
+                       if f"mean_fraction_school_{lvl}" in _row else None) for lvl in SCHOOL_LEVELS}
         _raw_fracs[(_dow, _hour)] = (float(_row["mean_fraction"]), float(_row["std_fraction"]),
                                      _mfr, _mfc, _mft, _mfs)
 
@@ -378,8 +388,8 @@ for _dt, _dows in _DT_DOWS.items():
                 if _entries[0][3] is not None else _mf * 0.25)
         _mft = (sum(e[4] for e in _entries) / len(_entries)
                 if _entries[0][4] is not None else _mf * 0.10)
-        _mfs = (sum(e[5] for e in _entries) / len(_entries)
-                if _entries[0][5] is not None else 0.0)
+        _mfs = {lvl: (sum(e[5][lvl] for e in _entries) / len(_entries)
+                      if _entries[0][5][lvl] is not None else 0.0) for lvl in SCHOOL_LEVELS}
         slot_prior[(_dt, _h)] = (_mf, _std, _mfr, _mfc, _mft, _mfs)
 
 # ── Build observation list ────────────────────────────────────────────────────
@@ -591,7 +601,7 @@ _walk_sl_n   = _walk_n_arr[_walk_slotted]
 _slot_mfr = np.array([e[5] for e in _slot_data], dtype=np.float64)
 _slot_mfc = np.array([e[6] for e in _slot_data], dtype=np.float64)
 _slot_mft = np.array([e[7] for e in _slot_data], dtype=np.float64)
-_slot_mfs = np.array([e[8] for e in _slot_data], dtype=np.float64)
+_slot_mfs = {lvl: np.array([e[8][lvl] for e in _slot_data], dtype=np.float64) for lvl in SCHOOL_LEVELS}
 _slot_mfa = np.array([e[9] for e in _slot_data], dtype=np.float64)
 
 # ── Frozen temporal fractions (NTS profile) ───────────────────────────────────
@@ -602,18 +612,19 @@ _slot_mfa = np.array([e[9] for e in _slot_data], dtype=np.float64)
 _f_r_by_slot = np.append(_slot_mfr, 0.0)
 _f_c_by_slot = np.append(_slot_mfc, 0.0)
 _f_t_by_slot = np.append(_slot_mft, 0.0)
-_f_s_by_slot = np.append(_slot_mfs, 0.0)
 _obs_f_r = _f_r_by_slot[_obs_slot_id]
 _obs_f_c = _f_c_by_slot[_obs_slot_id]
 _obs_f_t = _f_t_by_slot[_obs_slot_id]
-_obs_f_s = _f_s_by_slot[_obs_slot_id]
+# Per-level school per-obs fraction arrays (each level its own temporal shape).
+_obs_f_s = {lvl: np.append(_slot_mfs[lvl], 0.0)[_obs_slot_id] for lvl in SCHOOL_LEVELS}
 
 # Constant NTS slot-fraction dicts, returned by solve_scales for persistence to
 # tuned_params.json / tuning_history.jsonl (downstream consumers unchanged).
 slot_fracs_res_nts     = {sk: float(_slot_mfr[si]) for si, (sk, _) in enumerate(slot_list)}
 slot_fracs_commute_nts = {sk: float(_slot_mfc[si]) for si, (sk, _) in enumerate(slot_list)}
 slot_fracs_retail_nts  = {sk: float(_slot_mft[si]) for si, (sk, _) in enumerate(slot_list)}
-slot_fracs_school_nts  = {sk: float(_slot_mfs[si]) for si, (sk, _) in enumerate(slot_list)}
+slot_fracs_school_nts  = {lvl: {sk: float(_slot_mfs[lvl][si]) for si, (sk, _) in enumerate(slot_list)}
+                          for lvl in SCHOOL_LEVELS}
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
@@ -635,13 +646,14 @@ def run_assignment(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA=None):
 
     THETA is accepted but ignored (probit cache; the legacy k=3 logit scatter is retired).
     """
-    t_res, t_commute, t_retail, t_sch = constrained_od_flows(
+    t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
-        base_w_pop, base_w_commute_attr, base_w_retail, base_w_school,
+        base_w_pop, base_w_commute_attr, base_w_retail,
         TAU_res, TAU_commute, TAU_retail,
         TAU_school=TAU_school, with_school=_has_school,
+        w_school_levels=base_w_school_levels, w_school_prod_levels=base_w_school_prod_levels,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
-        w_commute_prod=base_w_commute_prod, w_school_prod=base_w_school_prod,
+        w_commute_prod=base_w_commute_prod,
         gen_scale=_GEN_SCALE)
     # Scatter only onto observed links (compact space) — see the observed-link
     # scatter-restriction block above. flow_* are indexed by COMPACT link id
@@ -651,24 +663,27 @@ def run_assignment(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA=None):
     flow_res     = _scatter(t_res)
     flow_commute = _scatter(t_commute)
     flow_retail  = _scatter(t_retail)
-    flow_school  = _scatter(t_sch) if _has_school else np.zeros(_N_obs_links, dtype=np.float64)
+    flow_school  = {lvl: _scatter(t_sch_by_level[lvl]) for lvl in SCHOOL_LEVELS}   # zeros if inactive
     return flow_res, flow_commute, flow_retail, flow_school
 
 
 def model_obs_4c(flow_res, flow_commute, flow_retail, flow_school):
-    """Extract per-observation modelled flows for all four components."""
-    m_r = np.empty(n_obs); m_c = np.empty(n_obs)
-    m_t = np.empty(n_obs); m_s = np.empty(n_obs)
+    """Extract per-observation modelled flows. flow_school is {level: array}; returns
+    (m_res, m_commute, m_retail, m_school) with m_school a {level: per-obs array} dict."""
+    m_r = np.empty(n_obs); m_c = np.empty(n_obs); m_t = np.empty(n_obs)
+    m_s = {lvl: np.empty(n_obs) for lvl in SCHOOL_LEVELS}
     # flow_* are indexed by compact observed-link id (see run_assignment).
     for i, idxs in enumerate(_obs_link_idxs_compact[:n_official_hourly]):
         m_r[i] = flow_res[idxs].sum()     if idxs else 0.0
         m_c[i] = flow_commute[idxs].sum() if idxs else 0.0
         m_t[i] = flow_retail[idxs].sum()  if idxs else 0.0
-        m_s[i] = flow_school[idxs].sum()  if idxs else 0.0
+        for lvl in SCHOOL_LEVELS:
+            m_s[lvl][i] = flow_school[lvl][idxs].sum() if idxs else 0.0
     m_r[n_official_hourly:] = np.where(_walk_valid, flow_res[_walk_link_safe_compact],     0.0)
     m_c[n_official_hourly:] = np.where(_walk_valid, flow_commute[_walk_link_safe_compact], 0.0)
     m_t[n_official_hourly:] = np.where(_walk_valid, flow_retail[_walk_link_safe_compact],  0.0)
-    m_s[n_official_hourly:] = np.where(_walk_valid, flow_school[_walk_link_safe_compact],  0.0)
+    for lvl in SCHOOL_LEVELS:
+        m_s[lvl][n_official_hourly:] = np.where(_walk_valid, flow_school[lvl][_walk_link_safe_compact], 0.0)
     return m_r, m_c, m_t, m_s
 
 
@@ -699,12 +714,19 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
     slot_fracs_retail, slot_fracs_school) — the slot_fracs are the constant NTS
     profile dicts (for persistence).
     """
-    a = m_res     * obs_Th * _obs_f_r
-    b = m_commute * obs_Th * _obs_f_c
-    c = m_retail  * obs_Th * _obs_f_t
-    d = m_school  * obs_Th * _obs_f_s
+    # Component design columns: pred_i = Σ_comp K_comp·(m_comp_i·Th_i·f_comp[s_i]).  Fixed
+    # components res/commute/retail, then one column per ACTIVE school level (each its own
+    # temporal f and K-prior) — so this is a 3..6-component solve with no dead/masked columns.
+    cols       = [m_res * obs_Th * _obs_f_r, m_commute * obs_Th * _obs_f_c, m_retail * obs_Th * _obs_f_t]
+    comp_keys  = ["res", "commute", "retail"]
+    prior_stds = [k_prior_std_res, k_prior_std_commute, k_prior_std_retail]
+    for lvl in _active_school:
+        cols.append(m_school[lvl] * obs_Th * _obs_f_s[lvl])
+        comp_keys.append(f"school_{lvl}")
+        prior_stds.append(k_prior_std_school[lvl])
 
-    C  = np.column_stack((a, b, c, d))       # (n_obs, 4): pred = C @ K
+    C  = np.column_stack(cols)               # (n_obs, n_comp): pred = C @ K
+    n_comp = C.shape[1]
     y  = obs_rhs_arr
     wg = _gauss_w_arr                        # Gaussian weights (walking zeroed)
     wm = _walk_slotted                       # slotted-walking (Poisson) mask
@@ -712,15 +734,9 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
     nw = _walk_sl_n
     nw_pos = np.maximum(nw, 1e-300)
 
-    # Generation-anchored K-prior: (component index, inv_var); anchor = 1 for all.
-    # Applies to every active component (res included) — pulls each K toward the
-    # generation value and pins the otherwise-flat commute↔retail direction.
-    priors = [(0, 1.0 / (k_prior_std_res     ** 2)),
-              (1, 1.0 / (k_prior_std_commute ** 2)),
-              (2, 1.0 / (k_prior_std_retail  ** 2))]
-    if _has_school:
-        priors.append((3, 1.0 / (k_prior_std_school ** 2)))
-    active = np.array([True, True, True, _has_school])
+    # Generation-anchored K-prior: (component index, inv_var); anchor = 1 for every component
+    # (res included) — pulls each K toward the generation value and pins otherwise-flat directions.
+    priors = [(j, 1.0 / (s ** 2)) for j, s in enumerate(prior_stds)]
 
     def objval(K):
         pred = C @ K
@@ -755,7 +771,7 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
     # generation anchor when the model magnitude is calibrated).  K spans many orders
     # of magnitude as the kernel params change, so a data-driven magnitude is
     # essential to land in the right basin before Newton refines.
-    cc    = a + b + c + d
+    cc    = C.sum(axis=1)
     den_g = float((wg * cc) @ cc)
     num_g = float((wg * cc) @ y)
     if den_g > 0 and num_g > 0:
@@ -764,29 +780,20 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
         cw_sum = float(cc[wm].sum())
         s0 = (float(nw.sum()) / cw_sum) if cw_sum > 0 else 1.0   # Poisson moment
     s0   = max(s0, 1e-30)
-    K = np.full(4, s0)
-    K = np.maximum(K, 1e-30)
-    if not _has_school:
-        K[3] = 0.0
+    K = np.maximum(np.full(n_comp, s0), 1e-30)
 
     f_cur = objval(K)
     for _ in range(60):
         g, H = grad_hess(K)
-        gi = g[active]
-        Hi = H[np.ix_(active, active)]
-        lam_lm = 1e-9 * (np.trace(Hi) / max(gi.size, 1) + 1.0)   # Levenberg damping
+        lam_lm = 1e-9 * (np.trace(H) / max(n_comp, 1) + 1.0)   # Levenberg damping
         try:
-            step_i = np.linalg.solve(Hi + lam_lm * np.eye(gi.size), -gi)
+            step = np.linalg.solve(H + lam_lm * np.eye(n_comp), -g)
         except np.linalg.LinAlgError:
-            step_i = -gi
-        step = np.zeros(4)
-        step[active] = step_i
+            step = -g
         # Backtracking line search on the FULL objective → guaranteed descent.
         t, improved = 1.0, False
         for _ls in range(40):
             Kn = np.maximum(K + t * step, 1e-30)
-            if not _has_school:
-                Kn[3] = 0.0
             fn = objval(Kn)
             if fn < f_cur - 1e-12 * abs(f_cur):
                 K, f_cur, improved = Kn, fn, True
@@ -794,10 +801,12 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
             t *= 0.5
         if not improved:
             break
-        if np.max(np.abs(t * step_i)) < 1e-10 * (np.max(np.abs(K[active])) + 1e-30):
+        if np.max(np.abs(t * step)) < 1e-10 * (np.max(np.abs(K)) + 1e-30):
             break
 
-    return (float(K[0]), float(K[1]), float(K[2]), float(K[3]),
+    K_map = {comp_keys[j]: float(K[j]) for j in range(n_comp)}
+    K_school = {lvl: K_map.get(f"school_{lvl}", 0.0) for lvl in SCHOOL_LEVELS}
+    return (K_map["res"], K_map["commute"], K_map["retail"], K_school,
             slot_fracs_res_nts, slot_fracs_commute_nts,
             slot_fracs_retail_nts, slot_fracs_school_nts)
 
@@ -806,7 +815,8 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
 
 eval_count = [0]
 best       = {"chi2": float("inf"), "log_params": None,
-              "K_res": 1.0, "K_commute": 1.0, "K_retail": 1.0, "K_sch": 0.0}
+              "K_res": 1.0, "K_commute": 1.0, "K_retail": 1.0,
+              "K_school": {lvl: 0.0 for lvl in SCHOOL_LEVELS}}
 t0         = time.time()
 
 
@@ -831,15 +841,15 @@ def objective(log_params, log_ref=None):
         TAU_res, TAU_commute, TAU_retail, _ts, THETA)
     m_res, m_commute, m_retail, m_school = model_obs_4c(
         flow_res, flow_commute, flow_retail, flow_school)
-    K_res, K_commute, K_retail, K_sch = solve_scales(
+    K_res, K_commute, K_retail, K_school = solve_scales(
         m_res, m_commute, m_retail, m_school)[:4]
     # f is pinned at the NTS profile, so the per-obs fraction vectors _obs_f_* are
-    # module-level constants and the old f-prior/coupling penalty is identically
-    # zero (f ≡ NTS prior and res+commute+retail+sch = agg per slot); it is dropped.
+    # module-level constants and the old f-prior/coupling penalty is identically zero; dropped.
     _pred = (K_res * m_res * obs_Th * _obs_f_r
              + K_commute * m_commute * obs_Th * _obs_f_c
-             + K_retail * m_retail * obs_Th * _obs_f_t
-             + K_sch * m_school * obs_Th * _obs_f_s)
+             + K_retail * m_retail * obs_Th * _obs_f_t)
+    for lvl in SCHOOL_LEVELS:
+        _pred = _pred + K_school[lvl] * m_school[lvl] * obs_Th * _obs_f_s[lvl]
     # Gaussian chi-squared for official hourly obs (_gauss_w_arr zeroes walking obs).
     _resid    = _pred - obs_rhs_arr
     chi2_data = float((_gauss_w_arr * _resid) @ _resid)
@@ -864,7 +874,7 @@ def objective(log_params, log_ref=None):
         best["K_res"]      = K_res
         best["K_commute"]  = K_commute
         best["K_retail"]   = K_retail
-        best["K_sch"]      = K_sch
+        best["K_school"]   = K_school
 
     if eval_count[0] % 20 == 0:
         elapsed = time.time() - t0
@@ -914,13 +924,16 @@ if os.environ.get("CALIBRATE_PROBE"):
     (_T,_Tc,_Tr,_Ts0,_TH) = _unpack_gravity(log_p0)
     _Ts = _Ts0 if _has_school else 1.0
     _fr,_fc,_ft,_fs = run_assignment(_T,_Tc,_Tr,_Ts,None)
-    _mr,_mc,_mt,_ms = model_obs_4c(_fr,_fc,_ft,_fs)
-    def _probe_eval(Kr,Kc,Kt,Ks):
+    _mr,_mc,_mt,_ms = model_obs_4c(_fr,_fc,_ft,_fs)   # _ms is {level: array}
+    _fs_lvl = {lvl: np.array([slot_fracs_school_nts[lvl].get(sk,0.0) if sk else 0.0
+                              for sk in obs_slot_keys]) for lvl in SCHOOL_LEVELS}
+    def _probe_eval(Kr,Kc,Kt,K_school):
         fr=np.array([slot_fracs_res_nts.get(sk,1/24)     if sk else 1/24 for sk in obs_slot_keys])
         fc=np.array([slot_fracs_commute_nts.get(sk,1/24) if sk else 1/24 for sk in obs_slot_keys])
         ft=np.array([slot_fracs_retail_nts.get(sk,1/24)  if sk else 1/24 for sk in obs_slot_keys])
-        fs=np.array([slot_fracs_school_nts.get(sk,0.0)   if sk else 0.0  for sk in obs_slot_keys])
-        pred=(Kr*_mr*obs_Th*fr + Kc*_mc*obs_Th*fc + Kt*_mt*obs_Th*ft + Ks*_ms*obs_Th*fs)
+        pred = Kr*_mr*obs_Th*fr + Kc*_mc*obs_Th*fc + Kt*_mt*obs_Th*ft
+        for lvl in SCHOOL_LEVELS:
+            pred = pred + K_school[lvl]*_ms[lvl]*obs_Th*_fs_lvl[lvl]
         def ch(lam):
             p=np.maximum(lam*pred,1e-30)
             cc=float((_gauss_w_arr*(p-obs_rhs_arr))@(p-obs_rhs_arr))
@@ -931,9 +944,10 @@ if os.environ.get("CALIBRATE_PROBE"):
         return ch(1.0),lo,ch(lo)
     print(f"  params (willingness s): TAU_res={_T:.0f} TAU_commute={_Tc:.0f} TAU_retail={_Tr:.0f}"
           + (f" TAU_school={_Ts0:.0f}" if _has_school else ""))
-    Kr,Kc,Kt,Ks = solve_scales(_mr,_mc,_mt,_ms)[:4]
-    c1,lo,clo=_probe_eval(Kr,Kc,Kt,Ks)
-    print(f"  direct solve  K_res={Kr:.4e} K_commute={Kc:.4e} K_retail={Kt:.4e} K_sch={Ks:.4e}"
+    Kr,Kc,Kt,K_school = solve_scales(_mr,_mc,_mt,_ms)[:4]
+    c1,lo,clo=_probe_eval(Kr,Kc,Kt,K_school)
+    _ksch = " ".join(f"{lvl[:4]}={K_school[lvl]:.3e}" for lvl in SCHOOL_LEVELS)
+    print(f"  direct solve  K_res={Kr:.4e} K_commute={Kc:.4e} K_retail={Kt:.4e}  K_school[{_ksch}]"
           f"  data χ²/N={c1/n_obs:7.3f}  opt_λ={lo:6.3f}  χ²/N@optλ={clo/n_obs:7.3f}")
     sys.exit(0)
 
@@ -963,17 +977,24 @@ if _sweep_target:
     if not _has_school:
         _base[3] = 1.0
 
-    def _sweep_chi(Ks4, ms4):
+    def _sweep_chi(K4, ms4):
+        Kr, Kc, Kt, K_school = K4; mr, mc, mt, ms = ms4   # ms, K_school are {level: ...}
         fr = np.array([slot_fracs_res_nts.get(sk, 1/24)     if sk else 1/24 for sk in obs_slot_keys])
         fc = np.array([slot_fracs_commute_nts.get(sk, 1/24) if sk else 1/24 for sk in obs_slot_keys])
         ft = np.array([slot_fracs_retail_nts.get(sk, 1/24)  if sk else 1/24 for sk in obs_slot_keys])
-        fs = np.array([slot_fracs_school_nts.get(sk, 0.0)   if sk else 0.0  for sk in obs_slot_keys])
-        Kr, Kc, Kt, Ks = Ks4; mr, mc, mt, ms = ms4
-        p = np.maximum(Kr*mr*obs_Th*fr + Kc*mc*obs_Th*fc + Kt*mt*obs_Th*ft + Ks*ms*obs_Th*fs, 1e-30)
+        p = Kr*mr*obs_Th*fr + Kc*mc*obs_Th*fc + Kt*mt*obs_Th*ft
+        for lvl in SCHOOL_LEVELS:
+            fs = np.array([slot_fracs_school_nts[lvl].get(sk, 0.0) if sk else 0.0 for sk in obs_slot_keys])
+            p = p + K_school[lvl]*ms[lvl]*obs_Th*fs
+        p = np.maximum(p, 1e-30)
         cc = float((_gauss_w_arr*(p-obs_rhs_arr)) @ (p-obs_rhs_arr))
         pw = p[_walk_slotted]; n = _walk_sl_n; pos = np.maximum(n, 1e-300)
         cc += float(np.sum(2*np.where(n > 0, n*np.log(pos/pw)+(pw-n), pw)))
         return cc
+
+    # "school" sweeps the shared TAU_school (index 3); its reported K is the 3-level total.
+    def _k_total(K4):  return K4[0] + K4[1] + K4[2] + sum(K4[3].values())
+    def _k_target(K4): return sum(K4[3].values()) if _ki == 3 else K4[_ki]
 
     TAU_grid = [120, 240, 360, 480, 720, 1080, 1500, 2400, 3600]   # willingness time (s)
     print(f"  start τ (s): {[round(x) for x in _base]}  [res, commute, retail, school]")
@@ -981,10 +1002,10 @@ if _sweep_target:
     for Tv in TAU_grid:
         _args = list(_base); _args[_ki] = Tv
         ms4 = model_obs_4c(*run_assignment(*_args, None))
-        Ks4 = solve_scales(*ms4)[:4]
-        tot = sum(Ks4)
-        phi = Ks4[_ki] / tot if tot > 0 else 0.0
-        print(f"  {Tv:6.0f} {Tv/60:7.1f} {Ks4[_ki]:11.4e} {phi:8.3f} {_sweep_chi(Ks4, ms4)/n_obs:8.3f}")
+        K4 = solve_scales(*ms4)[:4]
+        tot = _k_total(K4); kv = _k_target(K4)
+        phi = kv / tot if tot > 0 else 0.0
+        print(f"  {Tv:6.0f} {Tv/60:7.1f} {kv:11.4e} {phi:8.3f} {_sweep_chi(K4, ms4)/n_obs:8.3f}")
     sys.exit(0)
 
 # ── Run optimization ──────────────────────────────────────────────────────────
@@ -1017,16 +1038,25 @@ flow_res, flow_commute, flow_retail, flow_school = run_assignment(
     TAU_res, TAU_commute, TAU_retail, _ts_final, THETA)
 m_res, m_commute, m_retail, m_school = model_obs_4c(
     flow_res, flow_commute, flow_retail, flow_school)
-(K_res, K_commute, K_retail, K_sch,
+(K_res, K_commute, K_retail, K_school,
  slot_fracs_res, slot_fracs_commute, slot_fracs_retail, slot_fracs_school) = \
     solve_scales(m_res, m_commute, m_retail, m_school)
+K_sch = sum(K_school.values())             # total school scale (display / compat)
 K = K_res + K_commute + K_retail + K_sch   # total scale (display / backward compat)
+# Per-obs combined-school helpers for the display/fit table (each level its own K, m, temporal f).
+def _sch_fs(lvl, sk):
+    return slot_fracs_school[lvl].get(sk, slot_prior[sk][5][lvl]) if sk is not None else 0.0
+def _sch_hourly(i, sk): return sum(K_school[l] * m_school[l][i] * _sch_fs(l, sk) for l in SCHOOL_LEVELS)
+def _sch_aadt(i):       return sum(K_school[l] * m_school[l][i] for l in SCHOOL_LEVELS)
+def _sch_mf(i, sk):     return sum(m_school[l][i] * _sch_fs(l, sk) for l in SCHOOL_LEVELS)
+def _sch_m(i):          return sum(m_school[l][i] for l in SCHOOL_LEVELS)
 # f pinned at the NTS profile → constant fraction vectors; the f-prior/coupling
 # penalty is identically zero and is dropped (see objective()).
 _pred = (K_res * m_res * obs_Th * _obs_f_r
          + K_commute * m_commute * obs_Th * _obs_f_c
-         + K_retail * m_retail * obs_Th * _obs_f_t
-         + K_sch * m_school * obs_Th * _obs_f_s)
+         + K_retail * m_retail * obs_Th * _obs_f_t)
+for lvl in SCHOOL_LEVELS:
+    _pred = _pred + K_school[lvl] * m_school[lvl] * obs_Th * _obs_f_s[lvl]
 _resid    = _pred - obs_rhs_arr
 chi2_data = float((_gauss_w_arr * _resid) @ _resid)
 _pred_w   = np.maximum(_pred[_walk_slotted], 1e-30)
@@ -1056,34 +1086,32 @@ for i, (kind, target, links, _obs, _sig, Ts) in enumerate(observations):
             f_r = slot_fracs_res.get(sk,     slot_prior[sk][2])
             f_c = slot_fracs_commute.get(sk, slot_prior[sk][3])
             f_t = slot_fracs_retail.get(sk,  slot_prior[sk][4])
-            f_s = slot_fracs_school.get(sk,  slot_prior[sk][5])
             mod_eff[i] = (K_res * m_res[i] * Th * f_r
                           + K_commute * m_commute[i] * Th * f_c
                           + K_retail * m_retail[i] * Th * f_t
-                          + K_sch * m_school[i] * Th * f_s)
+                          + _sch_hourly(i, sk) * Th)
         else:
             mod_eff[i] = (K_res * m_res[i] + K_commute * m_commute[i]
-                          + K_retail * m_retail[i] + K_sch * m_school[i]) * Th
+                          + K_retail * m_retail[i] + _sch_aadt(i)) * Th
     else:  # walking: show as vehicles/hour using slot fraction
         n_eff_i = obs_rhs_arr[i]
         if sk is not None and Th > 0 and n_eff_i > 0:
             f_r = slot_fracs_res.get(sk,     slot_prior[sk][2])
             f_c = slot_fracs_commute.get(sk, slot_prior[sk][3])
             f_t = slot_fracs_retail.get(sk,  slot_prior[sk][4])
-            f_s = slot_fracs_school.get(sk,  slot_prior[sk][5])
-            m_r_i, m_c_i, m_t_i, m_s_i = m_res[i], m_commute[i], m_retail[i], m_school[i]
-            raw_wtd = m_r_i * f_r + m_c_i * f_c + m_t_i * f_t + m_s_i * f_s
-            denom   = m_r_i + m_c_i + m_t_i + m_s_i
-            f_eff   = raw_wtd / denom if denom > 0 else (f_r + f_c + f_t + f_s) / 4
+            m_r_i, m_c_i, m_t_i = m_res[i], m_commute[i], m_retail[i]
+            raw_wtd = m_r_i * f_r + m_c_i * f_c + m_t_i * f_t + _sch_mf(i, sk)
+            denom   = m_r_i + m_c_i + m_t_i + _sch_m(i)
+            f_eff   = raw_wtd / denom if denom > 0 else (f_r + f_c + f_t) / 3
             obs_eff[i] = n_eff_i / (Th * f_eff)
             sig_eff[i] = math.sqrt(n_eff_i) / (Th * f_eff)
             mod_eff[i] = (K_res * m_r_i + K_commute * m_c_i
-                          + K_retail * m_t_i + K_sch * m_s_i)   # combined AADT
+                          + K_retail * m_t_i + _sch_aadt(i))   # combined AADT
         else:
             obs_eff[i] = n_eff_i / max(Th, 1e-9)
             sig_eff[i] = math.sqrt(n_eff_i) / max(Th, 1e-9)
             mod_eff[i] = (K_res * m_res[i] + K_commute * m_commute[i]
-                          + K_retail * m_retail[i] + K_sch * m_school[i])
+                          + K_retail * m_retail[i] + _sch_aadt(i))
 resid = np.where(sig_eff > 0, (mod_eff - obs_eff) / sig_eff, 0.0)
 
 elapsed = time.time() - t0
@@ -1095,10 +1123,11 @@ phi_ret_out = K_retail  / K_tot if K_tot > 0 else 0.0
 phi_sch_out = K_sch     / K_tot if K_tot > 0 else 0.0
 print(f"  K_res={K_res:.4e}  K_commute={K_commute:.4e}  K_retail={K_retail:.4e}"
       f"  K_sch={K_sch:.4e}  (K={K:.4e})")
+print("  K_school: " + "  ".join(f"{lvl}={K_school[lvl]:.4e}" for lvl in SCHOOL_LEVELS))
 print(f"  phi_commute={phi_com_out:.3f}  phi_retail={phi_ret_out:.3f}  phi_sch={phi_sch_out:.3f}")
 print(f"  willingness τ (s): res={TAU_res:.0f}  commute={TAU_commute:.0f}  retail={TAU_retail:.0f}{_theta_str}")
 if _has_school:
-    print(f"  TAU_school={TAU_school:.0f}s  (school magnitude = K_sch)")
+    print(f"  TAU_school={TAU_school:.0f}s  (shared across the 3 school levels)")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -1110,19 +1139,17 @@ if prev_chi2_per_n is not None:
 # ── Per-slot fraction table ───────────────────────────────────────────────────
 
 _DT_NAMES = {0: "Wkday", 1: "Sat", 2: "Sun"}
-print(f"\n  Per-slot hourly fractions (res / commute / retail / school vs NTS priors):")
+print(f"\n  Per-slot hourly fractions (res / commute / retail / school[prim/postp/tert] vs NTS):")
 print(f"  {'Type':<5}  {'Hr':>2}  {'PriorAgg':>9}  {'f_res':>9}  {'f_com':>9}  {'f_ret':>9}"
-      f"  {'f_sch':>9}  N")
+      f"  {'f_scP':>8}  {'f_scPP':>8}  {'f_scT':>8}  N")
 for sk in sorted(slot_fracs_res):
-    dt, h                          = sk
-    mfa, std_f, mfr, mfc, mft, mfs = slot_prior[sk]
-    f_r                            = slot_fracs_res[sk]
-    f_c                            = slot_fracs_commute[sk]
-    f_t                            = slot_fracs_retail[sk]
-    f_s                            = slot_fracs_school[sk]
-    n_in_slot                      = len(slot_groups.get(sk, []))
+    dt, h     = sk
+    mfa       = slot_prior[sk][0]
+    f_r       = slot_fracs_res[sk]; f_c = slot_fracs_commute[sk]; f_t = slot_fracs_retail[sk]
+    fsc       = [slot_fracs_school[lvl].get(sk, 0.0) for lvl in SCHOOL_LEVELS]
+    n_in_slot = len(slot_groups.get(sk, []))
     print(f"  {_DT_NAMES[dt]:<5}  {h:>2d}  {mfa:>9.6f}  {f_r:>9.6f}  {f_c:>9.6f}  {f_t:>9.6f}"
-          f"  {f_s:>9.6f}  {n_in_slot}")
+          f"  {fsc[0]:>8.5f}  {fsc[1]:>8.5f}  {fsc[2]:>8.5f}  {n_in_slot}")
 
 # ── Goodness-of-fit table (sorted by |z|) ────────────────────────────────────
 
@@ -1145,7 +1172,8 @@ tuned = {
     "K_res":     float(K_res),     # K spans many orders of magnitude — round(x,6) zeroes sub-µ values
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
-    "K_sch":     float(K_sch),
+    "K_sch":     float(K_sch),                       # total (display/compat)
+    **{f"K_{lvl}": float(K_school[lvl]) for lvl in SCHOOL_LEVELS},
     "TAU_res":           round(TAU_res, 4),
     "TAU_commute":   round(TAU_commute, 4),
     "TAU_retail":    round(TAU_retail, 4),
@@ -1154,7 +1182,9 @@ tuned = {
     "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
     "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
-    "slot_fracs_school":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
+    **{f"slot_fracs_school_{lvl}":
+       {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school[lvl].items()}
+       for lvl in SCHOOL_LEVELS},
     "chi2":       round(chi2, 3),
     "chi2_per_n": round(chi2_per_n, 4),
     "n_obs":      n_obs,
@@ -1222,7 +1252,8 @@ params = {
     "K_res":     float(K_res),
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
-    "K_sch":     float(K_sch),
+    "K_sch":     float(K_sch),                       # total (display/compat)
+    **{f"K_{lvl}": float(K_school[lvl]) for lvl in SCHOOL_LEVELS},
     "TAU_res":           round(TAU_res, 4),
     "TAU_commute":   round(TAU_commute, 4),
     "TAU_retail":    round(TAU_retail, 4),
@@ -1231,7 +1262,9 @@ params = {
     "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
     "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
-    "slot_fracs_school":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school.items()},
+    **{f"slot_fracs_school_{lvl}":
+       {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_school[lvl].items()}
+       for lvl in SCHOOL_LEVELS},
 }
 
 history_entry = {
@@ -1255,7 +1288,7 @@ history_entry = {
         "K_prior_std_res":      k_prior_std_res,
         "K_prior_std_commute":  k_prior_std_commute,
         "K_prior_std_retail":   k_prior_std_retail,
-        "K_prior_std_school":   k_prior_std_school,
+        **{f"K_prior_std_school_{lvl}": k_prior_std_school[lvl] for lvl in SCHOOL_LEVELS},
         "gravity_lambda":       grav_lam_raw,
         "lambda":               lam,
         "fast":                 fast,
@@ -1263,8 +1296,8 @@ history_entry = {
     },
     "initial_gravity": {k: round(v, 6) for k, v in initial_gravity.items()},
     "slot_prior": {
-        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8),
-                      round(mfc, 8), round(mft, 8), round(mfs, 8)]
+        f"{dt},{h}": [round(mfa, 8), round(std_f, 8), round(mfr, 8), round(mfc, 8),
+                      round(mft, 8), {lvl: round(mfs[lvl], 8) for lvl in SCHOOL_LEVELS}]
         for (dt, h), (mfa, std_f, mfr, mfc, mft, mfs) in slot_prior.items()
     },
     "observations": [
