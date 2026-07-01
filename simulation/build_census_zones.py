@@ -77,12 +77,10 @@ dea = pd.concat([dea_gdf, lea_gdf], ignore_index=True)
 _supply = census_supply.load_supply()
 dz["commute_producers"] = dz["area_code"].map(lambda c: _supply.get(c, {}).get("commute", 0.0))
 # School producers come from census_school_producers (per-level primary/post-primary/tertiary),
-# replacing the lumped census_supply "school" + its childcare subtraction. Total = sum of levels.
+# replacing the lumped census_supply "school" + its childcare subtraction. Per-level only.
 _school_prod = census_school_producers.load_school_producers()
 for _lvl in ("primary", "postprimary", "tertiary"):
     dz["school_prod_" + _lvl] = dz["area_code"].map(lambda c, _l=_lvl: _school_prod.get(c, {}).get(_l, 0.0))
-dz["school_producers"] = (dz["school_prod_primary"] + dz["school_prod_postprimary"]
-                          + dz["school_prod_tertiary"])
 _n_missing = int((~dz["area_code"].isin(_supply)).sum())
 print(f"Producers: matched {len(dz) - _n_missing}/{len(dz)} small areas to census_supply"
       + (f" — {_n_missing} unmatched (treated as 0)" if _n_missing else ""))
@@ -187,7 +185,6 @@ for _, row in sdz_external.iterrows():
         "workplace_pop":  int(round(wp)),
         "commute_attractor": int(round(child_sa["commute_attractor"].sum())),
         "commute_producers": int(round(child_sa["commute_producers"].sum())),
-        "school_producers":  int(round(child_sa["school_producers"].sum())),
         "school_producers_primary":     int(round(child_sa["school_prod_primary"].sum())),
         "school_producers_postprimary": int(round(child_sa["school_prod_postprimary"].sum())),
         "school_producers_tertiary":    int(round(child_sa["school_prod_tertiary"].sum())),
@@ -219,7 +216,6 @@ for _, row in orphan_sa.iterrows():
         "workplace_pop":  int(round(row["workplace_pop"])),
         "commute_attractor": int(round(row["commute_attractor"])),
         "commute_producers": int(round(row["commute_producers"])),
-        "school_producers":  int(round(row["school_producers"])),
         "school_producers_primary":     int(round(row["school_prod_primary"])),
         "school_producers_postprimary": int(round(row["school_prod_postprimary"])),
         "school_producers_tertiary":    int(round(row["school_prod_tertiary"])),
@@ -239,7 +235,6 @@ for _, row in dea_external.iterrows():
     wp  = child_sa["workplace_pop"].sum()
     cattr = child_sa["commute_attractor"].sum()
     cprod = child_sa["commute_producers"].sum()
-    sprod = child_sa["school_producers"].sum()
     sprod_p  = child_sa["school_prod_primary"].sum()
     sprod_pp = child_sa["school_prod_postprimary"].sum()
     sprod_t  = child_sa["school_prod_tertiary"].sum()
@@ -247,7 +242,7 @@ for _, row in dea_external.iterrows():
         cx, cy = row.geometry.centroid.x, row.geometry.centroid.y
         lon, lat = to_wgs.transform(cx, cy)
         utm_x, utm_y = cx, cy
-        pop, wp, cattr, cprod, sprod = 0, 0, 0, 0, 0
+        pop, wp, cattr, cprod = 0, 0, 0, 0
         sprod_p = sprod_pp = sprod_t = 0
     else:
         lat, lon, utm_x, utm_y = weighted_centroid_wgs(
@@ -264,7 +259,6 @@ for _, row in dea_external.iterrows():
         "workplace_pop":  int(round(wp)),
         "commute_attractor": int(round(cattr)),
         "commute_producers": int(round(cprod)),
-        "school_producers":  int(round(sprod)),
         "school_producers_primary":     int(round(sprod_p)),
         "school_producers_postprimary": int(round(sprod_pp)),
         "school_producers_tertiary":    int(round(sprod_t)),
@@ -275,7 +269,11 @@ print(f"  Total external pop: {sum(n['population'] for n in external_nodes):,}")
 print(f"  Total external wp:  {sum(n['workplace_pop'] for n in external_nodes):,}")
 print(f"  Total external commute attractor: {sum(n['commute_attractor'] for n in external_nodes):,}")
 print(f"  Total external commute producers: {sum(n['commute_producers'] for n in external_nodes):,}")
-print(f"  Total external school producers:  {sum(n['school_producers'] for n in external_nodes):,}")
+print(f"  Total external school producers:  "
+      f"{sum(n['school_producers_primary'] + n['school_producers_postprimary'] + n['school_producers_tertiary'] for n in external_nodes):,} "
+      f"(primary {sum(n['school_producers_primary'] for n in external_nodes):,} / "
+      f"post-primary {sum(n['school_producers_postprimary'] for n in external_nodes):,} / "
+      f"tertiary {sum(n['school_producers_tertiary'] for n in external_nodes):,})")
 
 # ── External retail demand: estimated parking spaces per zone ─────────────────
 # Sum parking_demand.parking_spaces over every parking polygon whose centroid falls
@@ -346,14 +344,14 @@ _sjoin = gpd.sjoin(_sch[[*_cols, "geometry"]], _zones_gdf, how="inner", predicat
 _by_zone = _sjoin.groupby("id")[_cols].sum()
 _school_by_zone = _by_zone["enrolment"].to_dict()
 _lvl_by_zone = {c: _by_zone[c].to_dict() for c in LEVEL_ENROL_COLS}
-for n in external_nodes:
-    n["school_demand"] = round(float(_school_by_zone.get(n["id"], 0.0)), 1)  # total (back-compat)
-    for c in LEVEL_ENROL_COLS:                          # school_demand_primary/postprimary/tertiary
+for n in external_nodes:                                 # school_demand_primary/postprimary/tertiary
+    for c in LEVEL_ENROL_COLS:
         n["school_demand_" + c.split("_", 1)[1]] = round(float(_lvl_by_zone[c].get(n["id"], 0.0)), 1)
+_sch_tot = lambda n: n["school_demand_primary"] + n["school_demand_postprimary"] + n["school_demand_tertiary"]
 print(f"  {len(_sch)} school POIs, {sum(_school_by_zone.values()):,.0f} pupils "
       f"matched into {len(_school_by_zone)} zones")
-print(f"  {sum(1 for n in external_nodes if n['school_demand'] == 0)} zones with no mapped school (school_demand=0)")
-print(f"  Total external school demand: {sum(n['school_demand'] for n in external_nodes):,.0f} pupils "
+print(f"  {sum(1 for n in external_nodes if _sch_tot(n) == 0)} zones with no mapped school")
+print(f"  Total external school demand: {sum(_sch_tot(n) for n in external_nodes):,.0f} pupils "
       f"(primary {sum(n['school_demand_primary'] for n in external_nodes):,.0f} / "
       f"post-primary {sum(n['school_demand_postprimary'] for n in external_nodes):,.0f} / "
       f"tertiary {sum(n['school_demand_tertiary'] for n in external_nodes):,.0f})")
