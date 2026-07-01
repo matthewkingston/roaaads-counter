@@ -61,6 +61,8 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from purpose_mapping import COMPONENT_PURPOSES, LEISURE_RETAIL_FRAC, CANONICAL_PURPOSES
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "simulation"))
+import census_school_producers   # island_enrolment_by_level() — for the per-level school ρ split
 
 NTS0409_FILE = "data/nts0409.ods"
 OUT_FILE     = "analysis/generation_rates.json"
@@ -117,6 +119,19 @@ def main():
     rates = {comp: sum(w * purpose_rates[p] for p, w in terms)
              for comp, terms in COMPONENT_PURPOSES.items()}
 
+    # Split the single "school" component into primary/post-primary/tertiary, each with its OWN
+    # generation rate = ρ_school × that level's island enrolment share.  Frozen here as three
+    # explicit constants (enrolment from the admin school cache via census_school_producers — the
+    # same source the attractor uses), so each level is a fully independent component: later
+    # changing one level's data never shifts another's ρ.  The three sum to ρ_school (education
+    # generation is conserved), so the component-partition sanity check below still holds.
+    _enrol = census_school_producers.island_enrolment_by_level()      # {primary, postprimary, tertiary}
+    _e_tot = sum(_enrol.values())
+    _school_shares = {lvl: _enrol[lvl] / _e_tot for lvl in ("primary", "postprimary", "tertiary")}
+    _rho_school = rates.pop("school")
+    for lvl, share in _school_shares.items():
+        rates["school_" + lvl] = _rho_school * share
+
     # Sanity: components should partition All purposes (vehicle modes only).
     total_comp = sum(rates.values())
     allp = purpose_rate("All purposes")
@@ -137,6 +152,7 @@ def main():
                 "Personal business -> retail",
                 f"Leisure split {LEISURE_RETAIL_FRAC} retail / {1 - LEISURE_RETAIL_FRAC} res",
             ],
+            "school_split_by_enrolment": {lvl: round(s, 4) for lvl, s in _school_shares.items()},
         },
         "rates": rates,
         "purpose_rates": purpose_rates,
@@ -147,8 +163,10 @@ def main():
     print(f"\nVehicle-driver generation rates (/person/day, {NTS_YEARS} avg, "
           f"{'+'.join(VEHICLE_MODES)}):")
     for comp, r in rates.items():
-        print(f"  {comp:8s} {r:.4f}  ({r / total_comp * 100:4.1f}%)")
-    print(f"  {'total':8s} {total_comp:.4f}")
+        print(f"  {comp:16s} {r:.4f}  ({r / total_comp * 100:4.1f}%)")
+    print(f"  {'total':16s} {total_comp:.4f}")
+    print(f"  school split by enrolment share: "
+          + ", ".join(f"{lvl} {s:.3f}" for lvl, s in _school_shares.items()))
     print(f"\nSaved → {OUT_FILE}")
 
 

@@ -344,19 +344,24 @@ def _modesub_kernel(d, TAU):
         return driveshare(equiv_miles(d)) * np.exp(-d / TAU)
 
 
+SCHOOL_LEVELS = ("primary", "postprimary", "tertiary")   # the three independent school components
+
+
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
-                         w_pop, w_workplace, w_retail, w_school,
+                         w_pop, w_workplace, w_retail,
                          TAU_res, TAU_commute, TAU_retail,
                          TAU_school=None, with_school=False,
+                         w_school_levels=None, w_school_prod_levels=None,
                          self_src=None, self_dist=None, self_w=None,
-                         w_commute_prod=None, w_school_prod=None,
+                         w_commute_prod=None,
                          gen_scale=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
-    Returns (t_res, t_commute, t_retail, t_sch), each a float64 array parallel to
-    od_src/od_dst.  These are the per-pair flows BEFORE the K_res/K_commute/
-    K_retail/K_sch scaling; the caller scatters them onto links (all links, or
-    observed rows only) and applies K.
+    Returns (t_res, t_commute, t_retail, t_sch_by_level), where the first three are
+    float64 arrays parallel to od_src/od_dst and t_sch_by_level is a dict
+    {level: array} over SCHOOL_LEVELS (primary/post-primary/tertiary).  These are the
+    per-pair flows BEFORE the K_res/K_commute/K_retail/K_<level> scaling; the caller
+    scatters them onto links (all links, or observed rows only) and applies K.
 
     The commute and retail components are independent clones of the school
     component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
@@ -396,8 +401,6 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     gs_com_ret = gs.get("com_ret", 1.0)
     gs_ret_out = gs.get("ret_out", 1.0)
     gs_ret_ret = gs.get("ret_ret", 1.0)
-    gs_sch_out = gs.get("sch_out", 1.0)
-    gs_sch_ret = gs.get("sch_ret", 1.0)
 
     F_res = _modesub_kernel(od_dist, TAU_res)
     F_com = _modesub_kernel(od_dist, TAU_commute)
@@ -450,29 +453,40 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         + gs_ret_ret * ret_s * pop_d * iD_ret_pop[src]        # shop i → home j        (attraction pop)
     )
 
-    if with_school and w_school is not None and w_school.sum() > 0:
+    # School: three INDEPENDENT components (primary / post-primary / tertiary), each a symmetric
+    # two-leg pop↔school split with its OWN producer, attractor, generation scale and K.  The only
+    # shared piece is the willingness kernel TAU_school (the settled single-τ design).  The return
+    # leg's pop-side denominator (iD_sch_pop = Σ_k pop_k·F_sch) is identical across levels (same
+    # kernel + same pop attractor), so it's computed once — a mathematical identity, not a coupling:
+    # changing a level's attractor only moves that level's own out-leg denominator iD_sch_sch.
+    t_sch_by_level = {lvl: np.zeros(len(src), dtype=np.float64) for lvl in SCHOOL_LEVELS}
+    if with_school and w_school_levels:
         F_sch = _modesub_kernel(od_dist, TAU_school)
         F_sch_self = _modesub_kernel(self_dist, TAU_school) if _has_self else None
-        sch_s = w_school[src]; sch_d = w_school[dst]
-        iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop,    F_sch_self)   # school-cross leg school→pop: attraction = pop
-        iD_sch_sch = _inv_denom(sch_d, F_sch, w_school, F_sch_self)   # school-cross leg pop→school: attraction = school
-        # Home→school producer = resident students (node_school_producers) when supplied,
-        # else falls back to population (legacy behaviour).
-        schprod_s = (w_school_prod[src] if w_school_prod is not None else pop_s)
-        t_sch = F_sch * (
-            gs_sch_out * schprod_s * sch_d * iD_sch_sch[src]   # students i → school j  (attraction school)
-            + gs_sch_ret * sch_s * pop_d * iD_sch_pop[src]     # school i → pop j        (attraction pop)
-        )
-    else:
-        t_sch = np.zeros(len(src), dtype=np.float64)
+        iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop, F_sch_self)   # return leg school→pop: attraction = pop
+        for lvl in SCHOOL_LEVELS:
+            w_sch = w_school_levels.get(lvl)
+            if w_sch is None or w_sch.sum() <= 0:
+                continue
+            sch_s = w_sch[src]; sch_d = w_sch[dst]
+            iD_sch_sch = _inv_denom(sch_d, F_sch, w_sch, F_sch_self)   # out leg pop→school: attraction = this level's school
+            prod = w_school_prod_levels.get(lvl) if w_school_prod_levels else None
+            schprod_s = (prod[src] if prod is not None else pop_s)     # producer = resident students of this level
+            gs_out = gs.get(f"sch_{lvl}_out", 1.0)
+            gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
+            t_sch_by_level[lvl] = F_sch * (
+                gs_out * schprod_s * sch_d * iD_sch_sch[src]   # students i → school j  (attraction school)
+                + gs_ret * sch_s * pop_d * iD_sch_pop[src]     # school i → pop j        (attraction pop)
+            )
 
-    return t_res, t_commute, t_retail, t_sch
+    return t_res, t_commute, t_retail, t_sch_by_level
 
 
 def load_generation_rates(path=GENERATION_RATES):
     """Per-component vehicle-driver trips/person/day from analysis/generation_rates.json
-    (written by analysis/derive_generation_rates.py).  Returns {commute,retail,school,res}
-    or None if the file is absent (⇒ caller skips generation pinning, K_c unpinned)."""
+    (written by analysis/derive_generation_rates.py).  Returns {commute, retail, res,
+    school_primary, school_postprimary, school_tertiary} or None if the file is absent
+    (⇒ caller skips generation pinning, K_c unpinned)."""
     if not os.path.exists(path):
         print(f"  [gen-rates] {path} not found — generation NOT pinned (run "
               f"analysis/derive_generation_rates.py)")
@@ -488,13 +502,18 @@ def compute_generation_scales(node_weights, rates, verbose=False):
     node_weights : the loaded node_weights(_reduced).json dict.  The producer layers
         are summed island-wide (the external census nodes tile the whole island), so
         the per-capita anchors recompute automatically for any CENTRE.
-    rates        : {commute,retail,school,res} per-person/day (load_generation_rates()).
+    rates        : {commute, retail, res, school_primary, school_postprimary,
+        school_tertiary} per-person/day (load_generation_rates()).
 
     Returns the gen_scale dict consumed by constrained_od_flows:
-        {res, com_out, com_ret, ret_out, ret_ret, sch_out, sch_ret}.
+        {res, com_out, com_ret, ret_out, ret_ret,
+         sch_primary_out/ret, sch_postprimary_out/ret, sch_tertiary_out/ret}.
     Two-leg directions carry ρ_c/2; res is single-leg (full ρ_res, both directions are
-    separate OD pairs).  Per-producer rate r = (ρ_c·share)/k with island anchor
+    separate OD pairs).  Per-producer rate r = (ρ_c/2)/k with island anchor
     k = Σ(producer layer)/Σ(population) over all nodes (k=1 when producer = population).
+    Each of the three school levels is fully independent: its own ρ (from
+    generation_rates.json), its own producer/attractor layers, its own k-anchors and
+    scales — a change to one level never touches another's.
     """
     def _sum(layer):
         return float(sum(node_weights.get(layer, {}).values()))
@@ -507,9 +526,10 @@ def compute_generation_scales(node_weights, rates, verbose=False):
         "k_commuters": _sum("node_commute_producers")  / pop_tot,
         "k_jobs":      _sum("node_commute_attractor")   / pop_tot,
         "k_retail":    _sum("node_retail_spaces")     / pop_tot,
-        "k_students":  _sum("node_school_producers")  / pop_tot,
-        "k_enrolment": _sum("node_school_demand")     / pop_tot,
     }
+    for lvl in SCHOOL_LEVELS:
+        anchors[f"k_students_{lvl}"]  = _sum(f"node_school_producers_{lvl}") / pop_tot
+        anchors[f"k_enrolment_{lvl}"] = _sum(f"node_school_demand_{lvl}")    / pop_tot
     for name, k in anchors.items():
         if k <= 0:
             raise ValueError(f"compute_generation_scales: island anchor {name} ≤ 0 "
@@ -521,9 +541,11 @@ def compute_generation_scales(node_weights, rates, verbose=False):
         "com_ret": (rates["commute"] / 2) / anchors["k_jobs"],
         "ret_out": (rates["retail"]  / 2),                    # producer = population, k=1
         "ret_ret": (rates["retail"]  / 2) / anchors["k_retail"],
-        "sch_out": (rates["school"]  / 2) / anchors["k_students"],
-        "sch_ret": (rates["school"]  / 2) / anchors["k_enrolment"],
     }
+    for lvl in SCHOOL_LEVELS:
+        rho = rates[f"school_{lvl}"]
+        gen_scale[f"sch_{lvl}_out"] = (rho / 2) / anchors[f"k_students_{lvl}"]
+        gen_scale[f"sch_{lvl}_ret"] = (rho / 2) / anchors[f"k_enrolment_{lvl}"]
     if verbose:
         print(f"  [gen-scale] island pop {pop_tot:,.0f}; anchors "
               + ", ".join(f"{n}={v:.4f}" for n, v in anchors.items()))
@@ -606,28 +628,28 @@ _AADT_DAY_WEIGHT = {0: 5, 1: 1, 2: 1}
 
 
 def aadt_weights(slot_fracs_res, slot_fracs_commute, slot_fracs_retail,
-                 slot_fracs_school=None):
+                 slot_fracs_school_levels=None):
     """Per-component AADT weights for converting a pre-K component flow to a daily total.
 
     The annual-average daily contribution of component c is K_c·m_c·W_c with
         W_c = (5·Σ_h f_c[weekday,h] + Σ_h f_c[Sat,h] + Σ_h f_c[Sun,h]) / 7,
     the day-type-weighted sum of the component's hourly fractions.
 
-    The temporal profiles (derive_component_profiles.py) are now per-component SHAPES,
+    The temporal profiles (derive_component_profiles.py) are per-component SHAPES,
     each normalised so **W_c ≈ 1** (decoupled from magnitude, which generation pins) —
     so K_c·m_c is itself ≈ the component's daily AADT, and the combined daily AADT is
-    Σ_c K_c·m_c·W_c.  (Pre-decoupling the components partitioned the aggregate profile,
-    so the four W_c summed to ≈1 instead of each being ≈1.)
+    Σ_c K_c·m_c·W_c.
 
-    Returns (W_res, W_commute, W_retail, W_sch).  Components with no slot_fracs
-    return 0.0.
+    Returns (W_res, W_commute, W_retail, W_school_by_level) where W_school_by_level is a
+    dict {level: W} over SCHOOL_LEVELS.  Components with no slot_fracs return 0.0.
     """
     def _w(sf):
         if not sf:
             return 0.0
         return sum(_AADT_DAY_WEIGHT.get(dt, 0) * f for (dt, h), f in sf.items()) / 7.0
-    return (_w(slot_fracs_res), _w(slot_fracs_commute),
-            _w(slot_fracs_retail), _w(slot_fracs_school))
+    sfl = slot_fracs_school_levels or {}
+    W_school = {lvl: _w(sfl.get(lvl)) for lvl in SCHOOL_LEVELS}
+    return (_w(slot_fracs_res), _w(slot_fracs_commute), _w(slot_fracs_retail), W_school)
 
 
 def _site_flow_components(flow_dicts, node, links):
@@ -649,9 +671,9 @@ def compute_chi2(link_flow_dict, label_fn=None,
                  link_aadt_file=LINK_AADT, exclude_links=EXCLUDE_LINKS,
                  official_hourly_file=OFFICIAL_HOURLY,
                  link_flow_commute_dict=None, link_flow_retail_dict=None,
-                 link_flow_school_dict=None,
+                 link_flow_school_dicts=None,
                  slot_fracs_res=None, slot_fracs_commute=None,
-                 slot_fracs_retail=None, slot_fracs_school=None):
+                 slot_fracs_retail=None, slot_fracs_school_levels=None):
     """
     Compute chi²/N matching the tuner's component formulation.
 
@@ -659,8 +681,9 @@ def compute_chi2(link_flow_dict, label_fn=None,
       link_flow_dict         — {(u,v): K_res * flow_res}
       link_flow_commute_dict — {(u,v): K_commute * flow_commute}
       link_flow_retail_dict  — {(u,v): K_retail  * flow_retail}
-      link_flow_school_dict  — {(u,v): K_school  * flow_school}  (optional)
-      slot_fracs_res/commute/retail/school — {(day_type, hour): f}
+      link_flow_school_dicts — {level: {(u,v): K_<level> * flow_<level>}}  (optional, per school level)
+      slot_fracs_res/commute/retail — {(day_type, hour): f};
+      slot_fracs_school_levels — {level: {(day_type, hour): f}}
       N_eff = N (temporal fractions pinned at NTS — no per-slot df consumed).
 
     Legacy mode (link_flow_commute_dict=None):
@@ -674,8 +697,11 @@ def compute_chi2(link_flow_dict, label_fn=None,
         comps = [(link_flow_dict,         slot_fracs_res),
                  (link_flow_commute_dict, slot_fracs_commute),
                  (link_flow_retail_dict,  slot_fracs_retail)]
-        if link_flow_school_dict is not None:
-            comps.append((link_flow_school_dict, slot_fracs_school))
+        if link_flow_school_dicts:                      # one comp per active school level
+            _sfl = slot_fracs_school_levels or {}
+            for lvl in SCHOOL_LEVELS:
+                if link_flow_school_dicts.get(lvl) is not None:
+                    comps.append((link_flow_school_dicts[lvl], _sfl.get(lvl)))
         return _compute_chi2_components(comps, label_fn, link_aadt_file,
                                         exclude_links, official_hourly_file)
     return _compute_chi2_legacy(link_flow_dict, label_fn, link_aadt_file, exclude_links)
