@@ -86,9 +86,9 @@ print()
 
 # Scalar gravity params: show before/after
 SCALAR_KEYS = [k for k in ("K", "K_res", "K_commute", "K_retail", "K_sch",
-                            "P", "ALPHA", "BETA",
-                            "P_commute", "ALPHA_commute", "P_retail", "ALPHA_retail",
-                            "THETA", "P_school", "ALPHA_school")
+                            "K_primary", "K_postprimary", "K_tertiary",
+                            "TAU_res", "TAU_commute", "TAU_retail", "TAU_school",
+                            "THETA")
                if k in params]
 if SCALAR_KEYS:
     print(f"  {'param':<8}  {'before':>14}  {'after':>14}")
@@ -102,7 +102,8 @@ if SCALAR_KEYS:
 n_slot_r = len(params.get("slot_fracs_res",     {}))
 n_slot_c = len(params.get("slot_fracs_commute", {}))
 n_slot_t = len(params.get("slot_fracs_retail",  {}))
-n_slot_s = len(params.get("slot_fracs_school",  {}))
+n_slot_s = sum(len(params.get(f"slot_fracs_school_{lvl}", {}))
+               for lvl in ("primary", "postprimary", "tertiary"))
 if n_slot_r or n_slot_c or n_slot_t or n_slot_s:
     _sch_str = f" + {n_slot_s} school" if n_slot_s else ""
     print(f"\n  Slot fracs: {n_slot_r} res + {n_slot_c} commute + {n_slot_t} retail{_sch_str} slots")

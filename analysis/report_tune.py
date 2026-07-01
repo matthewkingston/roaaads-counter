@@ -364,7 +364,9 @@ def _section_slots(e):
     slot_fracs_res     = params.get("slot_fracs_res",     {})
     slot_fracs_commute = params.get("slot_fracs_commute", {})
     slot_fracs_retail  = params.get("slot_fracs_retail",  {})
-    slot_fracs_school  = params.get("slot_fracs_school",  {})
+    # School is three levels sharing one kernel; the f_sch column shows the primary-level
+    # shape as representative (matches build_map). Old single-school history still reads.
+    slot_fracs_school  = params.get("slot_fracs_school_primary", params.get("slot_fracs_school", {}))
     slot_prior         = e.get("slot_prior", {})
     _has_sch = bool(slot_fracs_school)
 
@@ -423,7 +425,7 @@ def _make_pull_plot(e, out_path):
     slot_fracs_res     = params.get("slot_fracs_res",     {})
     slot_fracs_commute = params.get("slot_fracs_commute", {})
     slot_fracs_retail  = params.get("slot_fracs_retail",  {})
-    slot_fracs_school  = params.get("slot_fracs_school",  {})
+    slot_fracs_school  = params.get("slot_fracs_school_primary", params.get("slot_fracs_school", {}))
     slot_prior         = e.get("slot_prior", {})
     _has_sch           = bool(slot_fracs_school)
 
@@ -449,7 +451,9 @@ def _make_pull_plot(e, out_path):
         if std_f <= 0 or math.isnan(std_f):
             continue
         for (_, pidx, sfd), mat in zip(comps, pull_mats):
-            prior_c = float(prior_vals[pidx])
+            pv = prior_vals[pidx]
+            # slot_prior position 5 (school) is now a per-level dict; take primary as representative.
+            prior_c = float(pv["primary"] if isinstance(pv, dict) else pv)
             f_c = sfd.get(sk_str)
             if f_c is not None and not math.isnan(prior_c):
                 mat[h, dt] = (f_c - prior_c) / std_f
