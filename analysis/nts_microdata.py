@@ -38,6 +38,12 @@ Quick tour (see ``python3 analysis/nts_microdata.py --help`` for the CLI):
     df = nts.load("trip", columns=[...], years=[2023, 2024])   # streamed, filtered
     for chunk in nts.iter_chunks("trip", columns=[...]): ...    # fold-your-own
     nts.weighted_counts(df, by="TripPurpose_B01ID")            # Σ W5 per group
+    nts.weighted_counts(df, "MainMode_B04ID", multiplier="JJXSC")   # NTS trip count
+    nts.effective_weight(df, "W5", multiplier=my_series)       # custom weighting
+
+Count conventions (JJXSC etc.) are opt-in, never implicit — the NTS trip count is
+``Σ(JJXSC×W5)`` (JJXSC grosses short walks ×7, zeroes series-of-calls), ~21% above
+``ΣW5`` in 2023-24; pass ``multiplier="JJXSC"`` (or a custom Series) to apply it.
 """
 
 from __future__ import annotations
@@ -343,20 +349,74 @@ def load(table: str, columns: Sequence[str] | None = None,
 
 # -------------------------------------------------------------- weighted aggregation
 
-def weighted_counts(df: pd.DataFrame, by: str | Sequence[str],
-                    weight: str | None = DEFAULT_WEIGHT,
-                    decode_labels: bool = True) -> pd.DataFrame:
-    """Σ(weight) per group of ``by`` (+ unweighted n).  ``weight=None`` -> plain n.
+def effective_weight(df: pd.DataFrame, weight: str | None = DEFAULT_WEIGHT,
+                     multiplier=None) -> pd.Series:
+    """Per-row effective weight = ``weight`` × ``multiplier`` (either side optional).
 
-    Generic groupby helper — knows nothing about which variable ``by`` is.  With
-    ``decode_labels`` it appends a label column for any coded ``by`` field.
+    The single primitive behind the weighted helpers, exposed so callers can build
+    their own aggregations (or feed a custom multiplier).
+
+    - ``weight``     : a column name (default ``W5``), or ``None`` for unweighted (1.0).
+    - ``multiplier`` : a **column name** (e.g. NTS's ``"JJXSC"`` — the documented
+      trip-count multiplier that grosses short walks ×7 and zeroes series-of-calls), OR
+      an array/Series aligned to ``df`` for **arbitrary custom logic** (build the
+      multiplier however you like — e.g. keep the ×7 short-walk grossing but retain
+      series-of-calls — and pass the resulting Series), OR ``None`` for ×1.
+
+    This module never applies ``JJXSC`` (or any count convention) implicitly; the
+    include/exclude/gross decision is the caller's, mirroring the special-code stance.
+    Missing named columns fail loud (``ValueError``) rather than silently defaulting.
+    """
+    if weight is None:
+        w = pd.Series(1.0, index=df.index)
+    elif weight in df.columns:
+        w = df[weight].astype(float)
+    else:
+        raise ValueError(f"weight column {weight!r} not in df "
+                         f"(pass weight=None for unweighted, or load it)")
+    if multiplier is None:
+        return w
+    if isinstance(multiplier, str):
+        if multiplier not in df.columns:
+            raise ValueError(f"multiplier column {multiplier!r} not in df")
+        m = df[multiplier].astype(float)
+    elif isinstance(multiplier, pd.Series):
+        m = multiplier.astype(float)
+    else:
+        m = pd.Series(multiplier, index=df.index).astype(float)
+    return w * m
+
+
+def _weight_label(weight, multiplier) -> str | None:
+    parts = []
+    if weight is not None:
+        parts.append(str(weight))
+    if multiplier is not None:
+        parts.append(multiplier if isinstance(multiplier, str) else "mult")
+    return "*".join(parts) if parts else None
+
+
+def weighted_counts(df: pd.DataFrame, by: str | Sequence[str],
+                    weight: str | None = DEFAULT_WEIGHT, multiplier=None,
+                    decode_labels: bool = True) -> pd.DataFrame:
+    """Σ(weight×multiplier) per group of ``by`` (+ unweighted n).
+
+    Generic groupby helper — knows nothing about which variable ``by`` is.  ``weight``
+    and ``multiplier`` are passed straight to :func:`effective_weight` (default plain
+    ``ΣW5``; ``weight=None`` -> plain n; ``multiplier="JJXSC"`` -> NTS trip count).
+    With ``decode_labels`` it appends a label column for any coded ``by`` field.
     """
     by_list = [by] if isinstance(by, str) else list(by)
-    g = df.groupby(by_list, dropna=False)
-    out = g.size().rename("n").to_frame()
-    if weight is not None and weight in df.columns:
-        out[weight] = g[weight].sum()
-    out = out.reset_index().sort_values(out.columns[-1], ascending=False)
+    val_name = _weight_label(weight, multiplier)
+    work = df[by_list].copy()
+    work["_n"] = 1
+    if val_name is not None:
+        work["_w"] = effective_weight(df, weight, multiplier).values
+    g = work.groupby(by_list, dropna=False)
+    out = g["_n"].sum().rename("n").to_frame()
+    if val_name is not None:
+        out[val_name] = g["_w"].sum()
+    out = out.reset_index().sort_values(val_name or "n", ascending=False)
     if decode_labels:
         for col in by_list:
             labels = value_labels(col)
@@ -375,12 +435,19 @@ def weighted_counts(df: pd.DataFrame, by: str | Sequence[str],
 
 
 def weighted_crosstab(df: pd.DataFrame, index: str, columns: str,
-                      weight: str | None = DEFAULT_WEIGHT) -> pd.DataFrame:
-    """Σ(weight) pivot of ``index`` × ``columns`` (unweighted counts if ``weight=None``)."""
-    if weight is not None and weight in df.columns:
-        return pd.pivot_table(df, index=index, columns=columns, values=weight,
-                              aggfunc="sum", fill_value=0.0)
-    return pd.crosstab(df[index], df[columns])
+                      weight: str | None = DEFAULT_WEIGHT,
+                      multiplier=None) -> pd.DataFrame:
+    """Σ(weight×multiplier) pivot of ``index`` × ``columns``.
+
+    ``weight``/``multiplier`` as in :func:`effective_weight` (``weight=None`` and
+    ``multiplier=None`` -> plain unweighted counts; ``multiplier="JJXSC"`` -> NTS trips).
+    """
+    if weight is None and multiplier is None:
+        return pd.crosstab(df[index], df[columns])
+    work = df[[index, columns]].copy()
+    work["_w"] = effective_weight(df, weight, multiplier).values
+    return pd.pivot_table(work, index=index, columns=columns, values="_w",
+                          aggfunc="sum", fill_value=0.0)
 
 
 # ---------------------------------------------------------------------------- CLI
@@ -404,6 +471,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     ap.add_argument("--n", type=int, default=15, help="rows for --head (default 15)")
     ap.add_argument("--counts", metavar="TABLE", help="weighted Σ(W5) counts by --by")
     ap.add_argument("--by", help="grouping variable(s) for --counts (comma-separated)")
+    ap.add_argument("--multiplier", help="per-row count multiplier for --counts, "
+                    "e.g. JJXSC (NTS trip count: short-walk ×7, series-of-calls ×0)")
     args = ap.parse_args(argv)
 
     cols = args.columns.split(",") if args.columns else None
@@ -428,9 +497,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         if not args.by:
             sys.exit("--counts needs --by VARIABLE")
         by = args.by.split(",")
-        need = list(dict.fromkeys(by + [DEFAULT_WEIGHT] + (["SurveyYear"] if fyears else [])))
+        extra = ([args.multiplier] if args.multiplier else []) + (["SurveyYear"] if fyears else [])
+        need = list(dict.fromkeys(by + [DEFAULT_WEIGHT] + extra))
         df = load(args.counts, columns=need, years=fyears)
-        _print_df(weighted_counts(df, by if len(by) > 1 else by[0]))
+        _print_df(weighted_counts(df, by if len(by) > 1 else by[0],
+                                  multiplier=args.multiplier))
 
     if not any([args.tables, args.vars, args.levels, args.years, args.head, args.counts]):
         ap.print_help()
