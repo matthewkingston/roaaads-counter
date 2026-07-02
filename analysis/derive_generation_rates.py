@@ -1,4 +1,4 @@
-"""Derive per-component vehicle-driver trip-generation rates from NTS0409a.
+"""Derive per-component vehicle-driver trip-generation rates from the NTS microdata.
 
 Writes analysis/generation_rates.json — the a-priori daily car-driver trip rate
 per person for each gravity component (commute / retail / school / res).  These
@@ -8,114 +8,99 @@ weight in vehicle-driver-trips/day means K_c·p_i = the node's daily trips.
 
 Source
 ------
-NTS0409a "Average number of trips by purpose and main mode (trips per person per
-year)", England (data/nts0409.ods, sheet NTS0409a_trips), averaged over 2023+2024.
+The NTS trip-level microdata (UKDS SN 5340), via ``analysis/nts_microdata.py``.
+This replaces the pre-aggregated NTS0409a table: the per-person/day rate is built
+directly from trip records (England, SurveyYear in YEARS), so the derivation is no
+longer bound to that table's fixed purpose × mode breakdown.  Reproduces the
+published NTS0409a rate to rounding (All-purposes veh-driver = 371.2 trips/person/yr).
+
+Rate = trips-per-person-per-day, computed the way NTS grosses NTS0409a:
+    numerator   = Σ(JJXSC × W5) over vehicle-driver trips        [diary-week trips]
+    denominator = Σ W2 over individuals (via their household W2)  [persons]
+    per day     = (numerator / denominator) / 7                  [diary week = 7 days]
+JJXSC is the NTS trip count (short walks ×7, series-of-calls ×0); W5 the trip weight
+(folds in the household weight); W2 the diary-sample person weight.
 
 Vehicle basis
 -------------
-The model calibrates against on-road *vehicle* counts, so we sum the modes that
-put one vehicle on the road per household-recorded trip:
-  Car or van driver + Motorcycle + Taxi or minicab.
-Buses are excluded (many passengers per vehicle; the driver is not a household
-trip).  Using the *driver* row makes it vehicles by construction (no occupancy
-correction) and means "Education or escort education" is already the adult escort
-(a child can't drive) — so no all-mode education down-weighting is needed.
+The model calibrates against on-road *vehicle* counts, so we keep the modes that
+put one vehicle on the road per household-recorded trip — MainMode_B04ID in
+{Car / van driver, Motorcycle, Taxi / minicab} (VEHICLE_MODE_CODES).  Using the
+*driver* mode makes it vehicles by construction (no occupancy correction), and
+"Education or escort education" is already the adult escort (a child can't drive).
 
 Purpose → component mapping  (JUDGMENT ALLOCATIONS — candidate error sources)
 ----------------------------------------------------------------------------
-The organising principle is the *attractor* each component offers:
+Trip purpose is TripPurpose_B04ID — the 8-category breakdown that matches NTS0409a's
+published columns 1:1 (B04_TO_CANON).  The organising principle is the *attractor*
+each component offers:
     commute → workplace (jobs)            retail → retail_spaces (PARKING = all
     school  → school places                        commercial / venue)
     res     → population (HOMES)
-NTS0409a cannot sub-split these purposes by car-driver mode, so the allocations
-below are deliberate modelling decisions, NOT data lookups.  They are the first
-thing to revisit if the fit is scrutinised:
+The allocations below (in purpose_mapping.COMPONENT_PURPOSES) are deliberate
+modelling decisions, the first thing to revisit if the fit is scrutinised:
 
   * Commuting        → commute   (pure home ↔ own workplace).
-  * Business         → RETAIL    (not commute): business visits go to commercial
-                                  premises captured by the parking proxy, not to
-                                  the workplace-jobs count.  Keeps commute pure.
-  * Personal business→ RETAIL    : services / banks / medical are commercial,
-                                  parking-attracted destinations.
+  * Business         → RETAIL    (commercial premises = parking, not the jobs count).
+  * Personal business→ RETAIL    (services / banks / medical = parking destinations).
   * Shopping         → retail.
   * Education/escort → school.
-  * Leisure          → SPLIT  LEISURE_RETAIL_FRAC to retail (venue: entertainment,
-                                  sport, holiday, day trip → parking) and the rest
-                                  to res (visit friends at home → pop↔pop).  The
-                                  0.5 split is the single largest assumption here —
-                                  leisure is the biggest bucket — and is a pure
-                                  judgment (no driver-mode sub-split is published).
+  * Leisure          → SPLIT  LEISURE_RETAIL_FRAC to retail (venue) and the rest to
+                                res (visit friends at home → pop↔pop).  The 0.5 split
+                                is the single largest assumption here.  (The finer
+                                TripPurpose_B01ID codes can data-derive this split —
+                                a planned improvement, not applied here.)
   * Other escort, Other → res    (residual discretionary, pop↔pop).
 
 Usage
 -----
   python3 analysis/derive_generation_rates.py
-Re-run whenever data/nts0409.ods changes or the purpose mapping is revised.
+Re-run whenever the microdata (data/NTS), the purpose mapping, or the enrolment
+split changes.
 """
 
 import json
 import os
 import sys
 
-import pandas as pd
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from purpose_mapping import COMPONENT_PURPOSES, LEISURE_RETAIL_FRAC, CANONICAL_PURPOSES
+import nts_microdata as nts
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "simulation"))
 import census_school_producers   # island_enrolment_by_level() — for the per-level school ρ split
 
-NTS0409_FILE = "data/nts0409.ods"
-OUT_FILE     = "analysis/generation_rates.json"
-NTS_YEARS    = [2023, 2024]
-VEHICLE_MODES = ["Car or van driver", "Motorcycle", "Taxi or minicab"]
-
-# Canonical purpose key (purpose_mapping.py) → NTS0409a column display name.
-# The purpose→component mapping itself lives in purpose_mapping.COMPONENT_PURPOSES
-# (shared with derive_component_profiles.py); here we only resolve the canonical
-# keys to this table's columns.
-NTS0409_COL = {
-    "commuting":         "Commuting",
-    "business":          "Business",
-    "education_escort":  "Education or escort education",
-    "shopping":          "Shopping",
-    "other_escort":      "Other escort",
-    "personal_business": "Personal business",
-    "leisure":           "Leisure",
-    "other":             "Other",
-}
+OUT_FILE = "analysis/generation_rates.json"
+YEARS = [2023, 2024]
+# MainMode_B04ID vehicle-driver modes: Car/van driver, Motorcycle, Taxi/minicab.
+VEHICLE_MODE_CODES = [3, 5, 12]
+# TripPurpose_B04ID (== NTS0409a's published purpose breakdown) → canonical purpose.
+B04_TO_CANON = {1: "commuting", 2: "business", 3: "education_escort", 4: "shopping",
+                5: "other_escort", 6: "personal_business", 7: "leisure", 8: "other"}
 
 
-def _resolve_col(df, name):
-    """Match an NTS purpose column, tolerating a trailing ' [note N]' suffix."""
-    hits = [c for c in df.columns if c == name or c.startswith(name + " [")]
-    if len(hits) != 1:
-        sys.exit(f"ERROR: column '{name}' matched {len(hits)} headers (expected 1)")
-    return hits[0]
+def _purpose_rates():
+    """{canonical_purpose: vehicle-driver trips/person/day} from the microdata."""
+    tr = nts.load("trip", columns=["SurveyYear", "MainMode_B04ID", "TripPurpose_B04ID",
+                                    "W5", "JJXSC"], years=YEARS)
+    veh = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)].copy()
+    veh["canon"] = veh.TripPurpose_B04ID.map(B04_TO_CANON)
+    if veh["canon"].isna().any():
+        bad = sorted(veh.loc[veh["canon"].isna(), "TripPurpose_B04ID"].unique())
+        sys.exit(f"ERROR: unmapped TripPurpose_B04ID codes {bad} — update B04_TO_CANON")
+    trips = veh.assign(w=veh.JJXSC * veh.W5).groupby("canon")["w"].sum()   # Σ(JJXSC×W5)/purpose
+
+    # Persons (diary sample): each individual weighted by their household's W2.
+    ind = nts.load("individual", columns=["SurveyYear", "HouseholdID"], years=YEARS)
+    hh = nts.load("household", columns=["SurveyYear", "HouseholdID", "W2"], years=YEARS)
+    persons = ind.merge(hh[["HouseholdID", "W2"]], on="HouseholdID", how="left")["W2"].sum()
+
+    # trips/person/day = (diary-week trips per person) / 7
+    return {p: float(trips.get(p, 0.0)) / persons / 7.0 for p in CANONICAL_PURPOSES}
 
 
 def main():
-    print(f"Loading {NTS0409_FILE} …")
-    df = pd.read_excel(NTS0409_FILE, sheet_name="NTS0409a_trips",
-                       header=5, engine="odf")
-    df.columns = [str(c).strip() for c in df.columns]
-    ycol, mcol = df.columns[0], df.columns[1]
-    df[ycol] = pd.to_numeric(df[ycol], errors="coerce")
-
-    sub = df[df[ycol].isin(NTS_YEARS)
-             & df[mcol].astype(str).str.strip().isin(VEHICLE_MODES)]
-    n_expected = len(NTS_YEARS) * len(VEHICLE_MODES)
-    if len(sub) != n_expected:
-        sys.exit(f"ERROR: expected {n_expected} (year×mode) rows, got {len(sub)} "
-                 f"— check years {NTS_YEARS} and modes {VEHICLE_MODES} exist")
-
-    # Per-person/day rate for an NTS0409a purpose column = Σ(year,mode) trips/yr ÷ n_years ÷ 365.
-    def purpose_rate(name):
-        col = _resolve_col(df, name)
-        return sub[col].astype(float).sum() / len(NTS_YEARS) / 365.0
-
-    # Per-canonical-purpose car-driver rate ρ_p (consumed by derive_component_profiles.py
-    # to ρ-weight each component's temporal-shape blend) and per-component rates.
-    purpose_rates = {p: purpose_rate(NTS0409_COL[p]) for p in CANONICAL_PURPOSES}
+    print("Deriving generation rates from the NTS microdata (data/NTS) …")
+    purpose_rates = _purpose_rates()
     rates = {comp: sum(w * purpose_rates[p] for p, w in terms)
              for comp, terms in COMPONENT_PURPOSES.items()}
 
@@ -132,19 +117,20 @@ def main():
     for lvl, share in _school_shares.items():
         rates["school_" + lvl] = _rho_school * share
 
-    # Sanity: components should partition All purposes (vehicle modes only).
+    # Sanity: components should partition all vehicle-driver trips (Σ over canonical purposes).
     total_comp = sum(rates.values())
-    allp = purpose_rate("All purposes")
-    if abs(total_comp - allp) > 1e-6:
-        print(f"  WARNING: component sum {total_comp:.4f} ≠ All purposes {allp:.4f} "
+    allp = sum(purpose_rates.values())
+    if abs(total_comp - allp) > 1e-9:
+        print(f"  WARNING: component sum {total_comp:.4f} ≠ all purposes {allp:.4f} "
               f"(diff {total_comp - allp:+.4f}/person/day)")
 
     out = {
         "_meta": {
-            "source": NTS0409_FILE,
-            "sheet": "NTS0409a_trips",
-            "years": NTS_YEARS,
-            "vehicle_modes": VEHICLE_MODES,
+            "source": "NTS microdata (UKDS SN 5340) via analysis/nts_microdata.py",
+            "years": YEARS,
+            "vehicle_mode_codes_B04": VEHICLE_MODE_CODES,
+            "trip_count_measure": "JJXSC (short walks ×7, series-of-calls ×0)",
+            "weights": "trips W5, persons W2",
             "leisure_retail_frac": LEISURE_RETAIL_FRAC,
             "units": "vehicle-driver trips per person per day",
             "judgment_allocations": [
@@ -160,8 +146,8 @@ def main():
     with open(OUT_FILE, "w") as f:
         json.dump(out, f, indent=2)
 
-    print(f"\nVehicle-driver generation rates (/person/day, {NTS_YEARS} avg, "
-          f"{'+'.join(VEHICLE_MODES)}):")
+    print(f"\nVehicle-driver generation rates (/person/day, {YEARS} avg, "
+          f"MainMode_B04ID {VEHICLE_MODE_CODES}):")
     for comp, r in rates.items():
         print(f"  {comp:16s} {r:.4f}  ({r / total_comp * 100:4.1f}%)")
     print(f"  {'total':16s} {total_comp:.4f}")
