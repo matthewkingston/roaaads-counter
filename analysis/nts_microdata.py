@@ -28,6 +28,13 @@ so nothing here filters them implicitly: loaders keep every row, :func:`weighted
 shows every code and adds a ``special`` flag column, and exclusion is an explicit,
 loud opt-in via :func:`drop_special`.
 
+**Missing in string columns is the literal ``"NA"``.**  Some columns are object/string
+(e.g. ``TripID``, ``LDJDistance``) and encode missing as the string ``"NA"``, which
+``isna()``/``notna()`` and naive ``!= 0`` checks silently treat as a value.  Use
+:func:`na_mask` for a correct null check, or :func:`clean_na` to convert the sentinels to
+real ``NaN``.  (Numeric coercion via ``pd.to_numeric(..., errors="coerce")`` also handles
+it — that's what the loaders' year filter relies on.)
+
 Quick tour (see ``python3 analysis/nts_microdata.py --help`` for the CLI):
 
     import nts_microdata as nts
@@ -74,6 +81,14 @@ _EXCEL_DIR = os.path.join(NTS_DIR, "mrdoc", "excel")
 # is only a *default* here — every weighted helper takes an overridable ``weight=``
 # argument; this module hard-codes no modelling weight choice.
 DEFAULT_WEIGHT = "W5"
+
+# Object/string columns in these .dta files encode missing as the literal string "NA"
+# (not null/NaN) — e.g. Trip.TripID, LDJ.TripID/LDJDistance are object columns with "NA"
+# for missing.  pandas' isna()/notna() and naive ``!= 0`` / ``.isin`` comparisons do NOT
+# treat "NA" as missing, so it silently reads as a real value.  These string tokens
+# (whitespace-stripped) are treated as missing by na_mask()/clean_na(), alongside real
+# NaN/None.  Distinct from the numeric code-book sentinels handled by special_codes().
+NA_STRINGS = frozenset({"NA", ""})
 
 
 def _resolve_root() -> None:
@@ -289,6 +304,45 @@ def decode(df: pd.DataFrame, columns: Sequence[str] | None = None,
         labels = value_labels(col)
         if labels:
             df[f"{col}{suffix}"] = df[col].map(labels)
+    return df
+
+
+# --------------------------------------------------------------------- missing values
+
+def na_mask(obj, na_strings: Iterable[str] = NA_STRINGS):
+    """Boolean 'is missing' mask for a Series or DataFrame, NA-**string**-aware.
+
+    True where a value is real NaN/None, OR (object/string columns only) equals one of
+    ``na_strings`` after stripping whitespace.  Handles the NTS convention where object
+    columns store missing as the literal ``"NA"`` — which ``isna()``/``notna()`` and
+    naive ``!= 0`` comparisons miss.  Numeric columns just get plain ``isna()``.
+    Use this instead of ``.notna()`` when null-checking a raw NTS object column.
+    """
+    if isinstance(obj, pd.DataFrame):
+        return obj.apply(lambda s: na_mask(s, na_strings))
+    s = obj
+    mask = s.isna()
+    if s.dtype == object:
+        stripped = s.astype(str).str.strip()          # real NaN -> "nan" (already in mask)
+        mask = mask | stripped.isin(set(na_strings))
+    return mask
+
+
+def clean_na(df: pd.DataFrame, columns: Sequence[str] | None = None,
+             na_strings: Iterable[str] = NA_STRINGS) -> pd.DataFrame:
+    """Return a copy of ``df`` with NA-string sentinels replaced by real ``NaN``.
+
+    After this, the affected object columns behave correctly under
+    ``isna()``/``notna()``/``dropna()``/``groupby(dropna=True)`` and numeric coercion.
+    Non-destructive.  ``columns=None`` cleans every object column; numeric columns are
+    left untouched.
+    """
+    df = df.copy()
+    cols = (columns if columns is not None
+            else [c for c in df.columns if df[c].dtype == object])
+    for col in cols:
+        if col in df.columns and df[col].dtype == object:
+            df.loc[na_mask(df[col], na_strings), col] = pd.NA
     return df
 
 
