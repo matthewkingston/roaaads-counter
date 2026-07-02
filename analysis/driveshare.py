@@ -1,146 +1,196 @@
-"""Vehicle-driver mode share as a function of trip length (miles).
+"""Vehicle-driver mode share as a function of trip length (miles), per component.
 
 The gravity kernel's short-range rise is *mode substitution*: short trips are
-walked, not driven, so car demand is suppressed at short cost — a mode/network
-property, shared across trip purposes and empirical, NOT a per-purpose "desire".
-`driveshare(d_miles)` is that factor; the kernel is
-    f(c) = driveshare(equiv_miles(c)) * exp(-c / tau_c)
+walked, not driven, so car demand is suppressed at short cost.  `driveshare(d, c)`
+is that factor for component `c`; the kernel is
+    f(c) = driveshare(equiv_miles(c), component) * exp(-c / tau_c)
 (see simulation/model.py `_modesub_kernel`; `equiv_miles` maps OSRM seconds→miles).
 
-Derived from DfT NTS0308a (trips by trip length × main mode, England, 2023/24),
-vehicle-driver modes = car/van driver + motorcycle + taxi/minicab (same set as the
-generation rates), as a share of all destination journeys, with three corrections:
+**Per-component curves.** The mode-substitution rise is *not* identical across trip
+purposes (a short commute is walked far more readily than a short residential run),
+so each component gets its own fixed driveshare curve, derived from the NTS trip-level
+microdata (UKDS SN 5340) via the shared `purpose_mapping.B01_COMPONENT` mapping — the
+same purpose→component scheme as the generation rates.  This adds **zero tuned
+parameters** (driveshare stays empirical/data-fixed; only tau_c is tuned) and de-confounds
+tau_c (a purpose whose real short-range walk-substitution differs from a shared curve no
+longer pushes that difference into its willingness decay).
 
-  1. JUST-WALK removed — NTS "Just walk" is a recreational purpose with no
-     destination, not a point-to-point journey, so it is excluded from the
-     mode-split denominator (consistent with generation, which also drops it).
-     There is no purpose×length cross-tab on disk, so the just-walk total
-     (NTS0409a, all-modes) is allocated across length bands ∝ the walk-mode length
-     profile.  *** This allocation is the single biggest assumption here — if
-     just-walk skews longer than utility walking, the short-band lift is slightly
-     overstated. ***
-  2. PLATEAU-CLIPPED — the England decline past ~50 mi (rail/coach substitution) is
-     clipped flat: NI+RoI rail is far sparser, so car share holds at its plateau.
-     (All long-range suppression then comes from the willingness exp(-c/tau).)
-  3. ORIGIN-PINNED — fit so driveshare(0)=0 (⇒ f(0)=0), with the <1 mi band treated
-     as an integral (band-average matching) so the *pointwise* value goes to ~0 at
-     the origin rather than sitting at the band mean (otherwise a 40 m car trip
-     would get spurious appeal, since the willingness exp is ~1 there).
+Derivation (`--fit`): survey-weighted **binomial MLE** of the share form directly on the
+trip records — each trip a Bernoulli `veh-driver?` outcome at its actual `TripDisIncSW`
+length, frequency-weighted by `JJXSC×W5` (short walks ×7, series-of-calls ×0), vehicle-driver
+modes = car/van driver + motorcycle + taxi (MainMode_B04ID {3,5,12}, same set as generation),
+years 2023/24.  Two corrections that the old aggregate-table derivation needed are now
+structural, not assumptions:
 
-Form: driveshare(d) = PLATEAU * (1 - exp(-(d/D0)^K)).  PLATEAU is interpretive only
-— it is a shared constant factor that cancels in the production constraint.
+  1. JUST-WALK removed exactly at the record level (TripPurpose_B01ID == 17 dropped),
+     replacing the old "allocate the all-modes just-walk total ∝ walk-length profile".
+  2. Continuous length pins the sub-1-mile rise directly (evaluated at each trip's real
+     length), replacing the coarse-band + origin-pinning band-integral trick.  The form's
+     K>0 gives driveshare(0)=0 (⇒ f(0)=0) structurally.
 
-The module constants below are the *single* authoritative source of truth; the
-imported `driveshare` does no file I/O.  Re-derive with `--fit` after the NTS files
-change (prints refreshed constants to paste back, and draws the plot).
+The England long-distance rail decline (past ~25 mi) is handled by **capping the fit at
+25 mi**: the monotone saturating form cannot represent that decline, those trips are killed
+by the willingness exp(-c/tau) and carry no weight in the model, and (D0,K) are stable to
+the cap.  This is the NI/RoI transfer stance (sparser rail ⇒ car share holds at its
+plateau), equivalent to the old plateau-clip.
+
+Form: driveshare(d, c) = PLATEAU_c * (1 - exp(-(d/D0_c)^K_c)).  PLATEAU_c is interpretive
+only — a constant factor that cancels *within each component* in the production constraint,
+so only the rise shape (D0_c, K_c) is load-bearing.
+
+School is **not yet component-fitted** — its aggregate purpose (education 4 + escort 21)
+driveshare is confounded by the child's own non-driver trip (purpose 4 ≈ 0–13% driver, all
+passenger/walk), so the car school-run curve must come from the escort/self-drive trips, a
+separate derivation (see project-nts-microdata-gains).  Until then `school` carries the shared
+placeholder curve, and `component=None` returns that same legacy all-purpose blend so the
+not-yet-per-component-wired model runs unchanged.
+
+The module constants below are the *single* authoritative source of truth; the imported
+`driveshare` does no file I/O.  Re-derive with `--fit` after the NTS data change (prints
+refreshed constants to paste back, and draws the plot).
 """
 
 import numpy as np
 
-# --- Fitted constants (NTS0308a 2023/24; just-walk removed, plateau-clipped) -----
+# --- Fitted per-component constants (NTS microdata 2023/24; weighted binomial MLE, cap 25 mi)
 # Re-derive with: python3 analysis/driveshare.py --fit
-PLATEAU = 0.5779    # vehicle-driver share ceiling (cancels in the production constraint)
-D0      = 1.2573    # scale (miles)
-K       = 1.2610    # shape (>1 ⇒ gentle origin start)
+#   component: (PLATEAU, D0 [miles], K)
+CURVES = {
+    "commute": (0.6940, 1.2867, 0.9888),   # slow rise, high plateau
+    "retail":  (0.5492, 0.8706, 1.6052),   # fast/steep rise, low plateau
+    "res":     (0.6148, 0.7409, 1.3967),   # earliest rise
+    # School is not component-fitted yet (aggregate is confounded by the child's own
+    # non-driver trip); shared placeholder until the escort-based school derivation.
+    "school":  (0.5779, 1.2573, 1.2610),
+}
+
+# Shared/default curve (component=None): the legacy all-purpose blend, kept until model.py
+# is wired to pass a component through _modesub_kernel.  Equals the old single fit.
+PLATEAU, D0, K = 0.5779, 1.2573, 1.2610
 
 
-def driveshare(d_miles):
-    """Vehicle-driver share for a trip of length d_miles. Float or numpy array."""
-    return PLATEAU * (1.0 - np.exp(-(np.asarray(d_miles, dtype=float) / D0) ** K))
+def driveshare(d_miles, component=None):
+    """Vehicle-driver share for a trip of length d_miles in `component`.
+
+    Float or numpy array.  `component` is one of CURVES (commute/retail/res/school); the
+    default `None` uses the shared legacy curve (for callers not yet passing a component).
+    """
+    pl, d0, k = CURVES[component] if component is not None else (PLATEAU, D0, K)
+    return pl * (1.0 - np.exp(-(np.asarray(d_miles, dtype=float) / d0) ** k))
 
 
 # --- Re-fit / diagnostics / plot (offline only; not on the import path) ---------
 
-NTS0308_FILE = "data/nts0308.ods"
-NTS0409_FILE = "data/nts0409.ods"
-NTS_YEARS    = [2023, 2024]
-VEH_MODES    = ["Car or van driver", "Motorcycle", "Taxi or minicab"]
-BANDS = ["Under 1 mile", "1 to under 2 miles", "2 to under 5 miles", "5 to under 10 miles",
-         "10 to under 25 miles", "25 to under 50 miles", "50 to under 100 miles",
-         "100 miles and over"]
-EDGES = np.array([0, 1, 2, 5, 10, 25, 50, 100, 300.])   # last band capped at 300 mi
+YEARS = [2023, 2024]                 # pool COVID-excluded extra years only for thin cells
+VEHICLE_MODE_CODES = [3, 5, 12]      # Car/van driver, Motorcycle, Taxi/minicab
+JUST_WALK_B01 = 17                   # TripPurpose_B01ID for "Just walk" (dropped exactly)
+FIT_CAP_MILES = 25.0                 # exclude the England rail-decline tail from the fit
+FIT_COMPONENTS = ["commute", "retail", "res"]   # school derived separately (escort-based)
 
 
-def _band_data():
-    """(veh, total, walk) trips/person/yr per length band + just-walk total."""
+def _load_trips():
+    """Trip records with dist/weight/veh/component columns (just-walk dropped)."""
+    import os
+    import sys
     import pandas as pd
-    df = pd.read_excel(NTS0308_FILE, sheet_name="NTS0308a_trips", header=5, engine="odf")
-    df.columns = [str(c).strip() for c in df.columns]
-    yc, mc = df.columns[0], df.columns[1]
-    df[yc] = pd.to_numeric(df[yc], errors="coerce")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import nts_microdata as nts
+    from purpose_mapping import B01_COMPONENT
 
-    def col(name):
-        return [c for c in df.columns if c == name or c.startswith(name)][0]
+    tr = nts.load("trip", columns=["SurveyYear", "MainMode_B04ID", "TripPurpose_B01ID",
+                                   "TripDisIncSW", "W5", "JJXSC"], years=YEARS)
+    tr["dist"] = pd.to_numeric(tr.TripDisIncSW, errors="coerce")
+    tr["w"] = tr.JJXSC * tr.W5
+    tr["y"] = tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES).astype(float)
+    tr = tr[(tr.TripPurpose_B01ID != JUST_WALK_B01)
+            & tr.dist.notna() & (tr.dist > 0) & (tr.w > 0)].copy()
+    tr["component"] = tr.TripPurpose_B01ID.map(B01_COMPONENT)
+    return tr
 
-    def msum(prefix, band):
-        s = df[df[yc].isin(NTS_YEARS) & df[mc].astype(str).str.strip().str.startswith(prefix)]
-        return s[col(band)].astype(float).sum() / len(NTS_YEARS)
 
-    veh   = np.array([sum(msum(v, b) for v in VEH_MODES) for b in BANDS])
-    total = np.array([msum("All modes", b) for b in BANDS])
-    walk  = np.array([msum("Walk", b) for b in BANDS])      # 'Walk [notes 2, 3]'
+def _fit_component(d, y, w, cap=FIT_CAP_MILES):
+    """Weighted binomial MLE of PLATEAU*(1-exp(-(d/D0)^K)), trips with d<=cap."""
+    from scipy.optimize import minimize
+    m = d <= cap
+    d, y, w = d[m].values, y[m].values, w[m].values
 
-    # just-walk total (all modes) from NTS0409a
-    d9 = pd.read_excel(NTS0409_FILE, sheet_name="NTS0409a_trips", header=5, engine="odf")
-    d9.columns = [str(c).strip() for c in d9.columns]
-    y9, m9 = d9.columns[0], d9.columns[1]
-    d9[y9] = pd.to_numeric(d9[y9], errors="coerce")
-    jwcol = [c for c in d9.columns if c.startswith("Just walk")][0]
-    am = d9[d9[y9].isin(NTS_YEARS) & (d9[m9].astype(str).str.strip() == "All modes")]
-    just_walk = am[jwcol].astype(float).sum() / len(NTS_YEARS)
-    return veh, total, walk, just_walk
+    def nll(p):
+        pl, d0, k = p
+        pr = np.clip(pl * (1.0 - np.exp(-(d / d0) ** k)), 1e-9, 1 - 1e-9)
+        return -np.sum(w * (y * np.log(pr) + (1 - y) * np.log(1 - pr)))
+
+    r = minimize(nll, [0.58, 1.26, 1.26], method="L-BFGS-B",
+                 bounds=[(0.2, 0.95), (0.1, 30), (0.5, 6)])
+    return tuple(r.x)
 
 
 def _fit(plot_path="reports/driveshare.png"):
-    from scipy.optimize import least_squares
-    veh, total, walk, just_walk = _band_data()
-    # (1) remove just-walk, allocated ∝ walk-mode length profile
-    jw_band = just_walk * walk / walk.sum()
-    total_c = total - jw_band
-    ds_raw  = veh / total
-    ds_corr = veh / total_c
-    ds_clip = np.maximum.accumulate(ds_corr)             # (2) plateau-clip
+    import os
+    import numpy as np
+    import pandas as pd
+    tr = _load_trips()
 
-    # (3) origin-pinned band-AVERAGE least-squares fit of PLATEAU*(1-exp(-(d/D0)^K))
-    def ds_of(p, d):
-        pl, d0, k = p
-        return pl * (1.0 - np.exp(-(d / d0) ** k))
+    # fine bins for the empirical scatter (plot + printed table)
+    edges = np.array([0, .25, .5, .75, 1, 1.5, 2, 3, 5, 7.5, 10, 15, 25, 50, 300.])
+    mids = np.array([np.sqrt(edges[i] * edges[i + 1]) if edges[i] > 0 else edges[1] / 2
+                     for i in range(len(edges) - 1)])
 
-    def band_avg(p, lo, hi, n=400):
-        xs = np.linspace(lo, hi, n)
-        return np.trapz(ds_of(p, xs), xs) / (hi - lo)
+    def emp(sub):
+        b = pd.cut(sub.dist, bins=edges, right=False, labels=False)
+        num = sub[sub.y > 0].groupby(b).w.sum()
+        den = sub.groupby(b).w.sum()
+        return (num / den).reindex(range(len(edges) - 1)), den.reindex(range(len(edges) - 1))
 
-    def resid(p):
-        return np.array([band_avg(p, EDGES[i], EDGES[i + 1]) for i in range(len(BANDS))]) - ds_clip
+    fits = {}
+    print(f"NTS microdata {YEARS}, vehicle modes {VEHICLE_MODE_CODES}, "
+          f"weight JJXSC×W5, just-walk removed, fit cap {FIT_CAP_MILES:g} mi\n")
+    for comp in FIT_COMPONENTS:
+        sub = tr[tr.component == comp]
+        pl, d0, k = _fit_component(sub.dist, sub.y, sub.w)
+        fits[comp] = (pl, d0, k)
+        e, den = emp(sub)
+        print(f"=== {comp}  (Σw {sub.w.sum():,.0f}, n {len(sub):,})  "
+              f"PLATEAU={pl:.4f} D0={d0:.4f} K={k:.4f} ===")
+        print(f"  {'mid_mi':>7} {'emp%':>6} {'fit%':>6} {'Σw':>12}")
+        for i in range(len(edges) - 1):
+            fv = 100 * pl * (1 - np.exp(-(mids[i] / d0) ** k))
+            ev = 100 * e[i] if pd.notna(e[i]) else float("nan")
+            dv = den[i] if pd.notna(den[i]) else 0.0
+            print(f"  {mids[i]:7.2f} {ev:6.1f} {fv:6.1f} {dv:12,.0f}")
+        print()
 
-    sol = least_squares(resid, [0.58, 2.0, 1.5], bounds=([0.2, 0.1, 0.5], [0.9, 30, 6]))
-    pl, d0, k = sol.x
-
-    print(f"NTS0308a {NTS_YEARS}, vehicle modes = {'+'.join(VEH_MODES)}")
-    print(f"just-walk removed: {just_walk:.1f}/yr (allocated ∝ walk-mode length profile)\n")
-    print(f"{'mid_mi':>7} {'raw%':>6} {'corr%':>6} {'clip%':>6} {'fit%':>6}")
-    for i, b in enumerate(BANDS):
-        mid = np.sqrt(EDGES[i] * EDGES[i + 1]) if EDGES[i] > 0 else 0.5
-        print(f"{mid:7.1f} {100*ds_raw[i]:6.1f} {100*ds_corr[i]:6.1f} {100*ds_clip[i]:6.1f} "
-              f"{100*band_avg(sol.x, EDGES[i], EDGES[i+1]):6.1f}")
-    print(f"\nPaste back into the module constants:")
-    print(f"  PLATEAU = {pl:.4f}\n  D0      = {d0:.4f}\n  K       = {k:.4f}")
+    print("Paste back into CURVES:")
+    for comp in FIT_COMPONENTS:
+        pl, d0, k = fits[comp]
+        print(f'    "{comp}":{"":>{9-len(comp)}}({pl:.4f}, {d0:.4f}, {k:.4f}),')
 
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        dd = np.linspace(0.01, 30, 1000)
-        mids = [np.sqrt(EDGES[i] * EDGES[i + 1]) if EDGES[i] > 0 else 0.5 for i in range(len(BANDS))]
-        fig, ax = plt.subplots(figsize=(8, 4.5))
-        ax.plot(dd, ds_of(sol.x, dd), "b-", lw=2,
-                label=f"fit {pl:.2f}*(1-exp(-(d/{d0:.2f})^{k:.2f}))")
-        ax.scatter(mids, ds_corr, c="green", zorder=5, label="band (just-walk removed)")
-        ax.scatter(mids, ds_clip, c="red", marker="x", zorder=6, label="band (plateau-clipped)")
-        ax.set_xlim(0, 30); ax.set_ylim(0, 0.7)
-        ax.set_xlabel("trip length (miles)"); ax.set_ylabel("vehicle-driver share")
-        ax.set_title("driveshare(distance): NTS0308, just-walk removed, plateau-clipped, origin-pinned")
-        ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout(); fig.savefig(plot_path, dpi=110)
+        dd = np.linspace(0.01, 25, 800)
+        colors = {"commute": "tab:blue", "retail": "tab:green", "res": "tab:red"}
+        fig, ax = plt.subplots(figsize=(9, 5.2))
+        for comp in FIT_COMPONENTS:
+            pl, d0, k = fits[comp]
+            sub = tr[tr.component == comp]
+            e, _ = emp(sub)
+            c = colors[comp]
+            ax.plot(dd, pl * (1 - np.exp(-(dd / d0) ** k)), "-", color=c, lw=2,
+                    label=f"{comp}: {pl:.2f}(1-exp(-(d/{d0:.2f})^{k:.2f}))")
+            ax.scatter(mids, e, color=c, s=22, zorder=5, alpha=0.8)
+        ax.plot(dd, PLATEAU * (1 - np.exp(-(dd / D0) ** K)), "k--", lw=1.3, alpha=0.7,
+                label=f"shared (legacy): {PLATEAU:.2f}(1-exp(-(d/{D0:.2f})^{K:.2f}))")
+        ax.set_xlim(0, 25)
+        ax.set_ylim(0, 0.8)
+        ax.set_xlabel("trip length (miles)")
+        ax.set_ylabel("vehicle-driver share")
+        ax.set_title("Per-component driveshare (NTS microdata 2023/24, points = binned empirical)")
+        ax.legend(fontsize=8, loc="lower right")
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+        fig.savefig(plot_path, dpi=120)
         print(f"\nsaved {plot_path}")
     except Exception as e:
         print(f"\n(plot skipped: {e})")
@@ -151,6 +201,9 @@ if __name__ == "__main__":
     if "--fit" in sys.argv:
         _fit()
     else:
-        print("driveshare(d_miles) module. Re-derive constants with: python3 analysis/driveshare.py --fit")
-        for d in [0.05, 0.25, 0.5, 1, 2, 3, 5, 10]:
-            print(f"  driveshare({d:5.2f} mi) = {float(driveshare(d)):.4f}")
+        print("driveshare(d_miles, component) module. Re-derive with: "
+              "python3 analysis/driveshare.py --fit\n")
+        for comp in ["commute", "retail", "res"]:
+            vals = "  ".join(f"{d}mi={float(driveshare(d, comp)):.3f}"
+                             for d in [0.25, 0.5, 1, 2, 5])
+            print(f"  {comp:8s}: {vals}")
