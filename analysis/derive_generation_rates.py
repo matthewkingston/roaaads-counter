@@ -32,10 +32,16 @@ scheme: leisure is split by data (visit-home→res, venues→retail) and escorts
 routed by destination.  Two allocations remain modelling decisions the codes don't
 resolve (Business/Other-work, Personal-business → retail).
 
-The **school** total (Education 4 + Escort-education 21) is split into
-primary/post-primary/tertiary by island enrolment share — a placeholder pending a
-dedicated school-generation review (self-driven Education trips suggest the
-enrolment-share split may overstate tertiary; not addressed here).
+**Every rate is per-capita** — it encodes the island TOTAL journeys of its type (rate ×
+pop), and the producer/attractor layer only distributes them spatially.  School behaviour
+is derived **per full-time student** (escort + self-drive; analysis/derive_school_generation.py)
+because that is the transferable quantity, then converted here to per-capita by ×(island
+students_L / population) using the node-weight totals the model's k_students divides by
+(so ρ_school/k_students recovers the per-student rate exactly).  The per-capita education
+codes (4+21) from the B01 mapping are NOT used for school.  Retail additionally absorbs
+the pre-school escort magnitude (already per-capita) as a documented fudge (no pre-school
+producers exist).  This makes the school per-capita rates all-Ireland-specific — re-run if
+the census school producers / population change.
 
 ``purpose_rates`` (canonical 8-cat, via TripPurpose_B04ID) is retained in the output
 **only** for the not-yet-migrated temporal derivation
@@ -44,9 +50,9 @@ generation anchor.
 
 Usage
 -----
+  python3 analysis/derive_school_generation.py   # first — writes school_generation_rates.json
   python3 analysis/derive_generation_rates.py
-Re-run whenever the microdata (data/NTS), the purpose mapping, or the enrolment
-split changes.
+Re-run whenever the microdata (data/NTS), the purpose mapping, or the school rates change.
 """
 
 import json
@@ -56,10 +62,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from purpose_mapping import B01_COMPONENT, B01_EXCLUDE, CANONICAL_PURPOSES
 import nts_microdata as nts
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "simulation"))
-import census_school_producers   # island_enrolment_by_level() — for the per-level school ρ split
 
 OUT_FILE = "analysis/generation_rates.json"
+# Per-student school rates (escort + self-drive) + the pre-school escort magnitude
+# routed to retail, from analysis/derive_school_generation.py.
+SCHOOL_RATES_FILE = "analysis/school_generation_rates.json"
+# Node weights (same island totals the model's k_students uses) — to convert the
+# per-student school behaviour to a per-capita rate that cancels exactly with k_students.
+NODE_WEIGHTS_FILE = "simulation/node_weights_reduced.json"
 YEARS = [2023, 2024]
 # MainMode_B04ID vehicle-driver modes: Car/van driver, Motorcycle, Taxi/minicab.
 VEHICLE_MODE_CODES = [3, 5, 12]
@@ -100,27 +110,35 @@ def _rates():
 def main():
     print("Deriving generation rates from the NTS microdata (data/NTS) …")
     comp, purpose_rates = _rates()
-    rates = {c: float(comp.get(c, 0.0)) for c in ("commute", "retail", "res")}
+    # commute / res are per-capita from the B01 mapping.  (comp["school"] — the per-capita
+    # education codes 4+21 — is NOT used: school is now per-student, see below.)
+    rates = {c: float(comp.get(c, 0.0)) for c in ("commute", "res")}
 
-    # Split the school component (Education 4 + Escort-education 21) into
-    # primary/post-primary/tertiary by island enrolment share (placeholder — pending a
-    # dedicated school-generation review).  Enrolment from the admin school cache via
-    # census_school_producers (the same source the attractor uses), so each level is a
-    # fully independent component; the three sum to the school total.
-    _enrol = census_school_producers.island_enrolment_by_level()      # {primary, postprimary, tertiary}
-    _e_tot = sum(_enrol.values())
-    _school_shares = {lvl: _enrol[lvl] / _e_tot for lvl in ("primary", "postprimary", "tertiary")}
-    _rho_school = float(comp.get("school", 0.0))
-    for lvl, share in _school_shares.items():
-        rates["school_" + lvl] = _rho_school * share
+    # School: convert the per-student behaviour (escort + self-drive, from
+    # derive_school_generation.py) to a PER-CAPITA rate so every rate is per-capita and
+    # encodes an island total — ρ_percapita_L = ρ_perstudent_L × (island students_L / pop).
+    # The students/pop ratio uses the SAME node-weight totals the model's k_students
+    # divides by, so ρ_school/k_students recovers the per-student rate exactly (the
+    # producer layer then does pure spatial distribution).  All-Ireland-specific: re-run
+    # if the census school producers / population change.  Retail additionally absorbs the
+    # pre-school escort magnitude (already per-capita; a documented fudge — no pre-school
+    # producers/attractors exist).
+    with open(SCHOOL_RATES_FILE) as f:
+        sch = json.load(f)
+    nw = json.load(open(NODE_WEIGHTS_FILE))
+    pop = sum(nw.get("node_population", {}).values())
+    for lvl in ("primary", "postprimary", "tertiary"):
+        students = sum(nw.get(f"node_school_producers_{lvl}", {}).values())
+        rates["school_" + lvl] = float(sch["rates_per_student"][lvl]) * (students / pop)
+    rates["retail"] = (float(comp.get("retail", 0.0))
+                       + float(sch["preschool_escort_retail_percapita"]))
 
-    # Sanity: components should partition all vehicle-driver trips (Σ over B01 codes,
-    # excluding the intentional drops).
-    total_comp = sum(rates.values())
-    allp = float(comp.sum())
-    if abs(total_comp - allp) > 1e-9:
-        print(f"  WARNING: component sum {total_comp:.4f} ≠ mapped total {allp:.4f} "
-              f"(diff {total_comp - allp:+.4f}/person/day)")
+    # Data-integrity: the per-capita B01 components (incl. per-capita school) partition all
+    # vehicle-driver trips — a check on the B01 mapping, independent of the per-student swap.
+    b01_total = float(comp.sum())
+    b01_partition = sum(float(comp.get(c, 0.0)) for c in comp.index)
+    if abs(b01_total - b01_partition) > 1e-9:
+        print(f"  WARNING: B01 partition {b01_partition:.4f} ≠ mapped total {b01_total:.4f}")
 
     out = {
         "_meta": {
@@ -130,15 +148,17 @@ def main():
             "trip_count_measure": "JJXSC (short walks ×7, series-of-calls ×0)",
             "weights": "trips W5, persons W2",
             "purpose_mapping": "purpose_mapping.B01_COMPONENT (23-cat; res iff endpoint=home)",
-            "units": "vehicle-driver trips per person per day",
+            "units": "vehicle-driver trips per person per day (per-capita); school_* converted "
+                     "from per-student behaviour via island students_L/pop (see derive_school_generation)",
             "judgment_allocations": [
                 "Business / Other-work -> retail (commercial premises, not the jobs count)",
                 "Personal business -> retail",
                 "Escorts routed by destination (commuting->commute, shopping/business->retail, "
                 "education->school, home->res)",
             ],
-            "school_split_by_enrolment": {lvl: round(s, 4) for lvl, s in _school_shares.items()},
-            "school_split_note": "enrolment-share placeholder pending school-generation review",
+            "school_source": "analysis/derive_school_generation.py (per-student escort + "
+                             "self-drive; England age->level split; see that module)",
+            "retail_preschool_fudge_percapita": float(sch["preschool_escort_retail_percapita"]),
             "purpose_rates_note": "canonical 8-cat (B04ID); legacy field for the temporal "
                                   "derivation only, not the generation anchor",
         },
@@ -148,13 +168,12 @@ def main():
     with open(OUT_FILE, "w") as f:
         json.dump(out, f, indent=2)
 
-    print(f"\nVehicle-driver generation rates (/person/day, {YEARS} avg, "
-          f"MainMode_B04ID {VEHICLE_MODE_CODES}):")
-    for comp_name, r in rates.items():
-        print(f"  {comp_name:16s} {r:.4f}  ({r / total_comp * 100:4.1f}%)")
-    print(f"  {'total':16s} {total_comp:.4f}")
-    print(f"  school split by enrolment share: "
-          + ", ".join(f"{lvl} {s:.3f}" for lvl, s in _school_shares.items()))
+    print("\nGeneration rates (per person/day, per-capita):")
+    print(f"  commute {rates['commute']:.4f}  retail {rates['retail']:.4f}  res {rates['res']:.4f}"
+          f"   (retail incl. pre-school escort fudge {sch['preschool_escort_retail_percapita']:.5f})")
+    print(f"  school (per-capita; from per-student × island students/pop): "
+          f"primary {rates['school_primary']:.4f}  post-primary {rates['school_postprimary']:.4f}  "
+          f"tertiary {rates['school_tertiary']:.4f}")
     print(f"\nSaved → {OUT_FILE}")
 
 

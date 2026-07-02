@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "units": "vehicle-driver trips per full-time student per day (escort + self-drive)",
+    "nts_years": [
+      2023,
+      2024
+    ],
+    "dfe_source": "data/participation-in-education-training-and-employment-age-16-to-21_2025/data/Participation_insts_and_quals_16_21_allinsts_040626.csv",
+    "dfe_year": "2024",
+    "age18_self_drive_firmed": 0.1085,
+    "detail": {
+      "escort": {
+        "primary": 0.3704338860728346,
+        "postprimary": 0.31165163091849785,
+        "tertiary": 0.01692223460698683
+      },
+      "self_drive": {
+        "primary": 0.008556542710563487,
+        "postprimary": 0.015511238367289883,
+        "tertiary": 0.031635598862715726
+      }
+    },
+    "preschool_escort_per_preschooler": 0.12696853938174124,
+    "note": "sixth form=secondary, FE=tertiary; FT students; half-year academic\u2192actual alignment; tertiary self-drive = least transferable (see module docstring)"
+  },
+  "rates_per_student": {
+    "primary": 0.3789904287833981,
+    "postprimary": 0.32716286928578775,
+    "tertiary": 0.048557833469702556
+  },
+  "preschool_escort_retail_percapita": 0.005696937207157159
+}

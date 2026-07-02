@@ -503,17 +503,21 @@ def compute_generation_scales(node_weights, rates, verbose=False):
         are summed island-wide (the external census nodes tile the whole island), so
         the per-capita anchors recompute automatically for any CENTRE.
     rates        : {commute, retail, res, school_primary, school_postprimary,
-        school_tertiary} per-person/day (load_generation_rates()).
+        school_tertiary} per-person/day (load_generation_rates()).  **All rates are
+        per-capita** — each encodes the island TOTAL journeys of its type (rate × pop);
+        the producer/attractor layer only distributes them spatially (no generation
+        scaling).
 
     Returns the gen_scale dict consumed by constrained_od_flows:
         {res, com_out, com_ret, ret_out, ret_ret,
          sch_primary_out/ret, sch_postprimary_out/ret, sch_tertiary_out/ret}.
     Two-leg directions carry ρ_c/2; res is single-leg (full ρ_res, both directions are
     separate OD pairs).  Per-producer rate r = (ρ_c/2)/k with island anchor
-    k = Σ(producer layer)/Σ(population) over all nodes (k=1 when producer = population).
-    Each of the three school levels is fully independent: its own ρ (from
-    generation_rates.json), its own producer/attractor layers, its own k-anchors and
-    scales — a change to one level never touches another's.
+    k = Σ(producer layer)/Σ(population) over all nodes (k=1 when producer = population),
+    so production = producer_share × (ρ_c/2) × pop — the producer contributes only its
+    spatial share.  The school per-capita rates were built as (per-student behaviour ×
+    island student/pop) in derive_generation_rates, so ρ_school/k_students recovers the
+    per-student rate exactly; each of the three school levels is fully independent.
     """
     def _sum(layer):
         return float(sum(node_weights.get(layer, {}).values()))
@@ -543,7 +547,7 @@ def compute_generation_scales(node_weights, rates, verbose=False):
         "ret_ret": (rates["retail"]  / 2) / anchors["k_retail"],
     }
     for lvl in SCHOOL_LEVELS:
-        rho = rates[f"school_{lvl}"]
+        rho = rates[f"school_{lvl}"]                          # per-capita (encodes island total)
         gen_scale[f"sch_{lvl}_out"] = (rho / 2) / anchors[f"k_students_{lvl}"]
         gen_scale[f"sch_{lvl}_ret"] = (rho / 2) / anchors[f"k_enrolment_{lvl}"]
     if verbose:

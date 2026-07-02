@@ -13,27 +13,23 @@
     "trip_count_measure": "JJXSC (short walks \u00d77, series-of-calls \u00d70)",
     "weights": "trips W5, persons W2",
     "purpose_mapping": "purpose_mapping.B01_COMPONENT (23-cat; res iff endpoint=home)",
-    "units": "vehicle-driver trips per person per day",
+    "units": "vehicle-driver trips per person per day (per-capita); school_* converted from per-student behaviour via island students_L/pop (see derive_school_generation)",
     "judgment_allocations": [
       "Business / Other-work -> retail (commercial premises, not the jobs count)",
       "Personal business -> retail",
       "Escorts routed by destination (commuting->commute, shopping/business->retail, education->school, home->res)"
     ],
-    "school_split_by_enrolment": {
-      "primary": 0.4261,
-      "postprimary": 0.3568,
-      "tertiary": 0.2171
-    },
-    "school_split_note": "enrolment-share placeholder pending school-generation review",
+    "school_source": "analysis/derive_school_generation.py (per-student escort + self-drive; England age->level split; see that module)",
+    "retail_preschool_fudge_percapita": 0.005696937207157159,
     "purpose_rates_note": "canonical 8-cat (B04ID); legacy field for the temporal derivation only, not the generation anchor"
   },
   "rates": {
     "commute": 0.20043195346898554,
-    "retail": 0.5755264736196705,
     "res": 0.15876885054371953,
-    "school_primary": 0.034788842766519563,
-    "school_postprimary": 0.02913620031932821,
-    "school_tertiary": 0.01772804301292546
+    "school_primary": 0.03814221965408517,
+    "school_postprimary": 0.02757224396413395,
+    "school_tertiary": 0.0024905623898874183,
+    "retail": 0.5812234108268276
   },
   "purpose_rates": {
     "commuting": 0.17738716463848597,
