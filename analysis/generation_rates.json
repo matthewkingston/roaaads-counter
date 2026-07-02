@@ -1,45 +1,48 @@
 {
   "_meta": {
-    "source": "data/nts0409.ods",
-    "sheet": "NTS0409a_trips",
+    "source": "NTS microdata (UKDS SN 5340) via analysis/nts_microdata.py",
     "years": [
       2023,
       2024
     ],
-    "vehicle_modes": [
-      "Car or van driver",
-      "Motorcycle",
-      "Taxi or minicab"
+    "vehicle_mode_codes_B04": [
+      3,
+      5,
+      12
     ],
-    "leisure_retail_frac": 0.5,
+    "trip_count_measure": "JJXSC (short walks \u00d77, series-of-calls \u00d70)",
+    "weights": "trips W5, persons W2",
+    "purpose_mapping": "purpose_mapping.B01_COMPONENT (23-cat; res iff endpoint=home)",
     "units": "vehicle-driver trips per person per day",
     "judgment_allocations": [
-      "Business -> retail (not commute)",
+      "Business / Other-work -> retail (commercial premises, not the jobs count)",
       "Personal business -> retail",
-      "Leisure split 0.5 retail / 0.5 res"
+      "Escorts routed by destination (commuting->commute, shopping/business->retail, education->school, home->res)"
     ],
     "school_split_by_enrolment": {
       "primary": 0.4261,
       "postprimary": 0.3568,
       "tertiary": 0.2171
-    }
+    },
+    "school_split_note": "enrolment-share placeholder pending school-generation review",
+    "purpose_rates_note": "canonical 8-cat (B04ID); legacy field for the temporal derivation only, not the generation anchor"
   },
   "rates": {
-    "commute": 0.17796309271922361,
-    "retail": 0.4949988738299632,
-    "res": 0.2621813508820894,
-    "school_primary": 0.03492251867199413,
-    "school_postprimary": 0.02924815598241002,
-    "school_tertiary": 0.017796162904637577
+    "commute": 0.20043195346898554,
+    "retail": 0.5755264736196705,
+    "res": 0.15876885054371953,
+    "school_primary": 0.034788842766519563,
+    "school_postprimary": 0.02913620031932821,
+    "school_tertiary": 0.01772804301292546
   },
   "purpose_rates": {
-    "commuting": 0.17796309271922361,
-    "business": 0.04294424614050544,
-    "education_escort": 0.08196683755904172,
-    "shopping": 0.2149803815635424,
-    "other_escort": 0.12365125681735697,
-    "personal_business": 0.09967613106439685,
-    "leisure": 0.27479623012303717,
-    "other": 0.001131979003213833
+    "commuting": 0.17738716463848597,
+    "business": 0.04331664523544969,
+    "education_escort": 0.08165308609877324,
+    "shopping": 0.21471234511916332,
+    "other_escort": 0.12327978249724507,
+    "personal_business": 0.09976901870529727,
+    "leisure": 0.27510788751981374,
+    "other": 0.0011544339169204329
   }
 }
