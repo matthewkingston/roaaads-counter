@@ -20,8 +20,7 @@
       "Escorts routed by destination (commuting->commute, shopping/business->retail, education->school, home->res)"
     ],
     "school_source": "analysis/derive_school_generation.py (per-student escort + self-drive; England age->level split; see that module)",
-    "retail_preschool_fudge_percapita": 0.005696937207157159,
-    "purpose_rates_note": "canonical 8-cat (B04ID); legacy field for the temporal derivation only, not the generation anchor"
+    "retail_preschool_fudge_percapita": 0.005696937207157159
   },
   "rates": {
     "commute": 0.20043195346898554,
@@ -30,15 +29,5 @@
     "school_postprimary": 0.02757224396413395,
     "school_tertiary": 0.0024905623898874183,
     "retail": 0.5812234108268276
-  },
-  "purpose_rates": {
-    "commuting": 0.17738716463848597,
-    "business": 0.04331664523544969,
-    "education_escort": 0.08165308609877324,
-    "shopping": 0.21471234511916332,
-    "other_escort": 0.12327978249724507,
-    "personal_business": 0.09976901870529727,
-    "leisure": 0.27510788751981374,
-    "other": 0.0011544339169204329
   }
 }

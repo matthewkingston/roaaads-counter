@@ -79,8 +79,8 @@ for primary/post-primary and only tertiary genuinely needs the pooling).  Same n
 (harmless — school night ≈ 0).
 
 `mean_fraction` / `std_fraction` (the aggregate columns used elsewhere, e.g. ingest_counts) are
-preserved.  This completes the temporal migration — all six columns are microdata-derived, fully
-retiring nts0502/0504 and the vestigial `purpose_rates`.
+preserved.  All six columns are microdata-derived (the aggregate NTS0502a/0504b tables are no
+longer used).
 
 Usage:  python3 analysis/derive_component_profiles.py
 Needs data/NTS (nts_microdata) + the DfE participation CSV (via derive_school_generation).

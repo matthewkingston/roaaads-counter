@@ -27,10 +27,10 @@ Purpose → component  (data-derived, 23-cat)
 -------------------------------------------
 Component rates use ``purpose_mapping.B01_COMPONENT`` — the 23-category
 TripPurpose_B01ID → component mapping (rule: **res iff endpoint is a home**;
-otherwise routed by land-use).  This replaces the old 8-category + LEISURE_RETAIL_FRAC
-scheme: leisure is split by data (visit-home→res, venues→retail) and escorts are
-routed by destination.  Two allocations remain modelling decisions the codes don't
-resolve (Business/Other-work, Personal-business → retail).
+otherwise routed by land-use): leisure is split by endpoint (visit-home→res,
+venues→retail) and escorts are routed by destination.  Two allocations remain
+modelling decisions the codes don't resolve (Business/Other-work, Personal-business →
+retail).
 
 **Every rate is per-capita** — it encodes the island TOTAL journeys of its type (rate ×
 pop), and the producer/attractor layer only distributes them spatially.  School behaviour
@@ -42,11 +42,6 @@ codes (4+21) from the B01 mapping are NOT used for school.  Retail additionally 
 the pre-school escort magnitude (already per-capita) as a documented fudge (no pre-school
 producers exist).  This makes the school per-capita rates all-Ireland-specific — re-run if
 the census school producers / population change.
-
-``purpose_rates`` (canonical 8-cat, via TripPurpose_B04ID) is retained in the output
-**only** for the not-yet-migrated temporal derivation
-(analysis/derive_component_profiles.py), which still reads it; it is not the
-generation anchor.
 
 Usage
 -----
@@ -60,7 +55,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from purpose_mapping import B01_COMPONENT, B01_EXCLUDE, CANONICAL_PURPOSES
+from purpose_mapping import B01_COMPONENT, B01_EXCLUDE
 import nts_microdata as nts
 
 OUT_FILE = "analysis/generation_rates.json"
@@ -73,16 +68,12 @@ NODE_WEIGHTS_FILE = "simulation/node_weights_reduced.json"
 YEARS = [2023, 2024]
 # MainMode_B04ID vehicle-driver modes: Car/van driver, Motorcycle, Taxi/minicab.
 VEHICLE_MODE_CODES = [3, 5, 12]
-# TripPurpose_B04ID (== NTS0409a's published breakdown) → canonical purpose, for the
-# legacy purpose_rates output consumed by the (not-yet-migrated) temporal derivation.
-B04_TO_CANON = {1: "commuting", 2: "business", 3: "education_escort", 4: "shopping",
-                5: "other_escort", 6: "personal_business", 7: "leisure", 8: "other"}
 
 
 def _rates():
-    """(component_rates, canonical_purpose_rates) in veh-driver trips/person/day."""
+    """Per-component veh-driver trips/person/day (the 23-cat B01 mapping)."""
     tr = nts.load("trip", columns=["SurveyYear", "MainMode_B04ID", "TripPurpose_B01ID",
-                                    "TripPurpose_B04ID", "W5", "JJXSC"], years=YEARS)
+                                    "W5", "JJXSC"], years=YEARS)
     veh = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)].copy()
     veh["w"] = veh.JJXSC * veh.W5                       # NTS trip count × trip weight
 
@@ -99,17 +90,12 @@ def _rates():
         bad = sorted(stray.TripPurpose_B01ID.unique())
         sys.exit(f"ERROR: unmapped TripPurpose_B01ID codes {bad} — update B01_COMPONENT")
     comp = veh.dropna(subset=["component"]).groupby("component")["w"].sum() / persons / 7.0
-
-    # Legacy canonical purpose_rates (B04ID) — for the temporal derivation only.
-    veh["canon"] = veh.TripPurpose_B04ID.map(B04_TO_CANON)
-    purp = veh.dropna(subset=["canon"]).groupby("canon")["w"].sum() / persons / 7.0
-    purpose_rates = {p: float(purp.get(p, 0.0)) for p in CANONICAL_PURPOSES}
-    return comp, purpose_rates
+    return comp
 
 
 def main():
     print("Deriving generation rates from the NTS microdata (data/NTS) …")
-    comp, purpose_rates = _rates()
+    comp = _rates()
     # commute / res are per-capita from the B01 mapping.  (comp["school"] — the per-capita
     # education codes 4+21 — is NOT used: school is now per-student, see below.)
     rates = {c: float(comp.get(c, 0.0)) for c in ("commute", "res")}
@@ -159,11 +145,8 @@ def main():
             "school_source": "analysis/derive_school_generation.py (per-student escort + "
                              "self-drive; England age->level split; see that module)",
             "retail_preschool_fudge_percapita": float(sch["preschool_escort_retail_percapita"]),
-            "purpose_rates_note": "canonical 8-cat (B04ID); legacy field for the temporal "
-                                  "derivation only, not the generation anchor",
         },
         "rates": rates,
-        "purpose_rates": purpose_rates,
     }
     with open(OUT_FILE, "w") as f:
         json.dump(out, f, indent=2)
