@@ -41,6 +41,8 @@ import time
 from datetime import date
 
 import numpy as np
+import pyproj
+from scipy.spatial import cKDTree
 
 sys.path.insert(0, "simulation")
 import geopandas as gpd
@@ -58,7 +60,15 @@ SNAP_TOL_M   = 250.0        # reject a trip end snapping further than this from 
 NEAREST_TRIES = 12          # resample attempts to land an area point near a road
 BIN_STEP_S   = 30.0         # histogram bin width (seconds) — fine in the head
 BIN_CAP_S    = 7200.0       # last explicit edge; everything beyond lands in an overflow bin
-BATCH        = 50           # sources = dests = B; needs OSRM --max-table-size >= 2B
+BATCH        = 45           # sources = dests = B; needs OSRM --max-table-size >= 2B
+
+# stratification (--stratified): near-field distance bands + far tail + cached area points.
+BANDS_KM    = (0.0, 3.0, 10.0, 25.0)   # near-band edges (km); far band = [last, inf)
+K_CACHE     = 3                         # cached road points per area (purpose-independent, reused)
+NEAR_BUDGET = 150_000                   # sampled pairs per near band
+FAR_BUDGET  = 1_000_000
+DESTS_PER_CALL = 49                     # D in the near 1×D /table calls (1+D <= max-table-size)
+POINT_CACHE = "data/_area_road_points.json"    # gitignored; resumable
 
 # purpose → (producer column, destination spec). dest "area:<col>" or "poi:<layer>[:<col>]".
 PURPOSES = {
@@ -275,6 +285,165 @@ def run_purpose(name, df, geoms, pois, n_target, batch, edges, rng):
     }
 
 
+# ── Stratified sampler (near-field distance bands + far tail) ──────────────────
+# Partition pair-space by centroid haversine into a few near bands + a far tail. Sample each band
+# with its own budget (near bands generous ⇒ dense head), reweight by the band's exact P·A mass, and
+# reconstruct n(t) = Σ_b M_b·ŝ_b(t). Unbiased (within-band draws ∝ P_i·A_j), and the banding only
+# allocates samples — final heights come from routed times × exact M_b, so the haversine proxy can't
+# bias n(t). Cached road points per area make the ring sampling cheap (no per-pair /nearest).
+_TO_ITM = pyproj.Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
+
+
+def _itm(lon, lat):
+    x, y = _TO_ITM.transform(np.asarray(lon, float), np.asarray(lat, float))
+    return np.column_stack([x, y])
+
+
+def build_point_cache(df, geoms, rng, k=K_CACHE):
+    """k road-proximate points (lon,lat) per area — purpose-independent, cached to disk (resumable)."""
+    codes = df["area_code"].tolist()
+    if os.path.exists(POINT_CACHE):
+        obj = json.load(open(POINT_CACHE))
+        if obj.get("area_codes") == codes and obj.get("k") == k:
+            print(f"Point cache: loaded {len(codes):,} areas × {k} from {POINT_CACHE}")
+            return [[tuple(p) for p in a] for a in obj["points"]]
+    print(f"Point cache: sampling {k} road points × {len(geoms):,} areas (one-off)…", flush=True)
+    t0 = time.time(); pts = []
+    for i, g in enumerate(geoms):
+        pts.append([road_point(g, rng)[0] for _ in range(k)])
+        if (i + 1) % 4000 == 0:
+            print(f"  cached {i+1:,}/{len(geoms):,} ({time.time()-t0:.0f}s)", flush=True)
+    json.dump({"area_codes": codes, "k": k, "points": pts}, open(POINT_CACHE, "w"))
+    print(f"  saved {POINT_CACHE} ({time.time()-t0:.0f}s)")
+    return pts
+
+
+def _geo(name, df, pois):
+    """Origin (area) + destination geometry/masses for a purpose (dest = 'area' or 'poi')."""
+    prod_col, dest_spec = PURPOSES[name]
+    ocent = _itm(df["centroid_lon"].values, df["centroid_lat"].values)
+    prod = df[prod_col].to_numpy(float)
+    kind = dest_spec.split(":")[0]
+    if kind == "area":
+        dw = df[dest_spec.split(":")[1]].to_numpy(float)
+        dloc = ocent                                # dest index space == origin (area) index space
+        dll = None
+    else:
+        layer = dest_spec.split(":")[1]
+        coords, w = pois[layer]
+        if layer == "school":
+            w = w[dest_spec.split(":")[2]]
+        m = w > 0
+        dll = coords[m]; dw = w[m]
+        dloc = _itm(dll[:, 0], dll[:, 1])
+    return prod_col, dest_spec, kind, ocent, prod, dloc, dw, dll
+
+
+def _band_masses(ocent, prod, dloc, dw, edges_m):
+    """Per-origin in-band dest mass S[i,b] and band masses M_b=Σ_i P_i·S[i,b] (+ far tail)."""
+    tree = cKDTree(dloc)
+    nb = len(edges_m) - 1
+    S = np.zeros((len(ocent), nb))
+    nbrs = tree.query_ball_point(ocent, edges_m[-1])
+    for i, idx in enumerate(nbrs):
+        if not idx:
+            continue
+        idx = np.asarray(idx)
+        d = np.hypot(dloc[idx, 0] - ocent[i, 0], dloc[idx, 1] - ocent[i, 1])
+        b = np.clip(np.searchsorted(edges_m, d, side="right") - 1, 0, nb - 1)
+        for bb in range(nb):
+            S[i, bb] = dw[idx[b == bb]].sum()
+    Sfar = np.maximum(0.0, dw.sum() - S.sum(axis=1))
+    return tree, S, (prod[:, None] * S).sum(axis=0), float((prod * Sfar).sum())
+
+
+def _dpt(kind, k, cache, dll, rng):
+    return (cache[k][rng.integers(len(cache[k]))] if kind == "area" else tuple(dll[k]))
+
+
+def _sample_near(b, edges_m, tree, S, prod, ocent, dloc, dw, kind, cache, dll, edges, budget, D, rng):
+    """Band b: draw origin ∝ P·S[:,b], D dests ∝ dw from its ring, route 1×D via /table."""
+    r_lo, r_hi = edges_m[b], edges_m[b + 1]
+    ow = prod * S[:, b]
+    if ow.sum() <= 0:
+        return np.zeros(len(edges) - 1), 0
+    ow = ow / ow.sum()
+    hist = np.zeros(len(edges) - 1); n = 0
+    while n < budget:
+        i = int(rng.choice(len(ow), p=ow))
+        idx = np.asarray(tree.query_ball_point(ocent[i], r_hi))
+        if idx.size:
+            d = np.hypot(dloc[idx, 0] - ocent[i, 0], dloc[idx, 1] - ocent[i, 1])
+            idx = idx[(d >= r_lo) & (d < r_hi)]
+        if idx.size == 0:
+            n += D; continue
+        w = dw[idx]; w = w / w.sum()
+        pick = idx[rng.choice(len(idx), size=D, p=w)]
+        src = [cache[i][rng.integers(len(cache[i]))]]
+        dst = [_dpt(kind, int(k), cache, dll, rng) for k in pick]
+        n += D
+        res = osrm_table(src, dst)
+        if res is None:
+            continue
+        dur, ts, td = res
+        ok = np.isfinite(dur[0]) & (td < SNAP_TOL_M) & (ts[0] < SNAP_TOL_M)
+        hist += np.histogram(dur[0][ok], bins=edges)[0]
+    return hist, n
+
+
+def _sample_far(r_far_m, prod, ocent, dloc, dw, kind, cache, dll, edges, budget, B, rng):
+    """Far tail: naive outer-product with a centroid-distance ≥ r_far mask (cached points)."""
+    ow = prod / prod.sum(); dwn = dw / dw.sum()
+    hist = np.zeros(len(edges) - 1); n = 0
+    while n < budget:
+        oi = rng.choice(len(ow), size=B, p=ow)
+        di = rng.choice(len(dwn), size=B, p=dwn)
+        src = [cache[int(a)][rng.integers(len(cache[int(a)]))] for a in oi]
+        dst = [_dpt(kind, int(k), cache, dll, rng) for k in di]
+        n += B * B
+        res = osrm_table(src, dst)
+        if res is None:
+            continue
+        dur, ts, td = res
+        dd = np.hypot(ocent[oi][:, None, 0] - dloc[di][None, :, 0],
+                      ocent[oi][:, None, 1] - dloc[di][None, :, 1])
+        ok = (np.isfinite(dur) & (ts[:, None] < SNAP_TOL_M) & (td[None, :] < SNAP_TOL_M)
+              & (dd >= r_far_m))
+        hist += np.histogram(dur[ok], bins=edges)[0]
+    return hist, n
+
+
+def run_purpose_stratified(name, df, pois, cache, edges, rng, near_budget, far_budget, D, B):
+    prod_col, dest_spec, kind, ocent, prod, dloc, dw, dll = _geo(name, df, pois)
+    if prod.sum() <= 0 or dw.sum() <= 0:
+        sys.exit(f"ERROR: {name} has zero producer or attractor mass.")
+    edges_m = np.array(BANDS_KM) * 1000.0
+    tree, S, Mnear, Mfar = _band_masses(ocent, prod, dloc, dw, edges_m)
+    rec = np.zeros(len(edges) - 1); bands = []
+    for b in range(len(edges_m) - 1):
+        hist, n = _sample_near(b, edges_m, tree, S, prod, ocent, dloc, dw, kind, cache, dll,
+                               edges, near_budget, D, rng)
+        s = hist.sum()
+        if s > 0:
+            rec += Mnear[b] * hist / s
+        bands.append({"band_km": [BANDS_KM[b], BANDS_KM[b + 1]], "mass": float(Mnear[b]),
+                      "kept": int(s), "attempts": int(n)})
+        print(f"  [{name} {BANDS_KM[b]:g}-{BANDS_KM[b+1]:g}km] mass={Mnear[b]:.3e} kept={int(s):,}",
+              flush=True)
+    hist_f, nf = _sample_far(edges_m[-1], prod, ocent, dloc, dw, kind, cache, dll,
+                             edges, far_budget, B, rng)
+    sf = hist_f.sum()
+    if sf > 0:
+        rec += Mfar * hist_f / sf
+    print(f"  [{name} >{BANDS_KM[-1]:g}km] mass={Mfar:.3e} kept={int(sf):,}", flush=True)
+    return {
+        "producer": prod_col, "destination": dest_spec, "mode": "stratified",
+        "total_mass": float(Mnear.sum() + Mfar), "bands": bands,
+        "far": {"mass": Mfar, "kept": int(sf), "attempts": int(nf)},
+        "n_of_t": rec.tolist(),
+    }
+
+
 # ── Output + pilot plot ───────────────────────────────────────────────────────
 def _profile_hash():
     try:
@@ -301,16 +470,17 @@ def save(results, edges, args):
     return path
 
 
-def pilot_plot(name, counts, edges):
+def pilot_plot(name, values, edges):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    values = np.array(values, float)
     centers = 0.5 * (edges[:-1] + edges[1:]) / 60.0            # minutes
-    dens = np.array(counts, float) / max(np.sum(counts), 1)
+    dens = values / max(values.sum(), 1)
     fig, ax = plt.subplots(1, 2, figsize=(12, 4.5))
     head = centers <= 10
-    ax[0].bar(centers[head], np.array(counts)[head], width=BIN_STEP_S/60*0.9)
-    ax[0].set(title=f"{name}: head raw counts (0–10 min)", xlabel="min", ylabel="count")
+    ax[0].bar(centers[head], values[head], width=BIN_STEP_S/60*0.9)
+    ax[0].set(title=f"{name}: head (0–10 min)", xlabel="min", ylabel="n(t) [mass/bin]")
     m = centers <= 90
     ax[1].plot(centers[m], dens[m], label="empirical n(t)")
     lin = centers[m] * (centers[m] <= centers[m].max())
@@ -327,8 +497,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pilot", action="store_true", help="single purpose + diagnostic plot")
     ap.add_argument("--purpose", default="res", choices=list(PURPOSES))
-    ap.add_argument("--pairs", type=int, default=1_000_000)
+    ap.add_argument("--pairs", type=int, default=1_000_000, help="naive mode: pairs/purpose")
     ap.add_argument("--batch", type=int, default=BATCH)
+    ap.add_argument("--stratified", action="store_true",
+                    help="near-field distance bands + far tail (dense head)")
+    ap.add_argument("--near", type=int, default=NEAR_BUDGET, help="stratified: pairs per near band")
+    ap.add_argument("--far", type=int, default=FAR_BUDGET, help="stratified: far-tail pairs")
+    ap.add_argument("--dests", type=int, default=DESTS_PER_CALL, help="stratified: D per near /table")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -337,16 +512,23 @@ def main():
     df, geoms = load_area_masses()
     pois = load_poi_layers()
     rng = np.random.default_rng(SEED)
+    cache = build_point_cache(df, geoms, rng) if args.stratified else None
 
+    key = "n_of_t" if args.stratified else "counts"
     names = [args.purpose] if args.pilot else list(PURPOSES)
     results = {}
     for nm in names:
-        print(f"\n=== {nm} (target {args.pairs:,} pairs, batch {args.batch}) ===")
-        results[nm] = run_purpose(nm, df, geoms, pois, args.pairs, args.batch, edges, rng)
+        if args.stratified:
+            print(f"\n=== {nm} stratified (near {args.near:,}/band, far {args.far:,}) ===")
+            results[nm] = run_purpose_stratified(nm, df, pois, cache, edges, rng,
+                                                 args.near, args.far, args.dests, args.batch)
+        else:
+            print(f"\n=== {nm} (target {args.pairs:,} pairs, batch {args.batch}) ===")
+            results[nm] = run_purpose(nm, df, geoms, pois, args.pairs, args.batch, edges, rng)
         results[nm]["_edges_ref"] = "bin_edges_s"
     save(results, edges, args)
     if args.pilot:
-        pilot_plot(args.purpose, results[args.purpose]["counts"], edges)
+        pilot_plot(args.purpose, results[args.purpose][key], edges)
 
 
 if __name__ == "__main__":
