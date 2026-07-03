@@ -1,226 +1,204 @@
-"""
-Derive per-component temporal SHAPE profiles for the four-component gravity model.
+"""Derive per-component temporal SHAPE profiles from the NTS trip-level microdata.
 
 Under generation pinning (analysis/derive_generation_rates.py) each component's
 absolute magnitude AND the inter-component split are set by data (ρ_c × producers,
 K_c ≈ 1).  The temporal profiles f_c therefore carry ONLY each component's relative
-time-of-day-and-week SHAPE, derived independently — they no longer partition a
-shared aggregate.
+time-of-day-and-week SHAPE — they do not partition a shared aggregate.
 
-For each component c the weekly profile is
-    f_c(dow, h) = V_c(dow) · H_c(daytype(dow), h)
-  - H_c = the within-day hourly shape (Σ_h H = 1):
-       weekday:  ρ-weighted blend of the component's purposes' weekday hourly
-                 distributions (NTS0502a × the aggregate hourly volume);
-       weekend:  the aggregate weekend hourly shape (no per-purpose weekend hourly
-                 data exists), shared across components.
-  - V_c(dow) = the component's relative daily volume Mon–Sun, a ρ-weighted blend of
-       its purposes' day-of-week distributions (NTS0504b), normalised so
-       Σ_{7 days} V_c = 7  ⇒  the day-weighted daily sum W_c = 1.
+This is the **car-specific**, microdata-derived replacement for the old NTS0502a/0504b
+(all-mode aggregate-table) derivation.  The profile is measured DIRECTLY as the joint
+distribution of vehicle-driver trip START times: for each component (the shared
+purpose_mapping.B01_COMPONENT scheme, same as the generation rates) we count car-driver
+trips (MainMode_B04ID {3,5,12}, weight JJXSC×W5 — the NTS trip-count measure and trip
+weight per the Data Extract User Guide) by (day_type, hour) and normalise.  This retires,
+in one step, the old PROXY_0502 merged-purpose proxies, the separable V(dow)×H(hour)
+assumption, the all-mode weekend fallback, the Bayes-flip, and the ρ-weighting/purpose_rates
+dependency (real trip counts already weight by volume).  Calendar day-of-week comes from
+TravelWeekDay_B01ID on the Day table (1=Mon..7=Sun), joined to trips via DayID.
 
-W_c = 1 makes K_c·m_c the component's daily AADT directly (so K_c ≈ 1 with the
-generation-pinned m_c) and matches the existing "rows sum to 7" convention; the
-magnitude/split lives entirely in generation.  The old res+commute+retail+school =
-agg partition constraint is intentionally DROPPED.
+Bins and day_type
+-----------------
+The model collapses day-of-week to day_type — weekday (Mon–Fri, averaged), Saturday,
+Sunday — so the estimand is the 72 (day_type, hour) slots per component (weekday pools
+Mon–Fri, so those bins are well sampled; Sat/Sun are single-day).  We write the weekday
+profile identically into all five weekday rows of the 168-row CSV (the model averages
+them; the official observations are per day_type), which also maximises weekday bin stats.
 
-Mapping: analysis/purpose_mapping.py (shared with derive_generation_rates.py).
-ρ_p (per-purpose car-driver rates) come from analysis/generation_rates.json.
+Adaptive per-bin year pooling (MIN_BIN_N)
+-----------------------------------------
+The temporal profile is a PINNED input with no propagated uncertainty, so a bin's
+sampling noise propagates straight into the χ² at that slot — every bin needs adequate
+statistics, even near-zero night hours.  But pooling years costs a little year-drift, so
+we pool **only where needed**: each (day_type, hour) bin expands its year window through
+the ex-COVID tiers (2023/24 → +2018/19 → +2013–17) until its unweighted count reaches
+MIN_BIN_N, then stops.  Well-sampled daytime/weekday bins stay on 2023/24 (zero drift);
+only thin weekend-night bins pool wider.  This is valid because the shape is near-stationary
+across the window (weekday-peak drift ≈ 1 pp), so a bin's fraction is the same estimand at
+any window — the **normalisation that makes windows comparable is dividing each bin's pooled
+weighted count by its number of years** (a per-year rate).  A handful of intrinsically thin
+res weekend-night bins cannot reach MIN_BIN_N even on the full window; they use the widest
+window (their best available).
 
-Sources (DfT NTS, England, 2023/24 rolling avg):
-  NTS0502a (data/nts0502.ods) — weekday trip start-time × purpose; rows sum to 100,
-       i.e. P(purpose | hour).
-  NTS0504b (data/nts0504.ods) — trips/person/year by day-of-week × purpose (Mon–Sun).
-NTS0502a merges some purposes, so each purpose's weekday hourly SHAPE uses a
-best-available proxy column (PROXY_0502 below) — an approximation in the shape only
-(magnitude is exact from generation).
+Normalisation to Σ=7
+--------------------
+With per-year rates A[dt,h] (weekday = Mon–Fri combined), the CSV columns are
+  weekday-row(h) = 7·(A[0,h]/5)/T,  Sat(h) = 7·A[1,h]/T,  Sun(h) = 7·A[2,h]/T,
+  T = Σ_h (A[0,h] + A[1,h] + A[2,h]),
+so each component column sums to 7 over the 168 rows (W_c = 1) — the existing convention
+(magnitude/split live in generation).
+
+Scope / staging
+---------------
+This derives res / commute / retail.  The three school columns are **carried forward
+untouched** (they stay on the previous method until the school temporal piece, which must
+handle escort ride-sharing — a school car trip is "when does the escorting car leave", a
+COUNT, so ride-sharing matters, unlike the driveshare share).  mean_fraction / std_fraction
+(the aggregate columns used elsewhere, e.g. ingest_counts) are also preserved.
 
 Usage:  python3 analysis/derive_component_profiles.py
-Overwrites mean_fraction_{res,commute,retail,school_primary,school_postprimary,school_tertiary}
-in analysis/hourly_fractions.csv (primary/post-primary = escort-education shape; tertiary = commute
-shape — three explicit copied columns).
-Re-run when the NTS files, the purpose mapping, or generation_rates.json change.
+Re-run when the NTS microdata or the purpose mapping change.
 """
 
-import csv, json, os, sys
-import pandas as pd
+import csv
+import os
+import sys
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from purpose_mapping import COMPONENT_PURPOSES, COMPONENTS, CANONICAL_PURPOSES
+import nts_microdata as nts
+from purpose_mapping import B01_COMPONENT
 
-NTS0502_FILE = "data/nts0502.ods"
-NTS0504_FILE = "data/nts0504.ods"
-FRACS_FILE   = "analysis/hourly_fractions.csv"
-GEN_RATES    = "analysis/generation_rates.json"
-NTS_YEAR     = "2023 to 2024"
-
-# canonical purpose -> NTS0502a column for its weekday hourly SHAPE proxy.  The table
-# merges purposes, so several share a proxy column (shape only; magnitude is from
-# generation): personal_business + other_escort -> col 7 "Other work, other escort and
-# personal business"; leisure -> col 8 "Visiting friends, entertainment and sport"
-# (dominant leisure); other -> col 9 "Holiday, day trip and other".  Education (col 4,
-# the non-vehicle child trip) is NOT used — school uses the Escort-education shape (col 5).
-PROXY_0502 = {
-    "commuting": 2, "business": 3, "education_escort": 5, "shopping": 6,
-    "personal_business": 7, "other_escort": 7, "leisure": 8, "other": 9,
-}
-
-# canonical purpose -> NTS0504b column(s) for its day-of-week volume.
-DOW_0504 = {
-    "commuting": [2], "business": [3], "education_escort": [5], "shopping": [6],
-    "other_escort": [7], "personal_business": [8],
-    "leisure": [9, 10, 11, 12],   # visit-home + visit-elsewhere + sport/ent + holiday
-    "other": [14],
-}
-_DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-              "Saturday", "Sunday"]
+FRACS_FILE = "analysis/hourly_fractions.csv"
+VEHICLE_MODE_CODES = [3, 5, 12]          # car/van driver, motorcycle, taxi
+COMPONENTS = ["res", "commute", "retail"]   # school carried forward (pending its own piece)
+MIN_BIN_N = 100                          # per-(day_type,hour) unweighted target (~10% noise)
+# Expanding ex-COVID year tiers (England-only since 2012; COVID 2020-22 excluded).
+YEAR_TIERS = [[2023, 2024], [2018, 2019], [2017, 2016, 2015, 2014, 2013]]
+POOL_YEARS = [y for tier in YEAR_TIERS for y in tier]
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-def _load_0502_pct():
-    """{col_idx: [P(purpose|hour) for h in 0..23]} from NTS0502a (rows sum to 100)."""
-    raw = pd.read_excel(NTS0502_FILE, sheet_name="NTS0502a_start_time_by_purpose",
-                        header=None, engine="odf")
-    d = raw.iloc[6:].copy(); d.columns = range(d.shape[1])
-    yr = d[d[0] == NTS_YEAR].copy()
-    yr = yr[yr[1] != "All day"].copy()
-    if len(yr) != 24:
-        sys.exit(f"ERROR: expected 24 hourly rows in NTS0502a '{NTS_YEAR}', got {len(yr)}")
-    yr["hour"] = yr[1].str[:2].astype(int)
-    yr = yr.sort_values("hour").reset_index(drop=True)
-    cols = sorted(set(PROXY_0502.values()))
-    for c in cols:
-        yr[c] = pd.to_numeric(yr[c], errors="coerce").fillna(0.0)
-    return {c: yr[c].tolist() for c in cols}
+def _load():
+    """Vehicle-driver trips with component, day_type (0=wkday,1=Sat,2=Sun), hour, weight."""
+    tr = nts.load("trip", columns=["SurveyYear", "MainMode_B04ID", "TripPurpose_B01ID",
+                                   "TripStartHours", "DayID", "W5", "JJXSC"], years=POOL_YEARS)
+    day = nts.load("day", columns=["SurveyYear", "DayID", "TravelWeekDay_B01ID"], years=POOL_YEARS)
+    tr = tr.merge(day[["DayID", "TravelWeekDay_B01ID"]], on="DayID", how="left")
+    tr = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)
+            & tr.TripStartHours.notna() & tr.TravelWeekDay_B01ID.notna()].copy()
+    dow = tr.TravelWeekDay_B01ID.astype(int) - 1                 # 0=Mon .. 6=Sun
+    tr["dt"] = np.where(dow < 5, 0, np.where(dow == 5, 1, 2))     # day_type
+    tr["h"] = tr.TripStartHours.astype(int)
+    tr["w"] = tr.JJXSC * tr.W5
+    tr["component"] = tr.TripPurpose_B01ID.map(B01_COMPONENT)
+    return tr
 
 
-def _load_0504_dayfrac():
-    """{canonical_purpose: [frac(dow) for dow 0..6]} — purpose's Mon–Sun volume
-    distribution from NTS0504b, summing to 1."""
-    raw = pd.read_excel(NTS0504_FILE, sheet_name="NTS0504b_day_purpose",
-                        header=None, engine="odf")
-    d = raw.iloc[6:].copy(); d.columns = range(d.shape[1])
-    yr = d[d[0] == NTS_YEAR].copy()
-    allcols = sorted({c for cols in DOW_0504.values() for c in cols})
-    for c in allcols:
-        yr[c] = pd.to_numeric(yr[c], errors="coerce").fillna(0.0)
-    rowbyday = {row[1]: row for _, row in yr.iterrows()}
-    missing = [day for day in _DAY_ORDER if day not in rowbyday]
-    if missing:
-        sys.exit(f"ERROR: NTS0504b '{NTS_YEAR}' missing days {missing}")
-    out = {}
-    for p, cols in DOW_0504.items():
-        trips = [sum(float(rowbyday[day][c]) for c in cols) for day in _DAY_ORDER]
-        s = sum(trips)
-        out[p] = [t / s for t in trips] if s > 0 else [1.0 / 7] * 7
-    return out
+def _bin_rate(dt, h, ncount_by_year, w_by_year):
+    """Per-year weighted rate for one (dt,h) bin via adaptive tier expansion.
+
+    Returns (rate, n_years, unweighted_n).  Expands the year window tier by tier until the
+    cumulative unweighted count reaches MIN_BIN_N (or tiers are exhausted), then divides the
+    cumulative weighted count by the number of years accumulated — the per-year normalisation
+    that makes bins comparable across the windows they needed.
+    """
+    years, n, wsum = [], 0, 0.0
+    for tier in YEAR_TIERS:
+        for y in tier:
+            years.append(y)
+            n += ncount_by_year.get((y, dt, h), 0)
+            wsum += w_by_year.get((y, dt, h), 0.0)
+        if n >= MIN_BIN_N:
+            break
+    return wsum / len(years), len(years), n
 
 
 def main():
-    rho = json.load(open(GEN_RATES))["purpose_rates"]   # canonical -> ρ_p
-
-    # ── Aggregate hourly profile (input column) ──────────────────────────────
-    rows = list(csv.DictReader(open(FRACS_FILE, newline="")))
-    fieldnames = rows[0].keys() if rows else []
-    mf = {(int(r["day_of_week"]), int(r["hour"].split(":")[0])): float(r["mean_fraction"])
-          for r in rows}
-    # weekday aggregate hourly weight P(hour) (avg Mon–Fri, normalised) → converts
-    # NTS0502a's P(purpose|hour) into P(hour|purpose).
-    mfwd = [sum(mf[(d, h)] for d in range(5)) / 5 for h in range(24)]
-    s = sum(mfwd); mfwd = [x / s for x in mfwd]
-    # weekend hourly shapes (shared across components — no per-purpose weekend data).
-    def _norm_day(dow):
-        v = [mf[(dow, h)] for h in range(24)]; t = sum(v)
-        return [x / t for x in v] if t > 0 else [1.0 / 24] * 24
-    H_weekend = {5: _norm_day(5), 6: _norm_day(6)}
-
-    # ── Per-purpose weekday hourly distribution g_p(h) = P(hour|purpose) ──────
-    col_pct = _load_0502_pct()
-    g = {}
-    for p in CANONICAL_PURPOSES:
-        raw = [col_pct[PROXY_0502[p]][h] * mfwd[h] for h in range(24)]
-        t = sum(raw)
-        g[p] = [x / t for x in raw] if t > 0 else [1.0 / 24] * 24
-
-    # ── Component weekday hourly shape Hwd_c(h): ρ-weighted blend, Σ_h = 1 ─────
-    Hwd = {}
-    for comp, terms in COMPONENT_PURPOSES.items():
-        blend = [0.0] * 24
-        for p, w in terms:
-            wt = w * rho[p]
-            for h in range(24):
-                blend[h] += wt * g[p][h]
-        t = sum(blend)
-        Hwd[comp] = [x / t for x in blend] if t > 0 else [1.0 / 24] * 24
-
-    # ── Component day-of-week volume V_c(dow): ρ-weighted, Σ_7 = 7 (⇒ W_c=1) ──
-    dayfrac = _load_0504_dayfrac()
-    V = {}
-    for comp, terms in COMPONENT_PURPOSES.items():
-        vol = [0.0] * 7
-        for p, w in terms:
-            wt = w * rho[p]
-            for dow in range(7):
-                vol[dow] += wt * dayfrac[p][dow]
-        t = sum(vol)
-        V[comp] = [x / t * 7 for x in vol] if t > 0 else [1.0] * 7
-
-    # ── Assemble f_c(dow, h) = V_c(dow) · H_c(daytype, h) ────────────────────
-    fc = {comp: {} for comp in COMPONENTS}
+    print(f"Deriving car-specific temporal profiles from NTS microdata "
+          f"(pool tiers {YEAR_TIERS}, MIN_BIN_N={MIN_BIN_N}) …")
+    tr = _load()
+    # Pre-aggregate per (year, dt, hour): unweighted n and Σw, per component.
+    A = {}          # component -> (3,24) per-year rate grid
+    diag = {}       # component -> (windows list, final n list)
     for comp in COMPONENTS:
-        for dow in range(7):
-            H = Hwd[comp] if dow < 5 else H_weekend[dow]
+        sub = tr[tr.component == comp]
+        g = sub.groupby(["SurveyYear", "dt", "h"])
+        ncount = g.size().to_dict()
+        wsum = g.w.sum().to_dict()
+        grid = np.zeros((3, 24))
+        wins, ns = [], []
+        for dt in range(3):
             for h in range(24):
-                fc[comp][(dow, h)] = V[comp][dow] * H[h]
+                rate, nyr, nn = _bin_rate(dt, h, ncount, wsum)
+                grid[dt, h] = rate
+                wins.append(nyr)
+                ns.append(nn)
+        A[comp] = grid
+        diag[comp] = (np.array(wins), np.array(ns))
 
-    # Per-level school shapes (settled design): primary + post-primary share the escort-education
-    # school-run shape; tertiary uses the commute shape (self-driven — spread AM / later PM).
-    # Written as three explicit copied columns so each level's temporal is self-contained in the CSV
-    # (no relying on documentation to know primary≡post-primary≡escort and tertiary≡commute).
-    fc["school_primary"]     = dict(fc["school"])
-    fc["school_postprimary"] = dict(fc["school"])
-    fc["school_tertiary"]    = dict(fc["commute"])
+    # ── Read the CSV, rewrite res/commute/retail, carry everything else forward ──
+    with open(FRACS_FILE, newline="") as f:
+        rows = list(csv.DictReader(f))
+        fieldnames = rows[0].keys()
+    for comp in COMPONENTS:
+        if f"mean_fraction_{comp}" not in fieldnames:
+            sys.exit(f"ERROR: column mean_fraction_{comp} missing from {FRACS_FILE}")
+    for lvl in ("primary", "postprimary", "tertiary"):
+        if f"mean_fraction_school_{lvl}" not in fieldnames:
+            sys.exit(f"ERROR: school column missing from {FRACS_FILE} — school columns are "
+                     f"carried forward and must already exist (see module docstring / staging)")
 
-    # ── Write component columns (drop legacy biz + lumped-school columns) ──────
-    out_components = ["res", "commute", "retail",
-                      "school_primary", "school_postprimary", "school_tertiary"]
-    for r in rows:
-        dow = int(r["day_of_week"]); h = int(r["hour"].split(":")[0])
-        for comp in out_components:
-            r[f"mean_fraction_{comp}"] = f"{fc[comp][(dow, h)]:.10f}"
-    comp_cols = [f"mean_fraction_{c}" for c in out_components]
-    base_cols = [c for c in fieldnames
-                 if c not in comp_cols and c not in ("mean_fraction_biz", "mean_fraction_school")]
-    out_cols = base_cols + comp_cols
+    # Normalise each component to Σ_168 = 7 and write the per-dow rows.
+    for comp in COMPONENTS:
+        grid = A[comp]
+        T = grid.sum()                                   # Σ over the 3 day-types × 24 h
+        if T <= 0:
+            sys.exit(f"ERROR: zero total rate for {comp}")
+        wkday_row = 7.0 * (grid[0] / 5.0) / T             # one weekday (grid[0] pools Mon–Fri)
+        sat_row = 7.0 * grid[1] / T
+        sun_row = 7.0 * grid[2] / T
+        col = f"mean_fraction_{comp}"
+        for r in rows:
+            dow = int(r["day_of_week"]); h = int(r["hour"].split(":")[0])
+            v = wkday_row[h] if dow < 5 else (sat_row[h] if dow == 5 else sun_row[h])
+            r[col] = f"{v:.10f}"
+
     with open(FRACS_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=out_cols, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=list(fieldnames))
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Wrote component shape columns → {FRACS_FILE}")
+    print(f"Wrote res/commute/retail shape columns → {FRACS_FILE} "
+          f"(school columns carried forward)")
 
     # ── Diagnostics + verification ───────────────────────────────────────────
-    print("\nWeekday hourly shape (peak hours, % of the day at each hour):")
-    print(f"  {'h':>3} {'commute':>8} {'retail':>7} {'school':>7} {'res':>7}")
-    for h in range(6, 20):
-        print(f"  {h:02d}: {100*Hwd['commute'][h]:7.1f}% {100*Hwd['retail'][h]:6.1f}% "
-              f"{100*Hwd['school'][h]:6.1f}% {100*Hwd['res'][h]:6.1f}%")
-    print("\nDay-of-week volume V_c (Mon→Sun, Σ=7):")
-    for comp in ("commute", "retail", "school", "res"):
-        print(f"  {comp:8s} " + " ".join(f"{v:4.2f}" for v in V[comp]))
+    print("\nAdaptive pooling — bins (of 72) per window size, and final unweighted n:")
+    print(f"  {'comp':8s} {'2yr':>4} {'4yr':>4} {'9yr':>4} | {'min_n':>6} {'median_n':>9} "
+          f"{'#<MIN':>6}  daytime(wkday 7-19) min_n")
+    for comp in COMPONENTS:
+        wins, ns = diag[comp]
+        hist = {2: int((wins == 2).sum()), 4: int((wins == 4).sum()), 9: int((wins == 9).sum())}
+        # daytime weekday bins = dt 0 (first 24), hours 7..19
+        dt0 = ns[:24]
+        print(f"  {comp:8s} {hist[2]:>4} {hist[4]:>4} {hist[9]:>4} | {ns.min():>6} "
+              f"{int(np.median(ns)):>9} {int((ns < MIN_BIN_N).sum()):>6}  {dt0[7:20].min():>6}")
 
-    print("\nVerification (W_c uses the Mon–Fri average, as the model collapses dow→day_type):")
+    print("\nWeekday hourly shape %, h6-9,12,16-18 (sanity):")
+    print("  comp     " + "  ".join(f"{h:4d}" for h in [6, 7, 8, 9, 12, 16, 17, 18]))
+    for comp in COMPONENTS:
+        g = A[comp][0]; g = g / g.sum()
+        print(f"  {comp:8s}" + "  ".join(f"{100*g[h]:4.1f}" for h in [6, 7, 8, 9, 12, 16, 17, 18]))
+
+    print("\nVerification (each component column Σ over 168 rows → 7):")
     ok = True
     for comp in COMPONENTS:
-        col_sum = sum(fc[comp].values())                       # over 168 rows
-        wd_avg = sum(sum(fc[comp][(d, h)] for h in range(24))
-                     for d in range(5)) / 5.0                  # avg weekday daily sum
-        wc = (5 * wd_avg
-              + sum(fc[comp][(5, h)] for h in range(24))
-              + sum(fc[comp][(6, h)] for h in range(24))) / 7.0
-        flag = "" if abs(col_sum - 7) < 1e-6 and abs(wc - 1) < 1e-6 else "  <-- FAIL"
+        col = f"mean_fraction_{comp}"
+        s = sum(float(r[col]) for r in rows)
+        neg = any(float(r[col]) < 0 for r in rows)
+        flag = "" if abs(s - 7) < 1e-6 and not neg else "  <-- FAIL"
         ok = ok and not flag
-        print(f"  {comp:8s} Σ_168 = {col_sum:.4f} (→7)   W_c = {wc:.4f} (→1){flag}")
-    neg = [(c, k) for c in COMPONENTS for k, v in fc[c].items() if v < 0]
-    print("  all non-negative" if not neg else f"  NEGATIVE at {neg[:5]}")
-    print("  ✓ all checks pass" if ok and not neg else "  ✗ CHECK FAILED")
+        print(f"  {comp:8s} Σ_168 = {s:.6f}{'  (has negative!)' if neg else ''}{flag}")
+    print("  ✓ all checks pass" if ok else "  ✗ CHECK FAILED")
 
 
 if __name__ == "__main__":
