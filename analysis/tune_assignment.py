@@ -1027,17 +1027,26 @@ print(f"\nRunning Powell's method (λ={lam}"
       + (f"  fast: ftol/xtol={_tol:.0e}" if fast else "") + ") …")
 print(f"  {'eval':>4s}  χ²/N(curr)  χ²/N(best)  elapsed")
 
-# Evaluate initial point
+# Evaluate initial point (populates `best` before Powell starts, so a Ctrl-C at any
+# point below has a best-seen param vector to write out).
 objective(log_p0, log_ref)
 
-result = scipy.optimize.minimize(
-    lambda p: objective(p, log_ref),
-    log_p0,
-    method="powell",
-    options={"maxiter": 5000, "ftol": _tol, "xtol": _tol},
-)
+try:
+    result = scipy.optimize.minimize(
+        lambda p: objective(p, log_ref),
+        log_p0,
+        method="powell",
+        options={"maxiter": 5000, "ftol": _tol, "xtol": _tol},
+    )
+except KeyboardInterrupt:
+    # Graceful stop: fall through to the normal write path (final eval + tuned_params +
+    # history + plot) using the best params seen so far.  `result` is never read again
+    # (log_best comes from `best`), so a placeholder is fine.
+    print(f"\n⚠ Interrupted (Ctrl-C) after {eval_count[0]} evals — writing the best-seen "
+          f"params (χ²/N={best['chi2']/n_obs:.4f}) and exiting cleanly …")
+    result = None
 
-# Use best params seen (Powell may backtrack at convergence)
+# Use best params seen (Powell may backtrack at convergence, or we were interrupted)
 log_best = best["log_params"]
 
 # ── Unpack best params ────────────────────────────────────────────────────────
