@@ -21,7 +21,8 @@ from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    load_self_terms, aadt_weights,
                    load_generation_rates, compute_generation_scales,
                    site_flow, compute_chi2, print_chi2_table,
-                   assert_paths_cache_fresh)
+                   assert_paths_cache_fresh,
+                   willingness_keys, willingness_from_flat)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -62,10 +63,7 @@ K_commute      = None
 K_retail       = None
 K_sch          = None
 K_school       = {lvl: 0.0 for lvl in SCHOOL_LEVELS}
-TAU_res            = None
-TAU_commute    = None
-TAU_retail     = None
-TAU_school     = None
+willingness    = None   # {component: (w, τs, τl)} — the 6 double-exp kernels
 slot_fracs_res     = {}
 slot_fracs_commute = {}
 slot_fracs_retail  = {}
@@ -75,10 +73,8 @@ if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         _tp = json.load(f)
     K             = _tp.get("K",             K)
-    TAU_res           = _tp.get("TAU_res",           None)
-    TAU_commute   = _tp.get("TAU_commute",   None)
-    TAU_retail    = _tp.get("TAU_retail",    None)
-    TAU_school    = _tp.get("TAU_school",    None)
+    if all(k in _tp for k in willingness_keys()):
+        willingness = willingness_from_flat(_tp)     # 6 double-exp kernels (natural units)
     if "K_res" in _tp and "K_commute" in _tp and "K_retail" in _tp:
         K_res     = _tp["K_res"]
         K_commute = _tp["K_commute"]
@@ -153,15 +149,15 @@ N_links  = len(link_u)
 N_nodes  = len(node_ids_arr)
 # External intra-zonal self-term (denominator-only; from build_intra_times.py).
 self_src, self_dist, self_w = load_self_terms(list(node_ids_arr))
-# Require the multi-component params (the six K's + commute/retail/school kernels).
+# Require the multi-component params (the six K's + the six double-exp willingness kernels).
 if not (K_res is not None and K_commute is not None and K_retail is not None
-        and TAU_commute is not None and TAU_retail is not None):
-    raise SystemExit("tuned_params.json lacks the multi-component params — "
-                     "run reset_gravity_params.py then tune_assignment.py")
-# School levels active when their K>0, the shared school kernel is present, and demand exists.
+        and willingness is not None):
+    raise SystemExit("tuned_params.json lacks the multi-component double-exp params — "
+                     "run reset_gravity_params.py (after sync_kernel_anchor.py) then tune_assignment.py")
+# School levels active when their K>0 and demand exists (each level has its own kernel in `willingness`).
 _active_school = [lvl for lvl in SCHOOL_LEVELS
                   if K_school.get(lvl, 0.0) > 0 and w_school_levels[lvl].sum() > 0]
-_use_school = TAU_school is not None and len(_active_school) > 0
+_use_school = len(_active_school) > 0
 
 # Production-constrained assignment (singly-constrained per component).
 # Per-OD-pair pre-K component flows, then scatter onto links via the probit
@@ -169,8 +165,8 @@ _use_school = TAU_school is not None and len(_active_school) > 0
 t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
     od_src, od_dst, od_dist, N_nodes,
     w_pop, w_commute_attr, w_retail,
-    TAU_res, TAU_commute, TAU_retail,
-    TAU_school=TAU_school, with_school=_use_school,
+    willingness,
+    with_school=_use_school,
     w_school_levels=w_school_levels, w_school_prod_levels=w_school_prod_levels,
     self_src=self_src, self_dist=self_dist, self_w=self_w,
     w_commute_prod=w_commute_prod,
@@ -290,9 +286,8 @@ print_chi2_table(rows, chi2, n_obs, n_eff=n_eff)
 flows_path = f"{OUT_DIR}/newtownards_flows.json"
 # Serialise TRUE AADT (component-weighted) flows — consumed by build_map.py as AADT.
 out = {
-    "kernel": "modesub",
+    "kernel": "modesub_double",
     "K": K,
-    "TAU_res": TAU_res,
     "flows": {f"{u},{v}": flow for (u, v), flow in aadt_combined.items()},
     "K_res": K_res, "K_commute": K_commute, "K_retail": K_retail,
     "aadt_weights": {"res": W_res, "commute": W_commute, "retail": W_retail,
@@ -311,6 +306,7 @@ with open(flows_path, "w") as f:
     json.dump(out, f)
 _comp_str = "res/commute/retail/school" if _use_school else "res/commute/retail"
 print(f"\nSaved {len(link_flow)} link flows → {flows_path}  (+ {_comp_str} components)")
-print(f"Parameters: K={K}"
-      f"  willingness τ (s): res={TAU_res} commute={TAU_commute} retail={TAU_retail}"
-      + (f" school={TAU_school}" if _use_school else ""))
+print(f"Parameters: K={K}  double-exp willingness (w, τs, τl):")
+for _c in ("res", "commute", "retail", "school_primary", "school_postprimary", "school_tertiary"):
+    _w, _ts, _tl = willingness[_c]
+    print(f"    {_c:20s} w={_w:.3f}  τs={_ts:.0f}s  τl={_tl:.0f}s")

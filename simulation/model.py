@@ -158,30 +158,54 @@ def assert_paths_cache_fresh(cache):
 # bincounts); K_c is applied by the caller.  Kernel = _modesub_kernel (below).
 
 
-def _modesub_kernel(d, TAU, component):
+def _modesub_kernel(d, wparams, component):
     """The production-constrained deterrence: an empirical mode-substitution rise ×
-    an exponential willingness decay (decoupled — see analysis/driveshare.py and the
-    project-tanner-kernel-tld memory):
-        f(c) = driveshare(equiv_miles(c), component) · exp(−c / TAU),  c in OSRM seconds.
-    `driveshare(equiv_miles(c), component)` is that component's empirical car-mode share
-    by trip length (per-component — the short-range walk↔drive substitution differs by
-    purpose; short trips walked ⇒ f→0 at the origin); `exp(−c/TAU)` is the per-component
-    willingness, TAU = 1/γ the characteristic willingness time (seconds).  The
-    driveshare PLATEAU_c is a constant that cancels within each component in the
-    production constraint.  `component` is required — one of driveshare.CURVES
-    (res/commute/retail, or school_primary/school_postprimary/school_tertiary).
+    a double-exponential willingness decay (decoupled — see analysis/driveshare.py,
+    analysis/fit_kernel.py and the project-tanner-kernel-tld memory):
+        f(c) = driveshare(equiv_miles(c), component) · [ w·exp(−c/τs) + (1−w)·exp(−c/τl) ],
+    c in OSRM seconds.  `driveshare(equiv_miles(c), component)` is that component's
+    empirical car-mode share by trip length (per-component — the short-range walk↔drive
+    substitution differs by purpose; short trips walked ⇒ f→0 at the origin).
+    `wparams = (w, τs, τl)` is the per-component willingness: a fast head (weight w, scale
+    τs) + a heavier tail (weight 1−w, scale τl>τs), both seconds — the TLD/n_Ire divide
+    (fit_kernel) showed a single exponential is too light-tailed.  W(0)=w+(1−w)=1, and the
+    willingness amplitude is absorbed by K in the production constraint, so only the shape
+    (w, τs, τl) is load-bearing (as the single-exp τ was before).  The driveshare PLATEAU_c
+    is likewise a constant that cancels within each component.  `component` is required — one
+    of driveshare.CURVES (res/commute/retail, or school_primary/postprimary/tertiary).
     f(0)=0 (equiv_miles→0 ⇒ driveshare 0); finite everywhere."""
+    w, tau_s, tau_l = wparams
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        return driveshare(equiv_miles(d), component) * np.exp(-d / TAU)
+        W = w * np.exp(-d / tau_s) + (1.0 - w) * np.exp(-d / tau_l)
+        return driveshare(equiv_miles(d), component) * W
 
 
 SCHOOL_LEVELS = ("primary", "postprimary", "tertiary")   # the three independent school components
 
+# The six gravity components, each carrying its own double-exp willingness kernel
+# (res/commute/retail + the three independent school levels).  These strings are both the
+# `component` arg to _modesub_kernel/driveshare and the keys of the `willingness` dict.
+WILLINGNESS_COMPONENTS = ("res", "commute", "retail",
+                          "school_primary", "school_postprimary", "school_tertiary")
+_WPARAM_SUFFIXES = ("taus", "taul", "w")   # flat-key order: "<comp>_taus/_taul/_w"
+
+
+def willingness_keys():
+    """The 18 flat willingness param keys in canonical order (tuned_params/tuner_config)."""
+    return [f"{c}_{s}" for c in WILLINGNESS_COMPONENTS for s in _WPARAM_SUFFIXES]
+
+
+def willingness_from_flat(flat):
+    """Build the {component: (w, τs, τl)} dict `constrained_od_flows` expects, from a flat
+    {"<comp>_taus"/"_taul"/"_w": value} dict (natural units).  Fails loud on a missing key."""
+    return {c: (float(flat[f"{c}_w"]), float(flat[f"{c}_taus"]), float(flat[f"{c}_taul"]))
+            for c in WILLINGNESS_COMPONENTS}
+
 
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_pop, w_workplace, w_retail,
-                         TAU_res, TAU_commute, TAU_retail,
-                         TAU_school=None, with_school=False,
+                         willingness,
+                         with_school=False,
                          w_school_levels=None, w_school_prod_levels=None,
                          self_src=None, self_dist=None, self_w=None,
                          w_commute_prod=None,
@@ -194,13 +218,16 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     per-pair flows BEFORE the K_res/K_commute/K_retail/K_<level> scaling; the caller
     scatters them onto links (all links, or observed rows only) and applies K.
 
-    The commute and retail components are independent clones of the school
-    component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
+    `willingness` is a dict {component: (w, τs, τl)} of per-component double-exp
+    willingness params (6 entries — res/commute/retail + school_primary/postprimary/
+    tertiary; each school level fully independent, no shared τ_school), consumed by
+    _modesub_kernel.  The commute and retail components are independent clones of the
+    school component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
     split with its OWN kernel — NO weight parameter and NO self/cross term
     (the old single business component's W_BIZ and biz×biz term are gone):
-      commute (modesub kernel, willingness TAU_commute): producer = resident commuters
+      commute (modesub kernel, willingness["commute"]): producer = resident commuters
         (w_commute_prod), attractor = workplace jobs (w_workplace).
-      retail  (modesub kernel, willingness TAU_retail):   producer = population,
+      retail  (modesub kernel, willingness["retail"]):  producer = population,
         attractor = retail parking spaces (w_retail).
 
     Denominators are summed over the FULL destination set of each origin (all od
@@ -233,9 +260,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     gs_ret_out = gs.get("ret_out", 1.0)
     gs_ret_ret = gs.get("ret_ret", 1.0)
 
-    F_res = _modesub_kernel(od_dist, TAU_res, "res")
-    F_com = _modesub_kernel(od_dist, TAU_commute, "commute")
-    F_ret = _modesub_kernel(od_dist, TAU_retail, "retail")
+    F_res = _modesub_kernel(od_dist, willingness["res"], "res")
+    F_com = _modesub_kernel(od_dist, willingness["commute"], "commute")
+    F_ret = _modesub_kernel(od_dist, willingness["retail"], "retail")
 
     pop_s  = w_pop[src];       pop_d  = w_pop[dst]
     work_s = w_workplace[src]; work_d = w_workplace[dst]
@@ -243,9 +270,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
 
     _has_self = self_src is not None and len(self_src) > 0
     if _has_self:
-        F_res_self = _modesub_kernel(self_dist, TAU_res, "res")
-        F_com_self = _modesub_kernel(self_dist, TAU_commute, "commute")
-        F_ret_self = _modesub_kernel(self_dist, TAU_retail, "retail")
+        F_res_self = _modesub_kernel(self_dist, willingness["res"], "res")
+        F_com_self = _modesub_kernel(self_dist, willingness["commute"], "commute")
+        F_ret_self = _modesub_kernel(self_dist, willingness["retail"], "retail")
     else:
         F_res_self = F_com_self = F_ret_self = None
 
@@ -285,20 +312,20 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     )
 
     # School: three INDEPENDENT components (primary / post-primary / tertiary), each a symmetric
-    # two-leg pop↔school split with its OWN producer, attractor, generation scale, K — AND its own
-    # per-level driveshare curve (school_primary/postprimary/tertiary).  They share only the single
-    # willingness time TAU_school (the settled single-τ design); the mode-substitution rise differs by
-    # level (primary driven far more than tertiary), so the kernel F_sch and BOTH its denominators are
-    # per-level — computed inside the loop, not once.  The pop-side return denominator differs across
-    # levels only through the driveshare, not the pop attractor.
+    # two-leg pop↔school split with its OWN producer, attractor, generation scale, K, per-level
+    # driveshare curve AND its OWN double-exp willingness (willingness["school_<lvl>"]) — the levels
+    # are now fully independent (no shared τ_school).  The kernel F_sch and BOTH its denominators are
+    # per-level, computed inside the loop.  The pop-side return denominator differs across levels only
+    # through the driveshare + willingness, not the pop attractor.
     t_sch_by_level = {lvl: np.zeros(len(src), dtype=np.float64) for lvl in SCHOOL_LEVELS}
     if with_school and w_school_levels:
         for lvl in SCHOOL_LEVELS:
             w_sch = w_school_levels.get(lvl)
             if w_sch is None or w_sch.sum() <= 0:
                 continue
-            F_sch = _modesub_kernel(od_dist, TAU_school, f"school_{lvl}")
-            F_sch_self = (_modesub_kernel(self_dist, TAU_school, f"school_{lvl}")
+            w_sch_params = willingness[f"school_{lvl}"]
+            F_sch = _modesub_kernel(od_dist, w_sch_params, f"school_{lvl}")
+            F_sch_self = (_modesub_kernel(self_dist, w_sch_params, f"school_{lvl}")
                           if _has_self else None)
             iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop, F_sch_self)   # return leg school→pop: attraction = pop
             sch_s = w_sch[src]; sch_d = w_sch[dst]

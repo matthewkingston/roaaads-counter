@@ -3,19 +3,23 @@ Reset gravity parameters in tuned_params.json to the reference values in
 tuner_config.json.  External zone params and the temporal profile (slot_fracs_*)
 are preserved unchanged.
 
-Gravity shape params — every key in tuner_config gravity_ref, i.e. the willingness
-times TAU_res/TAU_commute/TAU_retail/TAU_school (school is a single shared kernel
-across the three school levels) plus THETA — are reset to the ref.  The six
-component scales K_res/K_commute/K_retail/K_primary/K_postprimary/K_tertiary are
-reset to 1.0: with generation pinned (model.compute_generation_scales puts producer
-weights in vehicle-driver trips/day) each K_c is a ≈1 verification anchor, and the
-tuner's convex solve_scales recomputes them on the first step regardless.
+Gravity shape params — every key in tuner_config gravity_ref, i.e. the 18 flat
+willingness keys `<comp>_taus/_taul/_w` (the double-exp {τs, τl, w} for each of the 6
+components incl. the 3 independent school levels; seed them from the TLD/n_Ire divide
+with `sync_kernel_anchor.py` first) — are reset to the ref.  The six component scales
+K_res/K_commute/K_retail/K_primary/K_postprimary/K_tertiary are reset to 1.0: with
+generation pinned (model.compute_generation_scales puts producer weights in
+vehicle-driver trips/day) each K_c is a ≈1 verification anchor, and the tuner's convex
+solve_scales recomputes them on the first step regardless.  `kernel` is set to
+"modesub_double".
 
-Legacy 3-component biz keys (K, K_biz, W_BIZ, W_SCHOOL, P_biz, ALPHA_biz), the
-pre-split single school scale/shape (K_sch, slot_fracs_school) and dead MU/SIGMA
-are stripped so the result is a clean 6-component param file.
+Legacy keys — the single-exp willingness (TAU_res/TAU_commute/TAU_retail/TAU_school,
+THETA), the 3-component biz keys (K, K_biz, W_BIZ, …), the pre-split single school
+scale/shape (K_sch, slot_fracs_school) and dead MU/SIGMA — are stripped so the result
+is a clean 6-component double-exp param file.
 
 Usage:
+  python3 simulation/sync_kernel_anchor.py     # seed gravity_ref (18 keys) first
   python3 simulation/reset_gravity_params.py
 """
 
@@ -34,7 +38,9 @@ SCALE_KEYS   = ("K_res", "K_commute", "K_retail",
 STALE_KEYS   = ("K", "K_biz", "K_sch", "W_BIZ", "W_SCHOOL", "P_biz", "ALPHA_biz",
                 "ALPHA", "ALPHA_commute", "ALPHA_retail", "ALPHA_school",
                 "P", "BETA", "P_commute", "BETA_commute", "P_retail", "BETA_retail",
-                "P_school", "BETA_school", "MU", "SIGMA", "TAU", "slot_fracs_school")
+                "P_school", "BETA_school", "MU", "SIGMA", "TAU", "slot_fracs_school",
+                # single-exp willingness (superseded by the <comp>_taus/_taul/_w keys):
+                "TAU_res", "TAU_commute", "TAU_retail", "TAU_school", "THETA")
 
 existing = {}
 if os.path.exists(TUNED_PARAMS):
@@ -60,6 +66,7 @@ for k in SCALE_KEYS:
     existing[k] = 1.0
 for k in STALE_KEYS:
     existing.pop(k, None)
+existing["kernel"] = "modesub_double"
 
 with open(TUNED_PARAMS, "w") as f:
     json.dump(existing, f, indent=2)

@@ -59,10 +59,10 @@ if len(matches) > 1:
 
 entry = matches[0]
 
-if entry["params"].get("kernel") != "rational":
-    print("WARNING: this history entry uses the old lognormal kernel. "
-          "Restoring it will produce incorrect results with the current "
-          "rational-kernel pipeline. Aborting.")
+if entry["params"].get("kernel") not in ("modesub", "modesub_double"):
+    print(f"WARNING: history entry kernel is {entry['params'].get('kernel')!r}, not a "
+          "modesub kernel. Restoring it would mismatch the current double-exp pipeline. "
+          "Aborting.")
     sys.exit(1)
 
 # ── Restore ───────────────────────────────────────────────────────────────────
@@ -84,11 +84,11 @@ if hp:
           "  ".join(f"{k}={v}" for k, v in hp.items()))
 print()
 
-# Scalar gravity params: show before/after
-SCALAR_KEYS = [k for k in ("K", "K_res", "K_commute", "K_retail", "K_sch",
-                            "K_primary", "K_postprimary", "K_tertiary",
-                            "TAU_res", "TAU_commute", "TAU_retail", "TAU_school",
-                            "THETA")
+# Scalar gravity params: show before/after (K's + the 18 double-exp willingness keys)
+_WCOMPS = ("res", "commute", "retail", "school_primary", "school_postprimary", "school_tertiary")
+_WKEYS  = [f"{c}_{s}" for c in _WCOMPS for s in ("taus", "taul", "w")]
+SCALAR_KEYS = [k for k in (["K", "K_res", "K_commute", "K_retail", "K_sch",
+                            "K_primary", "K_postprimary", "K_tertiary"] + _WKEYS)
                if k in params]
 if SCALAR_KEYS:
     print(f"  {'param':<8}  {'before':>14}  {'after':>14}")

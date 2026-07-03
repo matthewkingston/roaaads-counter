@@ -15,12 +15,14 @@ Observations:
   Walking obs: per-session count obs from data/link_aadt.json, Poisson error (n_eff).
 Both types are in count space, unified in _slot_data with per-obs weights and rhs.
 
-All optimizer parameters are stored in log-space to enforce positivity.
+Optimizer parameters are stored in unconstrained internal coords (log for the τ's, logit for w).
 
-Tunes 4 gravity params (with school): per-component willingness TAU_c (= 1/γ, seconds) for the
-mode-substitution × willingness kernel f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c) — the
-mode-substitution rise + speed are shared/data-derived (model._modesub_kernel), only TAU_c is tuned.
-TAU_res, TAU_commute, TAU_retail, TAU_school.  Commute and retail are independent clones of the school component — each a symmetric two-leg,
+Tunes a fully-tunable DOUBLE-EXP willingness per component (18 params — {τs, τl, w} × 6 components
+incl. 3 INDEPENDENT school levels; 9 with no school demand) for the mode-substitution × willingness
+kernel f(c)=driveshare(equiv_miles(c))·[w·exp(−c/τs)+(1−w)·exp(−c/τl)] — the rise + speed are
+shared/data-derived (model._modesub_kernel), only {τs, τl, w} are tuned, anchored to the TLD/n_Ire
+divide (analysis/fit_kernel.py → tuner_config gravity_ref, seeded by sync_kernel_anchor.py) via a
+light L2 pull.  Commute and retail are independent clones of the school component — each a symmetric two-leg,
 per-origin-normalised split with NO weight parameter and NO self/cross term (the old
 single business component's W_BIZ and biz×biz are gone).
 Production-constrained per component: each origin's trip production is fixed by its
@@ -300,18 +302,39 @@ k_prior_std_school = {lvl: _k_prior_std.get(f"school_{lvl}", 0.5) for lvl in SCH
 
 grav_ref = config.get("gravity_ref", {})
 grav_lam_raw = config.get("gravity_lambda", 0.0)
-# 4 gravity params (with school): per-component willingness TAU_c (= 1/γ, seconds) for the
-# mode-substitution × willingness kernel f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c).
-# The mode-substitution rise + speed are shared/data-derived (model._modesub_kernel); only
-# TAU_c is tuned — no P/BETA (the peak emerges from driveShare × exp).
-_grav_param_names = ["TAU_res", "TAU_commute", "TAU_retail"]
-if _has_stoch:
-    _grav_param_names.append("THETA")
+# Gravity params: a fully-tunable DOUBLE-EXP willingness per component for the mode-substitution
+# × willingness kernel f(c)=driveshare(equiv_miles(c))·[w·exp(−c/τs)+(1−w)·exp(−c/τl)].  The rise +
+# speed are shared/data-derived (model._modesub_kernel); the 3 willingness params {τs, τl, w} per
+# component are tuned — 6 components incl. 3 INDEPENDENT school levels ⇒ 18 params (9 with no school
+# demand).  Anchored to the TLD/n_Ire divide (analysis/fit_kernel.py → tuner_config gravity_ref,
+# seeded by sync_kernel_anchor.py) via a light L2 pull (gravity_lambda).
+_w_components = ["res", "commute", "retail"]
 if _has_school:
-    _grav_param_names += ["TAU_school"]
-# Derive the log-ref + lambda vectors from the param-name list + tuner_config, so the
-# three lists can't drift (missing ref defaults to 1.0).
-log_grav_ref = np.array([math.log(max(grav_ref.get(k, 1.0), 1e-4))
+    _w_components += [f"school_{lvl}" for lvl in SCHOOL_LEVELS]
+_grav_param_names = [f"{c}_{s}" for c in _w_components for s in ("taus", "taul", "w")]
+
+# Sane fallbacks for any key missing from gravity_ref (the anchor normally supplies all 18).
+_WDEFAULTS = {"taus": 600.0, "taul": 3000.0, "w": 0.9}
+def _wdefault(key):
+    return _WDEFAULTS[key.rsplit("_", 1)[1]]
+
+# Per-key transform between natural units and the unconstrained internal coords Powell optimizes:
+# log for the two τ's (positivity), logit for w (∈(0,1)).  Independent per key — the τs↔τl swap and
+# τl-runaway (flat when w→1) degeneracies are held off by the anchor start + the light anchor-reg.
+def _to_internal(key, val):
+    if key.endswith("_w"):
+        v = min(max(float(val), 1e-6), 1.0 - 1e-6)
+        return math.log(v / (1.0 - v))
+    return math.log(max(float(val), 1e-4))
+
+def _from_internal(key, x):
+    if key.endswith("_w"):
+        return 1.0 / (1.0 + math.exp(-max(min(x, 100.0), -100.0)))
+    return math.exp(x)
+
+# Derive the ref + lambda vectors (internal coords) from the param-name list + tuner_config, so the
+# lists can't drift (missing ref → the fallback above).
+log_grav_ref = np.array([_to_internal(k, grav_ref.get(k, _wdefault(k)))
                          for k in _grav_param_names])
 if isinstance(grav_lam_raw, dict):
     log_grav_lam = np.array([grav_lam_raw.get(k, 0.0) for k in _grav_param_names])
@@ -628,7 +651,7 @@ slot_fracs_school_nts  = {lvl: {sk: float(_slot_mfs[lvl][si]) for si, (sk, _) in
 
 # ── Assignment and chi-squared helpers ───────────────────────────────────────
 
-def run_assignment(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA=None):
+def run_assignment(willingness):
     """Production-constrained gravity assignment.
 
     Returns (flow_res, flow_commute, flow_retail, flow_school).  Each component is
@@ -638,19 +661,17 @@ def run_assignment(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA=None):
     (D_i has no K, so flow stays linear in K — with f pinned at NTS the scale solve
     is convex).
 
-    Each component uses the mode-substitution × willingness kernel
-    f(c)=driveshare(equiv_miles(c))·exp(−c/TAU_c) with its own willingness TAU_c:
-    flow_res = pop→pop (TAU_res); flow_commute = commuters↔workplace (TAU_commute);
-    flow_retail = pop↔retail (TAU_retail); flow_school = students↔school (TAU_school).
-    No weight parameter, no self/cross term.
-
-    THETA is accepted but ignored (probit cache; the legacy k=3 logit scatter is retired).
+    `willingness` = {component: (w, τs, τl)} — each component's fully-independent
+    double-exp willingness for the kernel f(c)=driveshare(equiv_miles(c))·
+    [w·exp(−c/τs)+(1−w)·exp(−c/τl)]: flow_res = pop→pop; flow_commute =
+    commuters↔workplace; flow_retail = pop↔retail; flow_school = students↔school
+    (3 independent levels).  No weight parameter, no self/cross term.
     """
     t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
         od_src, od_dst, od_dist, N_nodes,
         base_w_pop, base_w_commute_attr, base_w_retail,
-        TAU_res, TAU_commute, TAU_retail,
-        TAU_school=TAU_school, with_school=_has_school,
+        willingness,
+        with_school=_has_school,
         w_school_levels=base_w_school_levels, w_school_prod_levels=base_w_school_prod_levels,
         self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
         w_commute_prod=base_w_commute_prod,
@@ -821,24 +842,17 @@ t0         = time.time()
 
 
 def _unpack_gravity(log_params):
-    """Unpack the gravity log-param vector → kernel scalars (single source of truth
-    for index layout, shared by objective / probe / final eval)."""
-    TAU_res          = math.exp(log_params[0])
-    TAU_commute  = math.exp(log_params[1])
-    TAU_retail   = math.exp(log_params[2])
-    THETA        = math.exp(log_params[3]) if _has_stoch else None
-    _sch_off     = 4 if _has_stoch else 3
-    TAU_school   = math.exp(log_params[_sch_off]) if _has_school else None
-    return (TAU_res, TAU_commute, TAU_retail, TAU_school, THETA)
+    """Unpack the internal gravity param vector → the willingness dict {component: (w, τs, τl)}
+    (single source of truth for index layout, shared by objective / probe / final eval)."""
+    nat = {k: _from_internal(k, log_params[i]) for i, k in enumerate(_grav_param_names)}
+    return {c: (nat[f"{c}_w"], nat[f"{c}_taus"], nat[f"{c}_taul"]) for c in _w_components}
 
 
 def objective(log_params, log_ref=None):
     log_params = np.clip(log_params, -100, 100)
-    (TAU_res, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_params)
-    _ts = TAU_school if _has_school else 1.0
+    willingness = _unpack_gravity(log_params)
 
-    flow_res, flow_commute, flow_retail, flow_school = run_assignment(
-        TAU_res, TAU_commute, TAU_retail, _ts, THETA)
+    flow_res, flow_commute, flow_retail, flow_school = run_assignment(willingness)
     m_res, m_commute, m_retail, m_school = model_obs_4c(
         flow_res, flow_commute, flow_retail, flow_school)
     K_res, K_commute, K_retail, K_school = solve_scales(
@@ -898,8 +912,7 @@ if os.path.exists(TUNED_PARAMS):
 
 # Clamp to a safe minimum before log-transform; derive the start vector from the param
 # name list (no parallel hardcoding — can't drift).
-_LOG_MIN = 1e-4
-log_p0 = np.array([math.log(max(grav_start.get(k, 1.0), _LOG_MIN))
+log_p0 = np.array([_to_internal(k, grav_start.get(k, _wdefault(k)))
                    for k in _grav_param_names], dtype=np.float64)
 
 # Guard against param-vector / index drift (loud failure, not a silent mismatch).
@@ -921,9 +934,8 @@ print(f"Gravity: {len(log_p0)} params{_grav_note}")
 # optimum — the convex solver has converged). No optimization, no writes.
 if os.environ.get("CALIBRATE_PROBE"):
     print("\n=== CALIBRATE PROBE (no optimization, no writes) ===")
-    (_T,_Tc,_Tr,_Ts0,_TH) = _unpack_gravity(log_p0)
-    _Ts = _Ts0 if _has_school else 1.0
-    _fr,_fc,_ft,_fs = run_assignment(_T,_Tc,_Tr,_Ts,None)
+    _will = _unpack_gravity(log_p0)
+    _fr,_fc,_ft,_fs = run_assignment(_will)
     _mr,_mc,_mt,_ms = model_obs_4c(_fr,_fc,_ft,_fs)   # _ms is {level: array}
     _fs_lvl = {lvl: np.array([slot_fracs_school_nts[lvl].get(sk,0.0) if sk else 0.0
                               for sk in obs_slot_keys]) for lvl in SCHOOL_LEVELS}
@@ -942,8 +954,10 @@ if os.environ.get("CALIBRATE_PROBE"):
             return cc
         ls=np.logspace(-1,2,2000); cs=[ch(l) for l in ls]; lo=ls[int(np.argmin(cs))]
         return ch(1.0),lo,ch(lo)
-    print(f"  params (willingness s): TAU_res={_T:.0f} TAU_commute={_Tc:.0f} TAU_retail={_Tr:.0f}"
-          + (f" TAU_school={_Ts0:.0f}" if _has_school else ""))
+    print("  double-exp willingness (w, τs, τl):")
+    for _c in _w_components:
+        _w, _ts, _tl = _will[_c]
+        print(f"    {_c:20s} w={_w:.3f}  τs={_ts:.0f}s  τl={_tl:.0f}s")
     Kr,Kc,Kt,K_school = solve_scales(_mr,_mc,_mt,_ms)[:4]
     c1,lo,clo=_probe_eval(Kr,Kc,Kt,K_school)
     _ksch = " ".join(f"{lvl[:4]}={K_school[lvl]:.3e}" for lvl in SCHOOL_LEVELS)
@@ -956,26 +970,22 @@ if os.environ.get("CALIBRATE_PROBE"):
 # cell, does NO optimization and NO writes, then sys.exit(0).  Like CALIBRATE_PROBE.
 #   Usage:  SWEEP=res python3 analysis/tune_assignment.py
 #
-# Varies ONLY the target component's willingness TAU_c over a sane grid while the OTHER
-# three kernels stay FIXED at the start params (from tuned_params.json / refs), and
-# reports that component's solved K and the resulting χ²/N per cell.
+# Varies ONLY the target component's tail scale τl over a sane grid while ALL other params
+# (including that component's w and τs) stay FIXED at the start params, and reports that
+# component's solved K and the resulting χ²/N per cell.  (τl is the diagnostic-relevant scale —
+# the heavy tail the double-exp adds; sweep another sub-param by editing _sweep_key.)
 #
-# ⚠ READ WITH CARE — the K and χ²/N are CONDITIONAL on the other three components
-# being frozen at their start values.  They are NOT a joint best fit and must not be
-# quoted as an achievable χ²/N or as "the tuned result".  The sweep answers one
-# narrow question: does THIS component's K collapse to ~0 (is any sane willingness for
-# it tolerated), and which way does its preferred TAU_c lean?  For a real fit, run the
-# full tune (no SWEEP env var).
+# ⚠ READ WITH CARE — the K and χ²/N are CONDITIONAL on everything else being frozen at the start
+# values.  They are NOT a joint best fit and must not be quoted as an achievable χ²/N.  The sweep
+# answers one narrow question: does THIS component's K collapse, and which way does its preferred
+# tail τl lean?  For a real fit, run the full tune (no SWEEP env var).
 _sweep_target = os.environ.get("SWEEP")
 if _sweep_target:
-    _COMP_IDX = {"res": 0, "commute": 1, "retail": 2, "school": 3}   # index into [TAU_res,TAUc,TAUr,TAUs]
-    if _sweep_target not in _COMP_IDX:
-        print(f"SWEEP={_sweep_target!r} unknown; use res|commute|retail|school"); sys.exit(1)
-    _ki = _COMP_IDX[_sweep_target]
-    print(f"\n=== SWEEP {_sweep_target} (vary its τ, others fixed at start; no writes) ===")
-    _base = list(_unpack_gravity(log_p0))[:4]        # [TAU_res, TAU_commute, TAU_retail, TAU_school]
-    if not _has_school:
-        _base[3] = 1.0
+    if _sweep_target not in _w_components:
+        print(f"SWEEP={_sweep_target!r} unknown; use one of {_w_components}"); sys.exit(1)
+    _sweep_key = f"{_sweep_target}_taul"          # the sub-param swept (tail scale)
+    _sweep_idx = _grav_param_names.index(_sweep_key)
+    print(f"\n=== SWEEP {_sweep_target} τl (others fixed at start; no writes) ===")
 
     def _sweep_chi(K4, ms4):
         Kr, Kc, Kt, K_school = K4; mr, mc, mt, ms = ms4   # ms, K_school are {level: ...}
@@ -992,20 +1002,22 @@ if _sweep_target:
         cc += float(np.sum(2*np.where(n > 0, n*np.log(pos/pw)+(pw-n), pw)))
         return cc
 
-    # "school" sweeps the shared TAU_school (index 3); its reported K is the 3-level total.
+    _idx3 = {"res": 0, "commute": 1, "retail": 2}
     def _k_total(K4):  return K4[0] + K4[1] + K4[2] + sum(K4[3].values())
-    def _k_target(K4): return sum(K4[3].values()) if _ki == 3 else K4[_ki]
+    def _k_target(K4): return (K4[_idx3[_sweep_target]] if _sweep_target in _idx3
+                               else K4[3][_sweep_target.split("school_")[1]])
 
-    TAU_grid = [120, 240, 360, 480, 720, 1080, 1500, 2400, 3600]   # willingness time (s)
-    print(f"  start τ (s): {[round(x) for x in _base]}  [res, commute, retail, school]")
-    print(f"  {'TAU_s':>6} {'TAU_min':>7} {'K_'+_sweep_target:>11} {'phi':>8} {'chi2/N':>8}")
+    TAU_grid = [300, 600, 900, 1500, 2400, 3600, 5400, 7200, 10800]   # tail τl (s)
+    _sw, _sts, _stl = _unpack_gravity(log_p0)[_sweep_target]
+    print(f"  start (w={_sw:.3f}, τs={_sts:.0f}s, τl={_stl:.0f}s); sweeping τl")
+    print(f"  {'τl_s':>6} {'τl_min':>7} {'K_'+_sweep_target:>13} {'phi':>8} {'chi2/N':>8}")
     for Tv in TAU_grid:
-        _args = list(_base); _args[_ki] = Tv
-        ms4 = model_obs_4c(*run_assignment(*_args, None))
+        _lp = log_p0.copy(); _lp[_sweep_idx] = _to_internal(_sweep_key, Tv)
+        ms4 = model_obs_4c(*run_assignment(_unpack_gravity(_lp)))
         K4 = solve_scales(*ms4)[:4]
         tot = _k_total(K4); kv = _k_target(K4)
         phi = kv / tot if tot > 0 else 0.0
-        print(f"  {Tv:6.0f} {Tv/60:7.1f} {kv:11.4e} {phi:8.3f} {_sweep_chi(K4, ms4)/n_obs:8.3f}")
+        print(f"  {Tv:6.0f} {Tv/60:7.1f} {kv:13.4e} {phi:8.3f} {_sweep_chi(K4, ms4)/n_obs:8.3f}")
     sys.exit(0)
 
 # ── Run optimization ──────────────────────────────────────────────────────────
@@ -1030,12 +1042,10 @@ log_best = best["log_params"]
 
 # ── Unpack best params ────────────────────────────────────────────────────────
 
-(TAU_res, TAU_commute, TAU_retail, TAU_school, THETA) = _unpack_gravity(log_best)
+willingness_best = _unpack_gravity(log_best)   # {component: (w, τs, τl)}
 
 # Final evaluation for clean chi2, the four K's, and slot_fracs (no L2 term)
-_ts_final = 1.0 if not _has_school else TAU_school
-flow_res, flow_commute, flow_retail, flow_school = run_assignment(
-    TAU_res, TAU_commute, TAU_retail, _ts_final, THETA)
+flow_res, flow_commute, flow_retail, flow_school = run_assignment(willingness_best)
 m_res, m_commute, m_retail, m_school = model_obs_4c(
     flow_res, flow_commute, flow_retail, flow_school)
 (K_res, K_commute, K_retail, K_school,
@@ -1116,7 +1126,6 @@ resid = np.where(sig_eff > 0, (mod_eff - obs_eff) / sig_eff, 0.0)
 
 elapsed = time.time() - t0
 print(f"\nResult  ({eval_count[0]} evals, {elapsed:.0f}s)")
-_theta_str = f"  THETA={THETA:.4f}" if THETA is not None else ""
 K_tot = K_res + K_commute + K_retail + K_sch
 phi_com_out = K_commute / K_tot if K_tot > 0 else 0.0
 phi_ret_out = K_retail  / K_tot if K_tot > 0 else 0.0
@@ -1125,9 +1134,10 @@ print(f"  K_res={K_res:.4e}  K_commute={K_commute:.4e}  K_retail={K_retail:.4e}"
       f"  K_sch={K_sch:.4e}  (K={K:.4e})")
 print("  K_school: " + "  ".join(f"{lvl}={K_school[lvl]:.4e}" for lvl in SCHOOL_LEVELS))
 print(f"  phi_commute={phi_com_out:.3f}  phi_retail={phi_ret_out:.3f}  phi_sch={phi_sch_out:.3f}")
-print(f"  willingness τ (s): res={TAU_res:.0f}  commute={TAU_commute:.0f}  retail={TAU_retail:.0f}{_theta_str}")
-if _has_school:
-    print(f"  TAU_school={TAU_school:.0f}s  (shared across the 3 school levels)")
+print("  double-exp willingness (w, τs, τl):")
+for _c in _w_components:
+    _w, _ts, _tl = willingness_best[_c]
+    print(f"    {_c:20s} w={_w:.3f}  τs={_ts:.0f}s  τl={_tl:.0f}s")
 print(f"  χ²={chi2:.2f}  χ²/N={chi2_per_n:.4f}  χ²/N_eff={chi2/n_eff:.3f}  (N={n_obs}, N_eff={n_eff})")
 if prev_chi2_per_n is not None:
     delta = chi2_per_n - prev_chi2_per_n
@@ -1166,19 +1176,23 @@ print_chi2_table(fit_rows, chi2, len(fit_rows), n_eff=n_eff)
 
 # ── Save tuned_params.json ────────────────────────────────────────────────────
 
+# Flat willingness keys for persistence (natural units): "<comp>_taus/_taul/_w".
+_will_flat = {}
+for _c in _w_components:
+    _w, _ts, _tl = willingness_best[_c]
+    _will_flat[f"{_c}_taus"] = round(_ts, 4)
+    _will_flat[f"{_c}_taul"] = round(_tl, 4)
+    _will_flat[f"{_c}_w"]    = round(_w, 6)
+
 tuned = {
-    "kernel":    "modesub",
+    "kernel":    "modesub_double",
     "K":         float(K),         # K_res+K_commute+K_retail+K_sch (compat); full precision
     "K_res":     float(K_res),     # K spans many orders of magnitude — round(x,6) zeroes sub-µ values
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),                       # total (display/compat)
     **{f"K_{lvl}": float(K_school[lvl]) for lvl in SCHOOL_LEVELS},
-    "TAU_res":           round(TAU_res, 4),
-    "TAU_commute":   round(TAU_commute, 4),
-    "TAU_retail":    round(TAU_retail, 4),
-    **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    **( {"TAU_school": round(TAU_school, 4)} if _has_school else {} ),
+    **_will_flat,
     "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
     "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
@@ -1209,30 +1223,30 @@ try:
     from model import _modesub_kernel
     d_sec    = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
     d_min    = d_sec / 60.0
-    def _kern(K_c, tau_c, component):
-        return K_c * _modesub_kernel(d_sec, tau_c, component)
-    k_res_c  = _kern(K_res, TAU_res, "res")
-    k_com_c  = _kern(K_commute, TAU_commute, "commute")
-    k_ret_c  = _kern(K_retail, TAU_retail, "retail")
+    def _kern(K_c, component):
+        return K_c * _modesub_kernel(d_sec, willingness_best[component], component)
+    _lbl = {c: f"τs={willingness_best[c][1]/60:.1f}m τl={willingness_best[c][2]/60:.1f}m "
+               f"w={willingness_best[c][0]:.2f}" for c in _w_components}
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.plot(d_min, k_res_c, linewidth=1.8,
-            label=f"Residential  τ={TAU_res/60:.1f}min  K_res={K_res:.3e}")
-    ax.plot(d_min, k_com_c, linewidth=1.8, linestyle="--",
-            label=f"Commute      τ={TAU_commute/60:.1f}min  K_com={K_commute:.3e}")
-    ax.plot(d_min, k_ret_c, linewidth=1.8, linestyle="-.",
-            label=f"Retail       τ={TAU_retail/60:.1f}min  K_ret={K_retail:.3e}")
-    if _has_school and TAU_school is not None:
-        for lvl in SCHOOL_LEVELS:                       # per-level driveshare ⇒ one kernel each
+    ax.plot(d_min, _kern(K_res, "res"), linewidth=1.8,
+            label=f"Residential  {_lbl['res']}  K={K_res:.2e}")
+    ax.plot(d_min, _kern(K_commute, "commute"), linewidth=1.8, linestyle="--",
+            label=f"Commute      {_lbl['commute']}  K={K_commute:.2e}")
+    ax.plot(d_min, _kern(K_retail, "retail"), linewidth=1.8, linestyle="-.",
+            label=f"Retail       {_lbl['retail']}  K={K_retail:.2e}")
+    if _has_school:
+        for lvl in SCHOOL_LEVELS:                       # each level its own driveshare + willingness
             if K_school.get(lvl, 0.0) <= 0:
                 continue
-            ax.plot(d_min, _kern(K_school[lvl], TAU_school, f"school_{lvl}"),
+            _c = f"school_{lvl}"
+            ax.plot(d_min, _kern(K_school[lvl], _c),
                     linewidth=1.6, linestyle=":",
-                    label=f"School {lvl}  τ={TAU_school/60:.1f}min  K={K_school[lvl]:.3e}")
+                    label=f"School {lvl}  {_lbl[_c]}  K={K_school[lvl]:.2e}")
     ax.set_xlabel("Travel time (minutes)")
-    ax.set_ylabel("K_c · driveshare(equiv_miles(c))·exp(−c/τ_c)")
+    ax.set_ylabel("K_c · driveshare·[w·exp(−c/τs)+(1−w)·exp(−c/τl)]")
     ax.set_title(
-        f"Gravity kernels (mode-substitution × willingness)\n"
+        f"Gravity kernels (mode-substitution × double-exp willingness)\n"
         f"χ²/N={chi2_per_n:.4f}  id={run_id}  git={git_hash}"
     )
     ax.set_xscale("log")
@@ -1250,18 +1264,14 @@ except Exception as _e:
 # ── Append to tuning history ──────────────────────────────────────────────────
 
 params = {
-    "kernel":    "modesub",
+    "kernel":    "modesub_double",
     "K":         float(K),
     "K_res":     float(K_res),
     "K_commute": float(K_commute),
     "K_retail":  float(K_retail),
     "K_sch":     float(K_sch),                       # total (display/compat)
     **{f"K_{lvl}": float(K_school[lvl]) for lvl in SCHOOL_LEVELS},
-    "TAU_res":           round(TAU_res, 4),
-    "TAU_commute":   round(TAU_commute, 4),
-    "TAU_retail":    round(TAU_retail, 4),
-    **( {"THETA": round(THETA, 6)} if THETA is not None else {} ),
-    **( {"TAU_school": round(TAU_school, 4)} if _has_school else {} ),
+    **_will_flat,
     "slot_fracs_res":     {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_res.items()},
     "slot_fracs_commute": {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_commute.items()},
     "slot_fracs_retail":  {f"{dt},{h}": round(f, 8) for (dt, h), f in slot_fracs_retail.items()},
