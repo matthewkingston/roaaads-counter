@@ -7,9 +7,11 @@ downstream fit can be uncertainty-weighted.  This is the *numerator* of the inte
 empirical kernel ``f = TLD / n(t)`` (memory: project_tld_retail_mixture,
 project_n_eng_source_geometry): the TLD ÷ a national opportunity geometry n(t), then a
 double-exp fit, recovers the willingness decay.  **This module builds only the
-distributions** — not the ÷n(t) divide, not the kernel fit, not the three school levels
-(deferred, as with driveshare/temporal; the deployed design uses one shared tau_school
-with no per-level school TLD).
+distributions** — not the ÷n(t) divide and not the kernel fit.  All six components are
+built: res / commute / retail (car-driver, LDJ-boosted tail) and the three school levels
+(primary / post-primary / tertiary; see "School" below).  The deployed design currently
+uses one shared tau_school, but the three school TLDs are kept **separate** so a future
+per-level split is a pure recombination (combine via components[c]['distribution']).
 
 Mode / axis / range (settled with the user)
 --------------------------------------------
@@ -44,6 +46,20 @@ Body vs tail
   LDJ reaches only >=50 mi, so the 25-50 mi band still rests on 2023/24 (a coarse bin);
   year-pooling there is the fallback if it prints thin.
 
+School (three levels)
+---------------------
+Measured on the **child's own** by-car education trip (TripPurpose_B01ID==4, by-car =
+MainMode_B04ID in {3,4,5,12} = child driver OR passenger, motorcycle, taxi), because the
+school producer is the student, who is usually not the driver.  Each trip is level-tagged
+by the child's age via the exact generation age->level machinery
+(driveshare._load_school / derive_school_generation._level_shares: 5-10 primary, 11-15
+post-primary, 16-18 DfE split, 19+ FT tertiary), so a per-level TLD is the child's trips
+weighted by their level share.  This is a **per-student** length distribution; ride-sharing
+only tilts the *shape* if car-sharing correlates with distance (second-order — distance is
+share-invariant), unlike the temporal profile where the vehicle-departure count made it
+first-order.  Years follow driveshare: primary/post-primary 2023/24, tertiary pooled
+ex-COVID.  **No LDJ** — school >=50 mi trips are negligible and willingness-killed.
+
 Re-derive with:  python3 analysis/trip_length_dist.py --build
 (prints a per-bin table per component + writes the JSON and reports/trip_length_dist.png)
 """
@@ -58,7 +74,8 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nts_microdata as nts
 from purpose_mapping import B01_COMPONENT
-from driveshare import _load_simple, SIMPLE_COMPONENTS   # reuse the car-driver body loader
+from driveshare import (_load_simple, _load_school,      # reuse the body + school loaders
+                        SIMPLE_COMPONENTS, SCHOOL_LEVELS)
 
 OUT_JSON = "analysis/trip_length_distributions.json"
 PLOT_PATH = "reports/trip_length_dist.png"
@@ -76,6 +93,13 @@ LDJ_CARVAN_MODES = [4, 6]              # driver/passenger not split -> driver-fr
 def _mids(edges):
     return np.array([np.sqrt(edges[i] * edges[i + 1]) if edges[i] > 0 else edges[1] / 2
                      for i in range(len(edges) - 1)])
+
+
+def _normalize(mass, widths):
+    """Normalised share (Sum=1 over bins) and density (share per mile)."""
+    tot = mass.sum()
+    share = mass / tot if tot > 0 else mass
+    return share, share / widths
 
 
 def _bin_stats(dist, w, edges):
@@ -155,6 +179,11 @@ def build():
         "driver_fraction_ge50": driver_frac,
         "bin_edges_miles": edges.tolist(),
         "tail_source": f"LDJ >=50 mi shape, total-pinned per component (first tail bin index {tail0})",
+        "school_basis": "child by-car education trip {3,4,5,12}, level by child age "
+                        "(driveshare _load_school/_level_shares); trip table only (no LDJ); "
+                        "tertiary pooled ex-COVID",
+        "distribution_key": "components[c]['distribution'] is the recommended TLD for every "
+                            "component (non-school = LDJ-boosted; school = trip-table)",
     }, "bin_edges_miles": edges.tolist(), "bin_mid_miles": mids.tolist(), "components": {}}
 
     widths = np.diff(edges)
@@ -174,21 +203,19 @@ def build():
             mass_lb[tail0:] = ldj_mass[tail0:] * scale
             neff_lb[tail0:] = ldj_neff[tail0:]                     # effective-n unaffected by scaling
 
-        def _norm(mass):
-            tot = mass.sum()
-            share = mass / tot if tot > 0 else mass
-            return share, share / widths                           # share (Sum=1), density (per mile)
-
-        share_tt, dens_tt = _norm(mass_tt)
-        share_lb, dens_lb = _norm(mass_lb)
+        share_tt, dens_tt = _normalize(mass_tt, widths)
+        share_lb, dens_lb = _normalize(mass_lb, widths)
 
         out["components"][comp] = {
+            "basis": "car-driver MainMode_B04ID {3,5,12}", "years": list(YEARS),
+            "tail_source": "LDJ-boosted >=50 mi (total-pinned to trip-table fraction)",
             "n_trips_body": int(len(b)), "sum_w_body": float(b.w.sum()),
             "n_ldj_tail": int(len(v)),
+            # "distribution" = recommended estimate (uniform key across ALL six components)
+            "distribution": {"mass": mass_lb.tolist(), "share": share_lb.tolist(),
+                             "density": dens_lb.tolist(), "eff_n": neff_lb.tolist()},
             "triptable_only": {"mass": mass_tt.tolist(), "share": share_tt.tolist(),
                                "density": dens_tt.tolist(), "eff_n": neff_tt.tolist()},
-            "ldj_boosted": {"mass": mass_lb.tolist(), "share": share_lb.tolist(),
-                            "density": dens_lb.tolist(), "eff_n": neff_lb.tolist()},
         }
 
         # --- printed per-bin table (LDJ-boosted; trip-table tail eff-n in brackets) ----
@@ -201,6 +228,35 @@ def build():
                   f"{dens_lb[i]:>9.4f} {neff_lb[i]:>9.0f} {neff_tt[i]:>11.0f}{tag}")
         print(f"  >=50 mi share: trip-table-only {100*share_tt[tail0:].sum():.2f}%  "
               f"LDJ-boosted {100*share_lb[tail0:].sum():.2f}%\n")
+
+    # --- school: three levels, child by-car education trip (no LDJ; school >=50 mi ~ 0) ---
+    print("SCHOOL — child by-car education trip {3,4,5,12}, level by child age "
+          "(tertiary pooled ex-COVID); trip table only\n")
+    i15 = int(np.searchsorted(edges, 15.0))
+    scache = {}
+    for lv_key, comp, years in SCHOOL_LEVELS:
+        yk = tuple(years)
+        if yk not in scache:
+            scache[yk] = _load_school(years)
+        car = scache[yk]
+        car = car[car.y == 1]                                      # by-car education trips
+        wl = car.w * car[lv_key]                                   # level-attributed weight
+        mass, neff = _bin_stats(car.dist, wl, edges)
+        share, dens = _normalize(mass, widths)
+        out["components"][comp] = {
+            "basis": "child by-car education trip {3,4,5,12}, level by child age",
+            "years": list(years),
+            "tail_source": "trip table only (school >=50 mi negligible; no LDJ)",
+            "sum_w": float(wl.sum()),
+            "distribution": {"mass": mass.tolist(), "share": share.tolist(),
+                             "density": dens.tolist(), "eff_n": neff.tolist()},
+        }
+        print(f"=== {comp}  (years {years[0]}-{years[-1]}, Sum_w {wl.sum():,.0f}) ===")
+        print(f"  {'lo':>6} {'hi':>6} {'share%':>7} {'dens/mi':>9} {'eff_n':>9}")
+        for i in range(len(edges) - 1):
+            print(f"  {edges[i]:>6.2f} {edges[i+1]:>6.2f} {100*share[i]:>7.2f} "
+                  f"{dens[i]:>9.4f} {neff[i]:>9.0f}")
+        print(f"  >=15 mi share: {100*share[i15:].sum():.2f}%\n")
 
     with open(OUT_JSON, "w") as f:
         json.dump(out, f, indent=2)
@@ -216,27 +272,36 @@ def _plot(out, edges, mids, tail0):
     except Exception as e:
         print(f"(plot skipped: {e})")
         return
-    colors = {"commute": "tab:blue", "retail": "tab:green", "res": "tab:red"}
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
-    for comp in SIMPLE_COMPONENTS:
-        c = colors[comp]
+    ns_colors = {"commute": "tab:blue", "retail": "tab:green", "res": "tab:red"}
+    sc_colors = {"school_primary": "tab:purple", "school_postprimary": "tab:orange",
+                 "school_tertiary": "tab:brown"}
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+    # row 0: non-school (LDJ-boosted solid vs trip-table-only dashed)
+    for comp, c in ns_colors.items():
         d_tt = np.array(out["components"][comp]["triptable_only"]["density"])
-        d_lb = np.array(out["components"][comp]["ldj_boosted"]["density"])
-        for ax in axes:
-            ax.plot(mids, d_lb, "-", color=c, lw=2, label=f"{comp} (LDJ-boosted tail)")
-            ax.plot(mids, d_tt, "--", color=c, lw=1, alpha=0.7,
-                    label=f"{comp} (trip-table only)")
-    axes[0].set_xlim(0, 25)
-    axes[0].set_title("body (0-25 mi, linear)", fontsize=10)
-    axes[1].set_xscale("log"); axes[1].set_yscale("log")
-    axes[1].axvline(edges[tail0], color="grey", ls=":", lw=1)
-    axes[1].set_title("full range (log-log; dotted = LDJ tail start 50 mi)", fontsize=10)
-    for ax in axes:
+        d_lb = np.array(out["components"][comp]["distribution"]["density"])
+        for ax in axes[0]:
+            ax.plot(mids, d_lb, "-", color=c, lw=2, label=f"{comp} (LDJ-boosted)")
+            ax.plot(mids, d_tt, "--", color=c, lw=1, alpha=0.6, label=f"{comp} (trip-table)")
+    # row 1: school levels (child by-car education trip)
+    for comp, c in sc_colors.items():
+        d = np.array(out["components"][comp]["distribution"]["density"])
+        for ax in axes[1]:
+            ax.plot(mids, d, "-", color=c, lw=2, label=comp)
+    axes[0, 0].set_xlim(0, 25); axes[1, 0].set_xlim(0, 25)
+    axes[0, 0].set_title("non-school body (0-25 mi, linear)", fontsize=10)
+    axes[1, 0].set_title("school body (0-25 mi, linear)", fontsize=10)
+    for ax in (axes[0, 1], axes[1, 1]):
+        ax.set_xscale("log"); ax.set_yscale("log")
+    axes[0, 1].axvline(edges[tail0], color="grey", ls=":", lw=1)
+    axes[0, 1].set_title("non-school full range (log-log; dotted = LDJ start 50 mi)", fontsize=10)
+    axes[1, 1].set_title("school full range (log-log)", fontsize=10)
+    for ax in axes.flat:
         ax.set_xlabel("trip length (miles)")
         ax.set_ylabel("density (share per mile)")
         ax.legend(fontsize=7, loc="upper right")
         ax.grid(alpha=0.3)
-    fig.suptitle("Per-component car-driver trip-length distributions (NTS microdata)")
+    fig.suptitle("Per-component trip-length distributions (NTS microdata)")
     fig.tight_layout()
     os.makedirs(os.path.dirname(PLOT_PATH), exist_ok=True)
     fig.savefig(PLOT_PATH, dpi=120)
