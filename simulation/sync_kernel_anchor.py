@@ -26,19 +26,23 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from model import WILLINGNESS_COMPONENTS, willingness_keys
 
-ANCHOR_FILE = "analysis/kernel_fit.json"       # ← repoint to the constrained-n_Ire output later
+ANCHOR_FILE = "analysis/kernel_fit_constrained.json"   # constrained (1/D_i) iterated double-exp
 TUNER_CONFIG = "simulation/tuner_config.json"
 DEFAULT_LAMBDA = 0.2                            # light anchor-reg (per willingness param, internal coords)
 
 
 def _read_anchor(path):
-    """Return {component: (w, τs, τl)} from the kernel-fit JSON's per-component `double` block.
-    Adjust this one function when the anchor source/format changes (the n_Ire hand-off)."""
+    """Return {component: (w, τs, τl)} from the constrained-n_Ire kernel-fit JSON's per-component
+    `double_iterated` block (fixed-point 1/D_i iteration of fit_kernel).  Adjust this one function
+    if the anchor source/format changes.  NB: school_postprimary/tertiary carry
+    `tail_weakly_identified=True` (thin long-tail TLD ⇒ τl is the robust per-iteration median, not
+    converged); we use them as-is for now — the tuner's light anchor-reg keeps those τl near the
+    median, and per-key gravity_lambda can pin them harder later if a tune lets them run."""
     d = json.load(open(path))
     comps = d["components"]
     out = {}
     for c in WILLINGNESS_COMPONENTS:
-        b = comps[c]["double"]
+        b = comps[c]["double_iterated"]
         out[c] = (float(b["w"]), float(b["tau_s_s"]), float(b["tau_l_s"]))
     return out
 
