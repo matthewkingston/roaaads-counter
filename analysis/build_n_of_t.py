@@ -59,7 +59,7 @@ SEED         = 20260703
 SNAP_TOL_M   = 250.0        # reject a trip end snapping further than this from a road
 NEAREST_TRIES = 12          # resample attempts to land an area point near a road
 BIN_STEP_S   = 30.0         # histogram bin width (seconds) — fine in the head
-BIN_CAP_S    = 7200.0       # last explicit edge; everything beyond lands in an overflow bin
+BIN_CAP_S    = 14400.0      # last explicit edge (240 min); everything beyond → overflow bin
 BATCH        = 45           # sources = dests = B; needs OSRM --max-table-size >= 2B
 
 # stratification (--stratified): near-field distance bands + far tail + cached area points.
@@ -458,7 +458,8 @@ def save(results, edges, args):
             "date": date.today().isoformat(), "seed": SEED,
             "snap_tol_m": SNAP_TOL_M, "bin_step_s": BIN_STEP_S, "bin_cap_s": BIN_CAP_S,
             "batch": args.batch, "osrm_profile_sha1": _profile_hash(),
-            "unconstrained": True, "leg": "outbound", "note": "naive v1 sampler (pilot-gated)",
+            "unconstrained": True, "leg": "outbound",
+            "mode": "stratified" if getattr(args, "stratified", False) else "naive",
         },
         "bin_edges_s": edges.tolist(),
         "n_of_t": results,
