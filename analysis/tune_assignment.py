@@ -1209,11 +1209,11 @@ try:
     from model import _modesub_kernel
     d_sec    = np.logspace(np.log10(30), np.log10(7200), 500)  # 30s – 120 min
     d_min    = d_sec / 60.0
-    def _kern(K_c, tau_c):
-        return K_c * _modesub_kernel(d_sec, tau_c)
-    k_res_c  = _kern(K_res, TAU_res)
-    k_com_c  = _kern(K_commute, TAU_commute)
-    k_ret_c  = _kern(K_retail, TAU_retail)
+    def _kern(K_c, tau_c, component):
+        return K_c * _modesub_kernel(d_sec, tau_c, component)
+    k_res_c  = _kern(K_res, TAU_res, "res")
+    k_com_c  = _kern(K_commute, TAU_commute, "commute")
+    k_ret_c  = _kern(K_retail, TAU_retail, "retail")
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.plot(d_min, k_res_c, linewidth=1.8,
@@ -1223,9 +1223,12 @@ try:
     ax.plot(d_min, k_ret_c, linewidth=1.8, linestyle="-.",
             label=f"Retail       τ={TAU_retail/60:.1f}min  K_ret={K_retail:.3e}")
     if _has_school and TAU_school is not None:
-        k_sch_c = _kern(K_sch, TAU_school)
-        ax.plot(d_min, k_sch_c, linewidth=1.8, linestyle=":",
-                label=f"School       τ={TAU_school/60:.1f}min  K_sch={K_sch:.3e}")
+        for lvl in SCHOOL_LEVELS:                       # per-level driveshare ⇒ one kernel each
+            if K_school.get(lvl, 0.0) <= 0:
+                continue
+            ax.plot(d_min, _kern(K_school[lvl], TAU_school, f"school_{lvl}"),
+                    linewidth=1.6, linestyle=":",
+                    label=f"School {lvl}  τ={TAU_school/60:.1f}min  K={K_school[lvl]:.3e}")
     ax.set_xlabel("Travel time (minutes)")
     ax.set_ylabel("K_c · driveshare(equiv_miles(c))·exp(−c/τ_c)")
     ax.set_title(

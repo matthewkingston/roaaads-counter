@@ -77,19 +77,13 @@ CURVES = {
     "school_tertiary":    (0.3199, 1.6968, 1.9983),   # lowest, rises latest (drive at range)
 }
 
-# Shared/default curve (component=None): the legacy all-purpose blend, kept until model.py is
-# wired to pass a component through _modesub_kernel (then removed — no back-compat retained).
-PLATEAU, D0, K = 0.5779, 1.2573, 1.2610
-
-
-def driveshare(d_miles, component=None):
+def driveshare(d_miles, component):
     """Vehicle-driver / by-car share for a trip of length d_miles in `component`.
 
-    Float or numpy array.  `component` is one of CURVES (commute/retail/res and the three
-    school_* levels); the default `None` uses the shared legacy curve (for callers not yet
-    passing a component).
+    Float or numpy array.  `component` is required — one of CURVES (commute/retail/res and
+    the three school_* levels).
     """
-    pl, d0, k = CURVES[component] if component is not None else (PLATEAU, D0, K)
+    pl, d0, k = CURVES[component]
     return pl * (1.0 - np.exp(-(np.asarray(d_miles, dtype=float) / d0) ** k))
 
 
@@ -260,9 +254,6 @@ def _fit(plot_path="reports/driveshare.png"):
                 ax.plot(dd, pl * (1 - np.exp(-(dd / d0) ** k)), "-", color=c, lw=2,
                         label=f"{comp}: {pl:.2f}(1-exp(-(d/{d0:.2f})^{k:.2f}))")
                 ax.scatter(mids, emps[comp], color=c, s=20, zorder=5, alpha=0.8)
-            if title.startswith("non"):
-                ax.plot(dd, PLATEAU * (1 - np.exp(-(dd / D0) ** K)), "k--", lw=1.2, alpha=0.6,
-                        label="shared (legacy)")
             ax.set_xlim(0, 25)
             ax.set_ylim(0, 1.0)
             ax.set_xlabel("trip length (miles)")
