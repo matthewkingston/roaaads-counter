@@ -36,8 +36,16 @@ only thin weekend-night bins pool wider.  This is valid because the shape is nea
 across the window (weekday-peak drift ≈ 1 pp), so a bin's fraction is the same estimand at
 any window — the **normalisation that makes windows comparable is dividing each bin's pooled
 weighted count by its number of years** (a per-year rate).  A handful of intrinsically thin
-res weekend-night bins cannot reach MIN_BIN_N even on the full window; they use the widest
-window (their best available).
+res weekend-night bins cannot reach MIN_BIN_N even on the full window (car trips at 3 am are
+genuinely rare); the residual noise there is removed by a **light within-night smoothing**
+(NIGHT_HOURS / NIGHT_SMOOTH_WIN): a small moving average over the flat pre-dawn trough
+(00:00–05:59), per day_type, preserving each day_type's night-block total so the day/night
+balance is unchanged — it touches only those hours, never a daytime peak, and brings every
+bin's effective noise to ≲15% (at the observation σ floor).
+
+Trips that cannot be placed or weighted are **dropped explicitly** (NaN start-hour /
+day-of-week, or NaN W5 — ~0.04% lack a trip weight), rather than being silently skipped by a
+weighted sum while still inflating the unweighted pooling count.
 
 Normalisation to Σ=7
 --------------------
@@ -77,6 +85,14 @@ MIN_BIN_N = 100                          # per-(day_type,hour) unweighted target
 YEAR_TIERS = [[2023, 2024], [2018, 2019], [2017, 2016, 2015, 2014, 2013]]
 POOL_YEARS = [y for tier in YEAR_TIERS for y in tier]
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+# Light within-night smoothing: even pooled to the full window, the deepest pre-dawn hours
+# stay thin on single-day (Sat/Sun) day-types (car trips at 3 am are genuinely rare).  That
+# trough is flat and near-zero, so a small moving average over these hours borrows strength
+# across adjacent hours with negligible bias — and it touches ONLY these hours, never the
+# daytime peaks.  Each day-type's night-block total is preserved (only the within-night
+# distribution is smoothed), so the day/night balance is unchanged.
+NIGHT_HOURS = list(range(0, 6))          # 00:00–05:59 pre-dawn trough
+NIGHT_SMOOTH_WIN = 3                     # moving-average width (±1); flat trough ⇒ low bias
 
 
 def _load():
@@ -85,8 +101,16 @@ def _load():
                                    "TripStartHours", "DayID", "W5", "JJXSC"], years=POOL_YEARS)
     day = nts.load("day", columns=["SurveyYear", "DayID", "TravelWeekDay_B01ID"], years=POOL_YEARS)
     tr = tr.merge(day[["DayID", "TravelWeekDay_B01ID"]], on="DayID", how="left")
-    tr = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)
-            & tr.TripStartHours.notna() & tr.TravelWeekDay_B01ID.notna()].copy()
+    veh = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)].copy()
+    n0 = len(veh)
+    # Explicit drop of trips we cannot place or weight (NaN start-hour / day-of-week, or NaN
+    # weight — ~0.04% have a missing W5).  Loud, not a silent groupby.sum skip.
+    veh = veh[veh.TripStartHours.notna() & veh.TravelWeekDay_B01ID.notna()
+              & veh.W5.notna() & veh.JJXSC.notna()].copy()
+    if len(veh) < n0:
+        print(f"  dropped {n0 - len(veh):,} of {n0:,} vehicle trips with NaN "
+              f"start-hour / day-of-week / weight")
+    tr = veh
     dow = tr.TravelWeekDay_B01ID.astype(int) - 1                 # 0=Mon .. 6=Sun
     tr["dt"] = np.where(dow < 5, 0, np.where(dow == 5, 1, 2))     # day_type
     tr["h"] = tr.TripStartHours.astype(int)
@@ -114,6 +138,23 @@ def _bin_rate(dt, h, ncount_by_year, w_by_year):
     return wsum / len(years), len(years), n
 
 
+def _smooth_night(grid):
+    """Light within-night moving average over NIGHT_HOURS, per day_type, preserving each
+    day_type's night-block total.  Only the flat pre-dawn trough is touched; daytime hours
+    (incl. every peak) are returned unchanged."""
+    out = grid.copy()
+    half = NIGHT_SMOOTH_WIN // 2
+    lo, hi = NIGHT_HOURS[0], NIGHT_HOURS[-1]
+    for dt in range(grid.shape[0]):
+        block = grid[dt, lo:hi + 1]
+        sm = np.array([block[max(0, i - half):i + half + 1].mean() for i in range(len(block))])
+        s = sm.sum()
+        if s > 0:
+            sm *= block.sum() / s                # preserve the night-block total
+        out[dt, lo:hi + 1] = sm
+    return out
+
+
 def main():
     print(f"Deriving car-specific temporal profiles from NTS microdata "
           f"(pool tiers {YEAR_TIERS}, MIN_BIN_N={MIN_BIN_N}) …")
@@ -134,7 +175,7 @@ def main():
                 grid[dt, h] = rate
                 wins.append(nyr)
                 ns.append(nn)
-        A[comp] = grid
+        A[comp] = _smooth_night(grid)                # light pre-dawn smoothing
         diag[comp] = (np.array(wins), np.array(ns))
 
     # ── Read the CSV, rewrite res/commute/retail, carry everything else forward ──
