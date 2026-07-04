@@ -52,7 +52,7 @@ from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    constrained_od_flows, scatter_od_to_links, load_self_terms,
                    load_generation_rates, compute_generation_scales,
                    print_chi2_table, assert_paths_cache_fresh,
-                   format_slot_time, nice_official)
+                   format_slot_time, nice_official, willingness_from_flat)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -311,16 +311,28 @@ grav_lam_raw = config.get("gravity_lambda", 0.0)
 _w_components = ["res", "commute", "retail"]
 if _has_school:
     _w_components += [f"school_{lvl}" for lvl in SCHOOL_LEVELS]
-_grav_param_names = [f"{c}_{s}" for c in _w_components for s in ("taus", "taul", "w")]
+_all_wkeys = [f"{c}_{s}" for c in _w_components for s in ("taus", "taul", "w")]
 
 # Sane fallbacks for any key missing from gravity_ref (the anchor normally supplies all 18).
 _WDEFAULTS = {"taus": 600.0, "taul": 3000.0, "w": 0.9}
 def _wdefault(key):
     return _WDEFAULTS[key.rsplit("_", 1)[1]]
 
+# ── Config-driven fix/unfix (tuner_config "gravity_fixed") ────────────────────────────────────
+# Keys listed in gravity_fixed are HELD at their gravity_ref (anchor) value and EXCLUDED from the
+# Powell vector — a real dimensionality reduction (faster tune, no flat-direction wander for those
+# params), not a fake high-λ pin.  The fixed values still enter the kernel via _build_willingness;
+# only the FREE keys are optimized + regularized.  Default: nothing fixed (all 18 free).
+_fixed_keys = [k for k in config.get("gravity_fixed", []) if k in _all_wkeys]
+_bad_fixed  = [k for k in config.get("gravity_fixed", []) if k not in _all_wkeys]
+if _bad_fixed:
+    print(f"  WARNING: gravity_fixed has unknown keys (ignored): {_bad_fixed}")
+_grav_param_names = [k for k in _all_wkeys if k not in _fixed_keys]        # FREE = Powell vector
+_fixed_nat = {k: float(grav_ref.get(k, _wdefault(k))) for k in _fixed_keys}
+
 # Per-key transform between natural units and the unconstrained internal coords Powell optimizes:
-# log for the two τ's (positivity), logit for w (∈(0,1)).  Independent per key — the τs↔τl swap and
-# τl-runaway (flat when w→1) degeneracies are held off by the anchor start + the light anchor-reg.
+# log for the two τ's (positivity), logit for w (∈(0,1)).  Independent per key (so ANY subset can be
+# fixed/freed); τl≥τs is enforced in model.willingness_from_flat (a clamp), not by coupling coords.
 def _to_internal(key, val):
     if key.endswith("_w"):
         v = min(max(float(val), 1e-6), 1.0 - 1e-6)
@@ -332,14 +344,22 @@ def _from_internal(key, x):
         return 1.0 / (1.0 + math.exp(-max(min(x, 100.0), -100.0)))
     return math.exp(x)
 
-# Derive the ref + lambda vectors (internal coords) from the param-name list + tuner_config, so the
-# lists can't drift (missing ref → the fallback above).
+def _build_willingness(free_nat):
+    """Merge the FREE natural params (dict) with the fixed-at-anchor ones → the
+    {component:(w,τs,τl)} willingness dict (model.willingness_from_flat clamps τl≥τs)."""
+    flat = dict(_fixed_nat); flat.update(free_nat)
+    return willingness_from_flat(flat)
+
+# Derive the ref + lambda vectors (internal coords) over the FREE keys only.
 log_grav_ref = np.array([_to_internal(k, grav_ref.get(k, _wdefault(k)))
                          for k in _grav_param_names])
 if isinstance(grav_lam_raw, dict):
     log_grav_lam = np.array([grav_lam_raw.get(k, 0.0) for k in _grav_param_names])
 else:
     log_grav_lam = np.full(len(_grav_param_names), float(grav_lam_raw))
+
+print(f"  gravity: {len(_grav_param_names)} free willingness params"
+      + (f" + {len(_fixed_keys)} fixed at anchor: {_fixed_keys}" if _fixed_keys else " (all free)"))
 
 n_gravity = len(_grav_param_names)
 
@@ -842,10 +862,11 @@ t0         = time.time()
 
 
 def _unpack_gravity(log_params):
-    """Unpack the internal gravity param vector → the willingness dict {component: (w, τs, τl)}
-    (single source of truth for index layout, shared by objective / probe / final eval)."""
-    nat = {k: _from_internal(k, log_params[i]) for i, k in enumerate(_grav_param_names)}
-    return {c: (nat[f"{c}_w"], nat[f"{c}_taus"], nat[f"{c}_taul"]) for c in _w_components}
+    """Unpack the internal FREE-param vector → the full willingness dict {component: (w, τs, τl)}
+    (free params from log_params, fixed params from the anchor; single source of index layout,
+    shared by objective / probe / final eval)."""
+    free_nat = {k: _from_internal(k, log_params[i]) for i, k in enumerate(_grav_param_names)}
+    return _build_willingness(free_nat)
 
 
 def objective(log_params, log_ref=None):
@@ -984,7 +1005,12 @@ if _sweep_target:
     if _sweep_target not in _w_components:
         print(f"SWEEP={_sweep_target!r} unknown; use one of {_w_components}"); sys.exit(1)
     _sweep_key = f"{_sweep_target}_taul"          # the sub-param swept (tail scale)
-    _sweep_idx = _grav_param_names.index(_sweep_key)
+    def _willingness_with(key, val):
+        """Full willingness with `key` overridden to `val` (works whether key is free or fixed)."""
+        flat = dict(_fixed_nat)
+        flat.update({k: _from_internal(k, log_p0[i]) for i, k in enumerate(_grav_param_names)})
+        flat[key] = val
+        return willingness_from_flat(flat)
     print(f"\n=== SWEEP {_sweep_target} τl (others fixed at start; no writes) ===")
 
     def _sweep_chi(K4, ms4):
@@ -1012,8 +1038,7 @@ if _sweep_target:
     print(f"  start (w={_sw:.3f}, τs={_sts:.0f}s, τl={_stl:.0f}s); sweeping τl")
     print(f"  {'τl_s':>6} {'τl_min':>7} {'K_'+_sweep_target:>13} {'phi':>8} {'chi2/N':>8}")
     for Tv in TAU_grid:
-        _lp = log_p0.copy(); _lp[_sweep_idx] = _to_internal(_sweep_key, Tv)
-        ms4 = model_obs_4c(*run_assignment(_unpack_gravity(_lp)))
+        ms4 = model_obs_4c(*run_assignment(_willingness_with(_sweep_key, Tv)))
         K4 = solve_scales(*ms4)[:4]
         tot = _k_total(K4); kv = _k_target(K4)
         phi = kv / tot if tot > 0 else 0.0

@@ -29,6 +29,7 @@
     "school_tertiary_taul": 0.2,
     "school_tertiary_w": 0.2
   },
+  "gravity_fixed": [],
   "gravity_ref": {
     "res_taus": 400.5338,
     "res_taul": 3184.7061,

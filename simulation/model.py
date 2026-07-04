@@ -197,9 +197,18 @@ def willingness_keys():
 
 def willingness_from_flat(flat):
     """Build the {component: (w, τs, τl)} dict `constrained_od_flows` expects, from a flat
-    {"<comp>_taus"/"_taul"/"_w": value} dict (natural units).  Fails loud on a missing key."""
-    return {c: (float(flat[f"{c}_w"]), float(flat[f"{c}_taus"]), float(flat[f"{c}_taul"]))
-            for c in WILLINGNESS_COMPONENTS}
+    {"<comp>_taus"/"_taul"/"_w": value} dict (natural units).  Only components whose keys are
+    present are built (so a no-school 9-key dict yields 3 components).  **Enforces τl ≥ τs**
+    (the fast head is never slower than the tail): τl < τs collapses to a single exponential at
+    τs — the sensible limit — which also removes the τs↔τl label-swap degeneracy."""
+    out = {}
+    for c in WILLINGNESS_COMPONENTS:
+        if f"{c}_w" in flat:
+            w  = float(flat[f"{c}_w"])
+            ts = float(flat[f"{c}_taus"])
+            tl = float(flat[f"{c}_taul"])
+            out[c] = (w, ts, max(tl, ts))
+    return out
 
 
 def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
