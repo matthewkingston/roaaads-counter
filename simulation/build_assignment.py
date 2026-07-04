@@ -125,16 +125,11 @@ w_workplace = np.array([node_workplace.get(nid, 0)         for nid in node_ids_a
 w_commute_attr = np.array([node_commute_attractor.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
 w_retail    = np.array([node_retail_spaces.get(nid, 0)     for nid in node_ids_arr], dtype=np.float64)
 w_commute_prod = np.array([node_commute_producers.get(nid, 0) for nid in node_ids_arr], dtype=np.float64)
-if w_commute_prod.sum() == 0:
-    w_commute_prod = None   # fall back to population producer (legacy weights)
 # Per-level school attractor + producer arrays.
 w_school_levels = {lvl: np.array([node_school_demand[lvl].get(nid, 0) for nid in node_ids_arr],
                                  dtype=np.float64) for lvl in SCHOOL_LEVELS}
 w_school_prod_levels = {lvl: np.array([node_school_producers[lvl].get(nid, 0) for nid in node_ids_arr],
                                       dtype=np.float64) for lvl in SCHOOL_LEVELS}
-for lvl in SCHOOL_LEVELS:
-    if w_school_prod_levels[lvl].sum() == 0:
-        w_school_prod_levels[lvl] = None    # fall back to population producer
 print(f"  {len(node_ids_arr)} nodes  pop {w_pop.sum():,.0f}  workplace {w_workplace.sum():,.0f}"
       f"  commute_attr {w_commute_attr.sum():,.0f}  retail {w_retail.sum():,.0f}")
 

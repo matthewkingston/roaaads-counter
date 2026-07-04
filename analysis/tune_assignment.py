@@ -212,17 +212,12 @@ base_w_pop       = np.array([node_pop_full.get(nid, 0.0)       for nid in node_i
 base_w_commute_attr = np.array([node_commute_attr_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
 base_w_retail    = np.array([node_retail_full.get(nid, 0.0)    for nid in node_ids], dtype=np.float64)
 base_w_commute_prod = np.array([node_commute_prod_full.get(nid, 0.0) for nid in node_ids], dtype=np.float64)
-if base_w_commute_prod.sum() == 0:
-    base_w_commute_prod = None   # fall back to population producer (legacy weights)
 
 # Per-level school attractor + producer arrays (each level fully independent).
 base_w_school_levels = {lvl: np.array([node_school_full[lvl].get(nid, 0.0) for nid in node_ids],
                                       dtype=np.float64) for lvl in SCHOOL_LEVELS}
 base_w_school_prod_levels = {lvl: np.array([node_school_prod_full[lvl].get(nid, 0.0) for nid in node_ids],
                                            dtype=np.float64) for lvl in SCHOOL_LEVELS}
-for lvl in SCHOOL_LEVELS:
-    if base_w_school_prod_levels[lvl].sum() == 0:
-        base_w_school_prod_levels[lvl] = None    # fall back to population producer
 _active_school = [lvl for lvl in SCHOOL_LEVELS if base_w_school_levels[lvl].sum() > 0]
 _has_school = len(_active_school) > 0
 if not _has_school:

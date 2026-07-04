@@ -299,10 +299,12 @@ with **no weight parameter and no self/cross term**:
   pop×pop trips. Single leg (i→j and j→i are separate OD pairs, so both directions are covered).
 - **Commute** (`flow_commute`, kernel `τ_commute`): home→work producer =
   `commute_producers` (car-driving commuters), attractor = `commute_attractor` (car-commute jobs);
-  return work→home producer = `commute_attractor`, attractor = pop —
-  `f_com·( commprod_i·cattr_j/D^com,cattr_i + cattr_i·pop_j/D^com,pop_i )`. Both sides are
+  return work→home producer = `commute_attractor`, attractor = `commute_producers` (the returning
+  commuters' homes are distributed by resident-commuter count, **not** raw population) —
+  `f_com·( commprod_i·cattr_j/D^com,cattr_i + cattr_i·commprod_j/D^com,commprod_i )`. Both sides are
   car-specific per zone (the model assigns car flow), sharpening the spatial distribution while
-  generation pinning keeps the magnitude NTS-pinned.
+  generation pinning keeps the magnitude NTS-pinned. The symmetric producer↔attractor round-trip
+  makes commute independent of the population layer.
 - **Retail** (`flow_retail`, kernel `τ_retail`): home→shop producer = pop, attractor
   = `retail_spaces`; return shop→home producer = `retail_spaces`, attractor = pop —
   `f_ret·( pop_i·ret_j/D^ret,ret_i + ret_i·pop_j/D^ret,pop_i )`.
@@ -312,10 +314,11 @@ with **no weight parameter and no self/cross term**:
   distributions come from the per-level data, not extra shape params). For each level: home→school
   producer = `school_producers_<level>` (census resident students by level, `census_school_producers.py`),
   attractor = `school_demand_<level>` (per-level enrolment, `school_attractor.py`); return school→home
-  producer = `school_demand_<level>`, attractor = pop —
-  `f_sch·( schoolprod^L_i·school^L_j/D^L,sch_i + school^L_i·pop_j/D^L,pop_i )`. The levels are fully
-  decoupled (a change to one cannot perturb another); only the shared kernel `f_sch` and the pop-side
-  denominator geometry are computed once. External `school_demand_<level>` and `school_producers_<level>`
+  producer = `school_demand_<level>`, attractor = `school_producers_<level>` (returning students land
+  where that level's resident students live, **not** by raw population) —
+  `f_sch·( schoolprod^L_i·school^L_j/D^L,sch_i + school^L_i·schoolprod^L_j/D^L,schoolprod_i )`. The
+  levels are fully decoupled (a change to one cannot perturb another); each level's producer↔attractor
+  round-trip is independent of the population layer. External `school_demand_<level>` and `school_producers_<level>`
   are both populated per zone, so external school trips are retained intra-zonally via the self-term
   (below) rather than dumping into the core.
 

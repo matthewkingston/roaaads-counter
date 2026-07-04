@@ -231,13 +231,19 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     willingness params (6 entries — res/commute/retail + school_primary/postprimary/
     tertiary; each school level fully independent, no shared τ_school), consumed by
     _modesub_kernel.  The commute and retail components are independent clones of the
-    school component: each is a symmetric two-leg, per-origin-normalised pop↔attractor
-    split with its OWN kernel — NO weight parameter and NO self/cross term
-    (the old single business component's W_BIZ and biz×biz term are gone):
+    school component: each is a symmetric two-leg producer↔attractor round-trip, each
+    leg per-origin-normalised, with its OWN kernel — NO weight parameter and NO
+    self/cross term (the old single business component's W_BIZ and biz×biz term are gone).
+    Both legs share the SAME two layers: the outbound is producer→attractor and the
+    return is attractor→producer — the return home is attracted by the PRODUCER layer,
+    NOT raw population, so returning commuters/students land where their producers live
+    (a residential zone's evening inflow is distributed by its resident-commuter /
+    resident-student count, not its total population):
       commute (modesub kernel, willingness["commute"]): producer = resident commuters
         (w_commute_prod), attractor = workplace jobs (w_workplace).
       retail  (modesub kernel, willingness["retail"]):  producer = population,
-        attractor = retail parking spaces (w_retail).
+        attractor = retail parking spaces (w_retail).  (Here producer IS population,
+        so the pop-attracted return is already the producer-attracted return.)
 
     Denominators are summed over the FULL destination set of each origin (all od
     pairs sharing that od_src — internal, external-routed, and denominator-only
@@ -276,6 +282,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     pop_s  = w_pop[src];       pop_d  = w_pop[dst]
     work_s = w_workplace[src]; work_d = w_workplace[dst]
     ret_s  = w_retail[src];    ret_d  = w_retail[dst]
+    commprod_s = w_commute_prod[src]; commprod_d = w_commute_prod[dst]  # resident commuters
 
     _has_self = self_src is not None and len(self_src) > 0
     if _has_self:
@@ -297,21 +304,21 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         return np.where(D > 0, 1.0 / D, 0.0)
 
     iD_res_pop  = _inv_denom(pop_d,  F_res, w_pop,       F_res_self)   # res: attraction = pop
-    iD_com_work = _inv_denom(work_d, F_com, w_workplace, F_com_self)   # commute leg home→work: attraction = workplace
-    iD_com_pop  = _inv_denom(pop_d,  F_com, w_pop,       F_com_self)   # commute leg work→home: attraction = pop
+    iD_com_work = _inv_denom(work_d,     F_com, w_workplace,    F_com_self)   # commute leg home→work: attraction = workplace
+    iD_com_home = _inv_denom(commprod_d, F_com, w_commute_prod, F_com_self)   # commute leg work→home: attraction = resident commuters
     iD_ret_ret  = _inv_denom(ret_d,  F_ret, w_retail,    F_ret_self)   # retail leg home→shop:  attraction = retail
     iD_ret_pop  = _inv_denom(pop_d,  F_ret, w_pop,       F_ret_self)   # retail leg shop→home:  attraction = pop
 
     # res: pop_i·pop_j·F_res / D^res,pop_i  (single leg covers both directions)
     t_res = gs_res * pop_s * pop_d * F_res * iD_res_pop[src]
 
-    # commute: symmetric split, each per-origin-normalised (no weight, no cross term).
-    # Home→work producer = resident commuters (node_commute_producers) when supplied,
-    # else falls back to population.
-    commprod_s = (w_commute_prod[src] if w_commute_prod is not None else pop_s)
+    # commute: symmetric producer↔attractor round-trip, each leg per-origin-normalised.
+    # Home→work producer = resident commuters (node_commute_producers), attractor = jobs;
+    # work→home is its reverse — producer = jobs, attractor = resident commuters (the
+    # returning commuters' homes are distributed as commute_producers, NOT raw population).
     t_commute = F_com * (
-        gs_com_out * commprod_s * work_d * iD_com_work[src]   # commuters i → work j  (attraction workplace)
-        + gs_com_ret * work_s * pop_d * iD_com_pop[src]       # work i → home j        (attraction pop)
+        gs_com_out * commprod_s * work_d * iD_com_work[src]     # commuters i → work j  (attraction jobs)
+        + gs_com_ret * work_s * commprod_d * iD_com_home[src]   # work i → home j        (attraction resident commuters)
     )
 
     # retail: symmetric pop↔retail split, each per-origin-normalised (no weight, no cross term).
@@ -321,11 +328,12 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     )
 
     # School: three INDEPENDENT components (primary / post-primary / tertiary), each a symmetric
-    # two-leg pop↔school split with its OWN producer, attractor, generation scale, K, per-level
-    # driveshare curve AND its OWN double-exp willingness (willingness["school_<lvl>"]) — the levels
-    # are now fully independent (no shared τ_school).  The kernel F_sch and BOTH its denominators are
-    # per-level, computed inside the loop.  The pop-side return denominator differs across levels only
-    # through the driveshare + willingness, not the pop attractor.
+    # two-leg producer↔attractor round-trip with its OWN producer, attractor, generation scale, K,
+    # per-level driveshare curve AND its OWN double-exp willingness (willingness["school_<lvl>"]) —
+    # the levels are fully independent (no shared τ_school).  Out leg = students→school (attraction
+    # = this level's enrolment); return leg = school→home (attraction = this level's resident
+    # students, NOT raw population — returning students land where that level's producers live).
+    # The kernel F_sch and BOTH its denominators are per-level, computed inside the loop.
     t_sch_by_level = {lvl: np.zeros(len(src), dtype=np.float64) for lvl in SCHOOL_LEVELS}
     if with_school and w_school_levels:
         for lvl in SCHOOL_LEVELS:
@@ -336,16 +344,16 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
             F_sch = _modesub_kernel(od_dist, w_sch_params, f"school_{lvl}")
             F_sch_self = (_modesub_kernel(self_dist, w_sch_params, f"school_{lvl}")
                           if _has_self else None)
-            iD_sch_pop = _inv_denom(pop_d, F_sch, w_pop, F_sch_self)   # return leg school→pop: attraction = pop
             sch_s = w_sch[src]; sch_d = w_sch[dst]
-            iD_sch_sch = _inv_denom(sch_d, F_sch, w_sch, F_sch_self)   # out leg pop→school: attraction = this level's school
-            prod = w_school_prod_levels.get(lvl) if w_school_prod_levels else None
-            schprod_s = (prod[src] if prod is not None else pop_s)     # producer = resident students of this level
+            prod = w_school_prod_levels[lvl]                           # resident students of this level
+            schprod_s = prod[src]; schprod_d = prod[dst]
+            iD_sch_sch  = _inv_denom(sch_d,     F_sch, w_sch, F_sch_self)   # out leg students→school: attraction = this level's school
+            iD_sch_home = _inv_denom(schprod_d, F_sch, prod,  F_sch_self)   # return leg school→home: attraction = this level's resident students
             gs_out = gs.get(f"sch_{lvl}_out", 1.0)
             gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
             t_sch_by_level[lvl] = F_sch * (
-                gs_out * schprod_s * sch_d * iD_sch_sch[src]   # students i → school j  (attraction school)
-                + gs_ret * sch_s * pop_d * iD_sch_pop[src]     # school i → pop j        (attraction pop)
+                gs_out * schprod_s * sch_d * iD_sch_sch[src]      # students i → school j  (attraction school)
+                + gs_ret * sch_s * schprod_d * iD_sch_home[src]   # school i → home j       (attraction resident students)
             )
 
     return t_res, t_commute, t_retail, t_sch_by_level
