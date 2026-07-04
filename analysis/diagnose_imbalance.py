@@ -43,6 +43,16 @@ folium map with one marker per node (colour = con/gen, blue source ↔ red sink;
 generation) and a toggleable layer per component.  Open the HTML locally (it needs CDN
 map tiles, so it won't render inside a sandboxed artifact).
 
+Intra-zonal self-flow (default ON): an external zone collapsed to a centroid keeps a
+fraction s_i = a_i·E[f_intra]/D_i of its production intra-zonally via the denominator-only
+self-term, which is never materialised as a trip — so its exported gen/con show only the
+inter-zonal slice and self-contained coarse zones read with wild ratios.  By default the
+implied self-flow (K·W·scale·p_i·s_i) is materialised as an i→i trip added to both that
+zone's gen and con, so ratios/relocatable are measured against FULL production.  This does
+NOT change imbalance (con−gen adds equally to both) — it only rescales ratios toward 1 for
+self-contained zones; genuine inter-zonal imbalances (e.g. Belfast) are preserved, and
+internal nodes (s_i=0) are untouched.  --exported-only restores the old inter-zonal-slice view.
+
 --sides splits each two-leg component into its producer-role and attractor-role side
 (e.g. commute → commute·worker {residents sent out vs returning, ref = commute_producers}
 and commute·job {workers arriving vs leaving, ref = commute_attractor}), because the
@@ -55,6 +65,7 @@ reports/imbalance_sides_{csv,scatter.png,map.html}.
 Usage:
   python3 analysis/diagnose_imbalance.py                 # 6-component view: tables + CSV + scatter + map
   python3 analysis/diagnose_imbalance.py --sides         # 11 producer/attractor side-signals
+  python3 analysis/diagnose_imbalance.py --exported-only # inter-zonal slice only (old external readings)
   python3 analysis/diagnose_imbalance.py --top 25        # longer source/sink tables
   python3 analysis/diagnose_imbalance.py --component commute          # one component
   python3 analysis/diagnose_imbalance.py --sides --component commute  # commute·worker + commute·job
@@ -67,7 +78,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "simulation"))
 from model import (PATHS_CACHE, WEIGHTS_FILE, TUNED_PARAMS, SCHOOL_LEVELS,
                    constrained_od_flows, load_self_terms, aadt_weights,
                    load_generation_rates, compute_generation_scales,
-                   assert_paths_cache_fresh, willingness_keys, willingness_from_flat)
+                   assert_paths_cache_fresh, willingness_keys, willingness_from_flat,
+                   _modesub_kernel)
 
 CENSUS_ZONES = "data/census_zones.json"
 REPORTS_DIR  = "reports"
@@ -160,6 +172,54 @@ for _lvl in SCHOOL_LEVELS:
     LEG_COMPONENT[f"sch_{_lvl}_out"] = f"school_{_lvl}"
     LEG_COMPONENT[f"sch_{_lvl}_ret"] = f"school_{_lvl}"
 
+# component → its generation legs (inverse of LEG_COMPONENT)
+COMPONENT_LEGS = {c: [k for k, v in LEG_COMPONENT.items() if v == c] for c in ALL_COMPONENTS}
+
+
+def _leg_prod_attr(ctx):
+    """{leg_key: (producer_array, attractor_array)} for every active generation leg."""
+    pa = {"res": (ctx["w_pop"], ctx["w_pop"]),
+          "com_out": (ctx["w_commute_pr"], ctx["w_commute_at"]),
+          "com_ret": (ctx["w_commute_at"], ctx["w_commute_pr"]),
+          "ret_out": (ctx["w_pop"], ctx["w_retail"]),
+          "ret_ret": (ctx["w_retail"], ctx["w_pop"])}
+    for lvl in SCHOOL_LEVELS:
+        pa[f"sch_{lvl}_out"] = (ctx["w_schp"][lvl], ctx["w_sch"][lvl])
+        pa[f"sch_{lvl}_ret"] = (ctx["w_sch"][lvl], ctx["w_schp"][lvl])
+    return pa
+
+
+def self_flows(ctx):
+    """Per-leg implied intra-zonal self-flow — the withheld production the denominator-only
+    self-term (a_i·E[f_intra]) accounts for but never materialises as a trip.  For a leg with
+    producer p, attractor a and kernel f:  self_i = K·W·gen_scale·p_i·D_self_i/D_total_i,
+    D_self_i = a_i·E[f(sampled intra times)],  D_total_i = Σ_j a_j f(d_ij) + D_self_i.
+    Nonzero only for external zones (D_self=0 elsewhere).  Materialising it as an i→i trip
+    (added to both the leg's gen and con) makes external zones read against their FULL
+    production; imbalance (con−gen) is unchanged — only ratios/relocatable move toward 1.
+    Returns {leg_key: self_flow_array} (empty if generation pinning / self-term absent)."""
+    gs = ctx["gen_scale"]
+    src, dst, dist, Nn = ctx["od_src"], ctx["od_dst"], ctx["od_dist"], ctx["N"]
+    ss, sd, sw = ctx["self_terms"]
+    if not gs or ss is None or len(ss) == 0:
+        return {}
+    pa = _leg_prod_attr(ctx)
+    kern, kern_self = {}, {}
+    out = {}
+    for key in [k for k in gs if gs[k] != 0.0 and k in LEG_COMPONENT]:
+        comp = LEG_COMPONENT[key]
+        p, a = pa[key]
+        if comp not in kern:
+            kern[comp] = _modesub_kernel(dist, ctx["willingness"][comp], comp)
+            kern_self[comp] = _modesub_kernel(sd, ctx["willingness"][comp], comp)
+        f = kern[comp]
+        D_inter = np.bincount(src, weights=a[dst] * f, minlength=Nn)
+        D_self = np.bincount(ss, weights=a[ss] * kern_self[comp] * sw, minlength=Nn)
+        D_tot = D_inter + D_self
+        scale = gs[key] * ctx["K"][comp] * ctx["W"][comp]
+        out[key] = np.where(D_tot > 0, scale * p * D_self / D_tot, 0.0)
+    return out
+
 
 def leg_rowcol(ctx):
     """{leg_key: (rowsum, colsum)} of the K·W-scaled flow for each generation leg, isolated
@@ -183,15 +243,19 @@ def leg_rowcol(ctx):
     return legs
 
 
-def build_sides(legs):
+def build_sides(legs, sf=None):
     """{side_label: (out, in)} — out = constrained generation of that role (row sum of its
     out-leg), in = emergent return consumption (col sum of the paired return-leg).  Each
     two-leg component splits into a producer-role and an attractor-role side; res is
-    single-leg (pop↔pop) so it stays one side."""
+    single-leg (pop↔pop) so it stays one side.  sf (self_flows dict) adds each leg's implied
+    intra-zonal self-flow to that role's out and in (readability materialisation)."""
+    sf = sf or {}
     sides = {}
     def add(label, out_leg, in_leg):
         if out_leg in legs and in_leg in legs:
-            sides[label] = (legs[out_leg][0], legs[in_leg][1])
+            out = legs[out_leg][0] + sf.get(out_leg, 0.0)
+            inn = legs[in_leg][1] + sf.get(in_leg, 0.0)
+            sides[label] = (out, inn)
     add("res", "res", "res")
     add("commute·worker", "com_out", "com_ret")   # residents: sent out (AM) vs returning (PM), ref = commute_producers
     add("commute·job",    "com_ret", "com_out")   # jobs: workers leaving (PM) vs arriving (AM), ref = commute_attractor
@@ -220,10 +284,13 @@ def node_label(nid, is_ext, ext_meta):
     return str(nid)
 
 
-def report_component(name, flow, node_ids, od_src, od_dst, is_ext, ext_meta, top):
+def report_component(name, flow, node_ids, od_src, od_dst, is_ext, ext_meta, top, self_add=None):
     N = len(node_ids)
     gen = np.bincount(od_src, weights=flow, minlength=N)
     con = np.bincount(od_dst, weights=flow, minlength=N)
+    if self_add is not None:                       # materialise intra-zonal self-flow (both sides)
+        gen = gen + self_add
+        con = con + self_add
     return report_from_gencon(name, gen, con, node_ids, is_ext, ext_meta, top)
 
 
@@ -435,6 +502,10 @@ def main():
                     help="split each two-leg component into its producer-role and attractor-role "
                          "sides (e.g. commute·worker vs commute·job) — 11 side-signals; ~11 model "
                          "passes; writes reports/imbalance_sides_*")
+    ap.add_argument("--exported-only", action="store_true",
+                    help="do NOT materialise the intra-zonal self-flow — external gen/con show only "
+                         "the exported (inter-zonal) slice (the old behaviour; ratios read wild for "
+                         "self-contained coarse zones)")
     ap.add_argument("--no-plot", action="store_true", help="skip the scatter PNG")
     ap.add_argument("--no-map", action="store_true", help="skip the interactive folium map")
     ap.add_argument("--no-csv", action="store_true")
@@ -447,12 +518,21 @@ def main():
     print(f"Loaded {len(node_ids):,} nodes  ({is_ext.sum():,} external / {(~is_ext).sum():,} internal), "
           f"{len(ctx['od_src']):,} OD pairs.")
 
+    materialize = not args.exported_only
+    sf = self_flows(ctx) if materialize else {}       # per-leg implied intra-zonal self-flow
+    if sf:
+        print("Self-flow: intra-zonal self-term MATERIALISED into external gen & con "
+              "(imbalance con−gen unchanged; ratios/relocatable now measured vs full production).")
+    else:
+        print("Self-flow: EXPORTED-ONLY (self-term not materialised; external ratios read wild)."
+              if args.exported_only else "Self-flow: none (no self-term/gen-pinning present).")
+
     results = {}
     if args.sides:
         print("SIDES: each two-leg component split into producer-role & attractor-role.\n"
               "  out = constrained generation of that role (≈ its producer/attractor weight × scale);\n"
               "  in  = emergent return consumption.  imbalance = in − out.")
-        sides = build_sides(leg_rowcol(ctx))
+        sides = build_sides(leg_rowcol(ctx), sf)
         for label, (out, inn) in sides.items():
             if args.component and not label.startswith(args.component):
                 continue
@@ -463,12 +543,15 @@ def main():
         print("gen = exported (production-constrained input); con = imported (emergent). "
               "imbalance = con − gen.")
         comps = combined_flows(ctx)
+        comp_self = {c: sum((sf.get(k, 0.0) for k in COMPONENT_LEGS[c]), np.zeros(ctx["N"]))
+                     for c in comps} if sf else {}
         names = [args.component] if args.component else list(comps)
         for name in names:
             if name not in comps:
                 raise SystemExit(f"unknown component '{name}' — choose from {list(comps)}")
             results[name] = report_component(name, comps[name], node_ids, ctx["od_src"], ctx["od_dst"],
-                                             is_ext, ext_meta, args.top)
+                                             is_ext, ext_meta, args.top,
+                                             self_add=comp_self.get(name))
         suffix, default_show = "", "commute"
 
     if not args.no_csv:
