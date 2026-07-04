@@ -37,11 +37,17 @@ Read-only: no re-tune, no OSRM, no paths rebuild.  Reads the CURRENT tuned_param
 so run it after a re-tune for the definitive picture (a stale param file still shows the
 imbalance STRUCTURE, just not the final magnitudes).
 
+Outputs (in reports/): per-component source/sink tables (stdout), imbalance.csv,
+imbalance_scatter.png (gen-vs-con scatter), and imbalance_map.html — an interactive
+folium map with one marker per node (colour = con/gen, blue source ↔ red sink; size =
+generation) and a toggleable layer per component.  Open the HTML locally (it needs CDN
+map tiles, so it won't render inside a sandboxed artifact).
+
 Usage:
-  python3 analysis/diagnose_imbalance.py                 # tables for all 6 components + CSV + scatter
+  python3 analysis/diagnose_imbalance.py                 # tables + CSV + scatter + map (all 6 components)
   python3 analysis/diagnose_imbalance.py --top 25        # longer source/sink tables
   python3 analysis/diagnose_imbalance.py --component commute
-  python3 analysis/diagnose_imbalance.py --no-plot
+  python3 analysis/diagnose_imbalance.py --no-plot --no-map   # tables + CSV only
 """
 import os, sys, json, argparse
 import numpy as np
@@ -232,12 +238,109 @@ def write_csv(results, node_ids, is_ext, ext_meta):
     print(f"[csv]  wrote {out}")
 
 
+def _internal_coords():
+    """{int node_id: (lat, lon)} for internal nodes, from the reduced routing graph (ITM→WGS84)."""
+    import osmnx as ox, pyproj
+    from model import ROUTING_GRAPH
+    from demographics_config import PROJECTED_CRS
+    G = ox.load_graphml(ROUTING_GRAPH)
+    to_wgs = pyproj.Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
+    coords = {}
+    for n, dat in G.nodes(data=True):
+        try:
+            x, y = float(dat["x"]), float(dat["y"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        lon, lat = to_wgs.transform(x, y)
+        coords[_pnid(n)] = (lat, lon)
+    return coords
+
+
+def make_map(results, node_ids, is_ext, ext_meta):
+    """Folium HTML: one CircleMarker per node, colour = con/gen (blue source ↔ red sink),
+    size = generation, per-component toggleable layers.  Open locally (needs CDN tiles)."""
+    try:
+        import folium
+        import matplotlib.cm as cm
+        import matplotlib.colors as mcolors
+    except Exception as e:
+        print(f"\n[map] folium/matplotlib unavailable ({e}) — skipping map")
+        return
+    int_coords = _internal_coords()
+    latlon = {}
+    for i, nid in enumerate(node_ids):
+        if is_ext[i]:
+            meta = ext_meta.get(nid)
+            if meta and meta[1] is not None and meta[2] is not None:
+                latlon[i] = (meta[1], meta[2])
+        else:
+            c = int_coords.get(_pnid(nid))
+            if c is not None:
+                latlon[i] = c
+    if not latlon:
+        print("\n[map] no node coordinates found — skipping map")
+        return
+
+    cmap = cm.get_cmap("coolwarm")
+
+    def color_for(gen, con):
+        r = 4.0 if gen <= 0 else (0.25 if con <= 0 else con / gen)   # con/gen; clamp to [1/4,4]
+        return mcolors.to_hex(cmap((np.clip(np.log2(r), -2, 2) + 2) / 4))
+
+    def radius_for(gen):
+        return 2.0 + 2.3 * np.log10(max(gen, 0.0) + 1.0)
+
+    lats = [ll[0] for ll in latlon.values()]
+    lons = [ll[1] for ll in latlon.values()]
+    m = folium.Map(location=[float(np.mean(lats)), float(np.mean(lons))],
+                   zoom_start=8, tiles="CartoDB positron")
+    names = [n for n in results if results[n] is not None]
+    for name in names:
+        gen, con, imb = results[name]
+        fg = folium.FeatureGroup(name=name, show=(name == "commute"))
+        for i, (lat, lon) in latlon.items():
+            g, c, d = gen[i], con[i], imb[i]
+            if g <= 0 and c <= 0:
+                continue
+            ratio = (c / g) if g > 0 else float("inf")
+            typ = "ext" if is_ext[i] else "int"
+            lvl = ext_meta.get(node_ids[i], ("core",))[0] if is_ext[i] else "core"
+            popup = (f"<b>{node_ids[i]}</b> ({typ}, {lvl})<br>"
+                     f"gen {g:,.0f} &rarr; con {c:,.0f}<br>"
+                     f"imbalance {d:+,.0f} veh/day<br>con/gen {ratio:.2f}")
+            folium.CircleMarker(
+                location=[lat, lon], radius=radius_for(g),
+                weight=0, fill=True, fill_color=color_for(g, c), fill_opacity=0.75,
+                tooltip=f"{name}: con/gen {ratio:.2f} ({d:+,.0f})",
+                popup=folium.Popup(popup, max_width=260)).add_to(fg)
+        fg.add_to(m)
+    folium.LayerControl(collapsed=False).add_to(m)
+    m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
+    legend = ('<div style="position:fixed;bottom:24px;left:24px;z-index:9999;background:white;'
+              'padding:10px 12px;border:1px solid #999;border-radius:5px;font:12px sans-serif;'
+              'max-width:235px"><b>Generation–consumption imbalance</b><br>'
+              'colour = con/gen &nbsp;'
+              '<span style="color:#3b4cc0">&#9679;</span>&nbsp;source (con&lt;gen) &nbsp;'
+              '<span style="color:#dddddd">&#9679;</span>&nbsp;balanced &nbsp;'
+              '<span style="color:#b40426">&#9679;</span>&nbsp;sink (con&gt;gen)<br>'
+              'size = generation (daily veh)<br>'
+              '<i>toggle components top-right; default = commute</i></div>')
+    m.get_root().html.add_child(folium.Element(legend))
+
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    out = os.path.join(REPORTS_DIR, "imbalance_map.html")
+    m.save(out)
+    print(f"\n[map]  wrote {out}  ({len(latlon)} located nodes, {len(names)} component layers)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--top", type=int, default=15, help="rows per source/sink table (default 15)")
     ap.add_argument("--component", help="restrict to one component (res/commute/retail/school_<lvl>)")
-    ap.add_argument("--no-plot", action="store_true")
+    ap.add_argument("--no-plot", action="store_true", help="skip the gen-vs-con scatter PNG")
+    ap.add_argument("--no-map", action="store_true", help="skip the interactive folium map")
     ap.add_argument("--no-csv", action="store_true")
     args = ap.parse_args()
 
@@ -262,6 +365,8 @@ def main():
         write_csv(results, node_ids, is_ext, ext_meta)
     if not args.no_plot:
         make_plot(results, node_ids, is_ext)
+    if not args.no_map:
+        make_map(results, node_ids, is_ext, ext_meta)
 
 
 if __name__ == "__main__":
