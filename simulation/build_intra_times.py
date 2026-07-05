@@ -69,7 +69,10 @@ BIN_STEP_S = 30.0
 BIN_CAP_S  = 14400.0                    # 240 min; intra-zonal times sit well below this
 S_DEFAULT  = 50                         # origin points per zone-component per /table batch
 D_DEFAULT  = 50                         # destination points (S+D ≤ osrm --max-table-size)
-BATCHES    = 4                          # /table batches per zone-component (⇒ S·D·BATCHES pairs)
+BATCHES    = 8                          # /table batches per zone-component (⇒ 20k pairs — from the
+                                        # convergence probe: ~1% rel-SE on res/commute/retail and
+                                        # ~2.3% on the binding case, sparse-rural school; dense/near
+                                        # zones (the SDZs) converge <1% far sooner ⇒ harmless overkill)
 
 # The six model kernel components == build_n_of_t.PURPOSES.  Per component:
 #   producer  = opportunity-table column; destination = area column or POI layer/weight-column.
@@ -226,7 +229,7 @@ def sample_zone_component(comp, members, area_points, area_mass, zpois,
         if res is None:
             continue
         dur, ssnap, dsnap = res
-        valid = (np.isfinite(dur)
+        valid = (np.isfinite(dur) & (dur > 0)          # drop degenerate same-node self-pairs
                  & (ssnap < SNAP_TOL_M)[:, None]
                  & (dsnap < SNAP_TOL_M)[None, :])
         counts += np.histogram(dur[valid], bins=edges)[0]
