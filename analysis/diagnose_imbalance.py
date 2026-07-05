@@ -124,20 +124,19 @@ def load_context():
     w_sch  = {lvl: arr(nw(f"node_school_demand_{lvl}"))    for lvl in SCHOOL_LEVELS}
     gen_rates = load_generation_rates()
     gen_scale = (compute_generation_scales(weights, gen_rates) if gen_rates is not None else None)
-    self_src, self_dist, self_w = load_self_terms(list(node_ids))
+    self_terms = load_self_terms(list(node_ids))            # {component: (src, dist, w)} or None
     active = [lvl for lvl in SCHOOL_LEVELS if K[f"school_{lvl}"] > 0 and w_sch[lvl].sum() > 0]
 
     return dict(node_ids=node_ids, od_src=od_src, od_dst=od_dst, od_dist=od_dist, N=N,
                 w_pop=arr(nw("node_population")), w_commute_at=arr(nw("node_commute_attractor")),
                 w_retail=arr(nw("node_retail_spaces")), w_commute_pr=arr(nw("node_commute_producers")),
                 w_sch=w_sch, w_schp={lvl: arr(nw(f"node_school_producers_{lvl}")) for lvl in SCHOOL_LEVELS},
-                willingness=willingness, self_terms=(self_src, self_dist, self_w),
+                willingness=willingness, self_terms=self_terms,
                 active=active, gen_scale=gen_scale, K=K, W=W)
 
 
 def _run(ctx, gen_scale, with_school=None):
     """One constrained_od_flows pass with a given (possibly leg-masked) gen_scale."""
-    ss, sd, sw = ctx["self_terms"]
     if with_school is None:
         with_school = len(ctx["active"]) > 0
     return constrained_od_flows(
@@ -145,7 +144,7 @@ def _run(ctx, gen_scale, with_school=None):
         ctx["w_pop"], ctx["w_commute_at"], ctx["w_retail"], ctx["willingness"],
         with_school=with_school,
         w_school_levels=ctx["w_sch"], w_school_prod_levels=ctx["w_schp"],
-        self_src=ss, self_dist=sd, self_w=sw,
+        self_terms=ctx["self_terms"],
         w_commute_prod=ctx["w_commute_pr"], gen_scale=gen_scale)
 
 
@@ -200,21 +199,26 @@ def self_flows(ctx):
     Returns {leg_key: self_flow_array} (empty if generation pinning / self-term absent)."""
     gs = ctx["gen_scale"]
     src, dst, dist, Nn = ctx["od_src"], ctx["od_dst"], ctx["od_dist"], ctx["N"]
-    ss, sd, sw = ctx["self_terms"]
-    if not gs or ss is None or len(ss) == 0:
+    self_terms = ctx["self_terms"]
+    if not gs or not self_terms:
         return {}
     pa = _leg_prod_attr(ctx)
-    kern, kern_self = {}, {}
+    kern = {}
     out = {}
     for key in [k for k in gs if gs[k] != 0.0 and k in LEG_COMPONENT]:
         comp = LEG_COMPONENT[key]
         p, a = pa[key]
         if comp not in kern:
             kern[comp] = _modesub_kernel(dist, ctx["willingness"][comp], comp)
-            kern_self[comp] = _modesub_kernel(sd, ctx["willingness"][comp], comp)
         f = kern[comp]
         D_inter = np.bincount(src, weights=a[dst] * f, minlength=Nn)
-        D_self = np.bincount(ss, weights=a[ss] * kern_self[comp] * sw, minlength=Nn)
+        st = self_terms.get(comp)                                  # component's mass-weighted intra-zonal histogram
+        if st is not None:
+            s_src, s_dist, s_w = st
+            F_self = _modesub_kernel(s_dist, ctx["willingness"][comp], comp)
+            D_self = np.bincount(s_src, weights=a[s_src] * F_self * s_w, minlength=Nn)
+        else:
+            D_self = np.zeros(Nn)
         D_tot = D_inter + D_self
         scale = gs[key] * ctx["K"][comp] * ctx["W"][comp]
         out[key] = np.where(D_tot > 0, scale * p * D_self / D_tot, 0.0)

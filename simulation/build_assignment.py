@@ -142,8 +142,8 @@ _GEN_SCALE = (compute_generation_scales(weights, _gen_rates, verbose=True)
 
 N_links  = len(link_u)
 N_nodes  = len(node_ids_arr)
-# External intra-zonal self-term (denominator-only; from build_intra_times.py).
-self_src, self_dist, self_w = load_self_terms(list(node_ids_arr))
+# External intra-zonal self-term (denominator-only; per-component, from build_intra_times.py).
+self_terms = load_self_terms(list(node_ids_arr))
 # Require the multi-component params (the six K's + the six double-exp willingness kernels).
 if not (K_res is not None and K_commute is not None and K_retail is not None
         and willingness is not None):
@@ -163,7 +163,7 @@ t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
     willingness,
     with_school=_use_school,
     w_school_levels=w_school_levels, w_school_prod_levels=w_school_prod_levels,
-    self_src=self_src, self_dist=self_dist, self_w=self_w,
+    self_terms=self_terms,
     w_commute_prod=w_commute_prod,
     gen_scale=_GEN_SCALE)
 raw_res     = scatter_od_to_links(t_res,     pair_idx, link_idx, link_weight, N_links)

@@ -134,9 +134,9 @@ N_links      = len(link_u)
 node_ids     = list(node_ids_arr)
 N_nodes      = len(node_ids)
 
-# External intra-zonal self-term (denominator-only; from build_intra_times.py).
+# External intra-zonal self-term (denominator-only; per-component, from build_intra_times.py).
 # Constant across evals — only the kernel F(self_dist) recomputes inside run_assignment.
-_self_src, _self_dist, _self_w = load_self_terms(node_ids)
+_self_terms = load_self_terms(node_ids)
 
 link_index = {(int(link_u[k]), int(link_v[k])): k for k in range(N_links)}
 
@@ -688,7 +688,7 @@ def run_assignment(willingness):
         willingness,
         with_school=_has_school,
         w_school_levels=base_w_school_levels, w_school_prod_levels=base_w_school_prod_levels,
-        self_src=_self_src, self_dist=_self_dist, self_w=_self_w,
+        self_terms=_self_terms,
         w_commute_prod=base_w_commute_prod,
         gen_scale=_GEN_SCALE)
     # Scatter only onto observed links (compact space) — see the observed-link

@@ -1,244 +1,327 @@
 #!/usr/bin/env python3
-"""Sample intra-zonal OSRM travel times for each external census zone.
+"""Mass-weighted, per-component intra-zonal self-term sampler.
 
-Each external zone is a single centroid node in the production-constrained gravity
-model, so the k=i diagonal of its per-origin denominator D^c_i (its intra-zonal
-trips) is missing — which over-allocates the zone's fixed trip budget to the
-observed core (see CLAUDE.md "external intra-zonal self-term" and the memory note
-project_production_constrained_gravity).
+Each external zone is a single centroid node, so its production-constrained denominator
+`D^c_i = Σ_k a^c_k·f_c(d_ik)` loses the `k=i` diagonal (its intra-zonal trips), which
+over-allocates the zone's fixed trip budget to the rest of the network (see CLAUDE.md
+"external intra-zonal self-term").  This script measures that diagonal as
+`D_self^c_i = a^c_i · S^c_i`, where `S^c_i` is the **producer×attractor mass-weighted mean
+kernel over intra-zonal trips**:
 
-This script measures that missing diagonal *directly*: for each external zone it
-draws M uniform random point-pairs inside the zone's census polygon and routes each
-on the local OSRM instance, recording the trip durations.  model.constrained_od_flows
-then adds  a^c_i · mean_m F_c(t_im)  to each denominator (denominator-only — no link
-flow).  Sampling the real geometry + real OSRM times dissolves the characteristic-
-distance constant, the speed assumption, zone-shape irregularity and the urban/rural
-speed gap, and using the mean kernel over the sample (E[F], not F(mean)) is correct
-for the steep kernel tail.
+    S^c_i = E_{o ∝ producer^c, b ∝ attractor^c, both in zone i}[ f_c(d_ob) ]
 
-Inputs:
-  data/census_zones.json            — external node list (id, level)
-  simulation/sdz2021/SDZ2021.geojson — SDZ polygons (keyed SDZ2021_cd)
-  simulation/dz2021/DZ2021.geojson   — DZ polygons  (keyed DZ2021_cd)
-  simulation/dea2021/DEA2021.geojson — DEA polygons (keyed FinalR_DEA)
-  data/ireland_data/Small_Area_National_Statistical_Boundaries_2022_*.geojson
-                                    — RoI SA polygons; ED/LEA derived by dissolving
-  Local OSRM at OSRM_HOST:OSRM_PORT (same car profile build_external_links.py uses).
+We store the *geometry* (a weighted histogram of the sampled intra-zonal times) per zone per
+component; the model applies the tuned kernel `f_c` at eval time (`model.load_self_terms` /
+`constrained_od_flows`).  Sampling ∝ mass, road-snapped, with real POI destinations for
+retail/school captures **clustering**: a sparse rural zone whose people and jobs both sit in
+the same villages reads short (strong self-suppression), while a genuinely spread zone reads
+long — the opposite of the old uniform-in-polygon single-average, which sampled empty fields.
+Because the `p_o·a_b·f(d_ob)` interaction is symmetric, one `S^c` serves both legs of a
+component (out and return), so the previous leg-asymmetry (different diagonal per leg)
+dissolves.
 
-Output:
-  data/external_intra_times.json  — {"<census_code>": [t1..tM seconds], ...} + _meta.
+Method (per external zone × per component, mirrors analysis/build_n_of_t.py):
+  origins ∝ producer over the zone's member small areas (road-proximate cached points);
+  destinations ∝ attractor — member-area road points (res/commute) or real POIs within the
+  zone (parking ∝ spaces for retail, schools ∝ per-level enrolment); one OSRM `/table` per
+  batch (independent draws ⇒ the S×D matrix is ∝ p⊗a, histogrammed unweighted); off-road
+  endpoints (`/nearest`/`/table` snap > SNAP_TOL_M) discarded.
 
-Run after build_census_zones.py, with OSRM up.  Independent of build_paths.py — the
-self-term lives in the model layer, not the paths cache, so re-running this does NOT
-require a paths-cache rebuild.  Re-run only when external zones change.
+Reuses: build_n_of_t (osrm_table, road_point, build_point_cache, load_area_masses,
+load_poi_layers, _check_osrm, SNAP_TOL_M, K_CACHE); ingest_ni_census/ingest_roi_census +
+build_census_zones' parent-map aggregation for zone→member-area membership.
+
+Inputs:  data/census_zones.json, data/island_opportunity_table.csv, the NI/RoI boundary files,
+         the parking/school POI caches, and the road-point cache data/_area_road_points.json
+         (built here if absent — shared with build_n_of_t).  Needs OSRM up (localhost:5000).
+Output:  data/external_intra_times.json — {"<code>": {"<component>": {"t":[s…], "w":[…]}}} + _meta.
+
+Model-layer only: NOT in the paths-cache signature, so re-running needs no paths rebuild —
+re-tune afterwards.  `--s/--d/--batches` set the (fixed-generous) sample budget per zone-component.
 """
-import glob
-import http.client
+import argparse
 import json
+import os
 import sys
 import time
+from collections import defaultdict
+
+import numpy as np
+
+sys.path.insert(0, "simulation")
+sys.path.insert(0, "analysis")
 
 import geopandas as gpd
-import numpy as np
+import pandas as pd
 from shapely.geometry import Point
 from shapely.prepared import prep
 
+# OSRM endpoint — kept here because build_n_of_t imports these from this module.
+OSRM_HOST = "localhost"
+OSRM_PORT = 5000
+
 CENSUS_ZONES_FILE = "data/census_zones.json"
-SDZ_FILE          = "simulation/sdz2021/SDZ2021.geojson"
-DZ_FILE           = "simulation/dz2021/DZ2021.geojson"
-DEA_FILE          = "simulation/dea2021/DEA2021.geojson"
-SA_BOUNDARY_GLOB  = "data/ireland_data/Small_Area_National_Statistical_Boundaries_2022_*.geojson"
+OPP_TABLE         = "data/island_opportunity_table.csv"
 OUTPUT_FILE       = "data/external_intra_times.json"
-OSRM_HOST         = "localhost"
-OSRM_PORT         = 5000
 
-M_DEFAULT = 30          # point-pairs sampled per zone
-SEED      = 20260625    # deterministic
+SEED       = 20260706
+BIN_STEP_S = 30.0
+BIN_CAP_S  = 14400.0                    # 240 min; intra-zonal times sit well below this
+S_DEFAULT  = 50                         # origin points per zone-component per /table batch
+D_DEFAULT  = 50                         # destination points (S+D ≤ osrm --max-table-size)
+BATCHES    = 4                          # /table batches per zone-component (⇒ S·D·BATCHES pairs)
 
-# geojson property holding the zone code, per NI level
-CODE_COL = {"SDZ": "SDZ2021_cd", "DZ": "DZ2021_cd", "DEA": "FinalR_DEA"}
-
-# ── OSRM helper (mirrors build_external_links.py; duration only) ────────────────
-
-_conn = None
-_request_count = 0
-_t_start = time.time()
-
-
-def _get_conn():
-    global _conn
-    if _conn is None:
-        _conn = http.client.HTTPConnection(OSRM_HOST, OSRM_PORT, timeout=15)
-    return _conn
-
-
-def osrm_duration(lat1, lon1, lat2, lon2, retries=3):
-    """Return total OSRM driving duration (s) from (lat1,lon1)→(lat2,lon2), or None."""
-    global _conn, _request_count
-    path = (f"/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
-            f"?overview=false&annotations=false")
-    for attempt in range(retries):
-        try:
-            conn = _get_conn()
-            conn.request("GET", path)
-            r = conn.getresponse()
-            body = r.read()
-            _request_count += 1
-            if _request_count % 500 == 0:
-                el = time.time() - _t_start
-                print(f"  {_request_count} queries in {el:.0f}s ({_request_count/el:.0f} q/s)")
-            data = json.loads(body)
-            if data.get("code") != "Ok":
-                return None
-            return data["routes"][0]["duration"]
-        except (http.client.HTTPException, ConnectionError, json.JSONDecodeError, KeyError):
-            _conn = None
-            if attempt < retries - 1:
-                time.sleep(0.1)
-            else:
-                return None
-
-
-def _check_osrm():
-    print(f"\nChecking OSRM at {OSRM_HOST}:{OSRM_PORT} …")
-    if osrm_duration(54.5933, -5.6960, 54.5933, -5.6960) is None:
-        print(f"ERROR: Cannot reach OSRM at {OSRM_HOST}:{OSRM_PORT}.")
-        print("Start OSRM with:")
-        print("  docker run -t -i -p 5000:5000 -v $(pwd):/data osrm/osrm-backend \\")
-        print("    osrm-routed --algorithm mld /data/northern-ireland.osrm")
-        sys.exit(1)
-    print("  OSRM reachable")
-
-
-# ── Polygon loading + uniform point sampling ───────────────────────────────────
-
-def load_polygons():
-    """Return {(level, code): shapely geometry in WGS84} for all NI + RoI levels."""
-    polys = {}
-
-    # NI: DZ / SDZ / DEA from boundary files
-    for level, path in (("SDZ", SDZ_FILE), ("DZ", DZ_FILE), ("DEA", DEA_FILE)):
-        gdf = gpd.read_file(path).to_crs("EPSG:4326")
-        col = CODE_COL[level]
-        if col not in gdf.columns:
-            print(f"ERROR: {path} has no '{col}' column (have {list(gdf.columns)})")
-            sys.exit(1)
-        for code, geom in zip(gdf[col], gdf.geometry):
-            polys[(level, str(code))] = geom
-        print(f"  {level}: {len(gdf)} polygons from {path}")
-
-    # RoI: SA directly; ED and LEA derived by dissolving SAs
-    sa_files = glob.glob(SA_BOUNDARY_GLOB)
-    if sa_files:
-        print(f"  Loading RoI SA boundaries (~410 MB) …")
-        sa = gpd.read_file(sa_files[0]).to_crs("EPSG:4326")
-        for code, geom in zip(sa["SA_PUB2022"], sa.geometry):
-            polys[("SA", str(code))] = geom
-        print(f"  SA: {len(sa)} polygons")
-        ed = sa[["ED_ID_STR", "geometry"]].dissolve(by="ED_ID_STR").reset_index()
-        for code, geom in zip(ed["ED_ID_STR"], ed.geometry):
-            polys[("ED", str(code))] = geom
-        print(f"  ED: {len(ed)} polygons (dissolved from SAs)")
-        lea = sa[["CSO_LEA", "geometry"]].dissolve(by="CSO_LEA").reset_index()
-        for code, geom in zip(lea["CSO_LEA"], lea.geometry):
-            polys[("LEA", str(code))] = geom
-        print(f"  LEA: {len(lea)} polygons (dissolved from SAs)")
-    else:
-        print(f"  WARNING: RoI SA boundary file not found ({SA_BOUNDARY_GLOB})")
-        print(f"           RoI external zones will be skipped (no self-term applied)")
-
-    return polys
+# The six model kernel components == build_n_of_t.PURPOSES.  Per component:
+#   producer  = opportunity-table column; destination = area column or POI layer/weight-column.
+COMPONENTS = ("res", "commute", "retail",
+              "school_primary", "school_postprimary", "school_tertiary")
+COMP_PRODUCER = {
+    "res": "population", "commute": "commute_producers", "retail": "population",
+    "school_primary": "school_producers_primary",
+    "school_postprimary": "school_producers_postprimary",
+    "school_tertiary": "school_producers_tertiary",
+}
+# destination spec: ("area", <opp col>) or ("poi", <layer>, <weight col or None>)
+COMP_DEST = {
+    "res":     ("area", "population"),
+    "commute": ("area", "commute_attractor"),
+    "retail":  ("poi", "parking", None),
+    "school_primary":     ("poi", "school", "enrol_primary"),
+    "school_postprimary": ("poi", "school", "enrol_postprimary"),
+    "school_tertiary":    ("poi", "school", "enrol_tertiary"),
+}
 
 
 def sample_points(geom, n, rng):
-    """Rejection-sample n uniform points (lon, lat) inside a (Multi)Polygon."""
+    """Rejection-sample n uniform points (lon, lat) inside a (Multi)Polygon.
+    (Kept in this module — build_n_of_t imports it.)"""
     minx, miny, maxx, maxy = geom.bounds
     pg = prep(geom)
     pts = []
-    # batch to keep rejection cheap even for low acceptance rates
     while len(pts) < n:
         need = n - len(pts)
         xs = rng.uniform(minx, maxx, size=need * 4)
         ys = rng.uniform(miny, maxy, size=need * 4)
         for x, y in zip(xs, ys):
             if pg.contains(Point(x, y)):
-                pts.append((x, y))   # (lon, lat)
+                pts.append((x, y))
                 if len(pts) == n:
                     break
     return pts
 
 
-# ── Main ────────────────────────────────────────────────────────────────────────
+# ── Zone → member small-area membership (reconstructed like build_census_zones) ──
+
+def build_membership():
+    """Return {external_zone_id: [member small-area codes]} for every external node,
+    reconstructing build_census_zones' parent-map aggregation (handles the NI SDZ→DEA
+    spatial-join quirk and RoI ED/LEA-by-dissolve via the ingest loaders)."""
+    from ingest_ni_census import load_ni_census
+    from ingest_roi_census import load_roi_census
+    dz_gdf, sdz_gdf, _ = load_ni_census()
+    sa_gdf, ed_gdf, _ = load_roi_census()
+    dz  = pd.concat([dz_gdf,  sa_gdf], ignore_index=True)    # small areas (DZ + SA)
+    sdz = pd.concat([sdz_gdf, ed_gdf], ignore_index=True)    # intermediate (SDZ + ED)
+    dz_to_sdz  = dz.set_index("area_code")["parent_code"].to_dict()   # small area → intermediate
+    sdz_to_dea = sdz.set_index("area_code")["parent_code"].to_dict()  # intermediate → outer
+
+    sa_by_int = defaultdict(list)
+    for sa, p in dz_to_sdz.items():
+        sa_by_int[p].append(sa)
+    int_by_outer = defaultdict(list)
+    for s, d in sdz_to_dea.items():
+        int_by_outer[d].append(s)
+
+    with open(CENSUS_ZONES_FILE) as f:
+        nodes = json.load(f)["external_nodes"]
+    membership = {}
+    for node in nodes:
+        zid, level = node["id"], node["level"]
+        if level in ("SDZ", "ED"):                          # intermediate node → its small areas
+            members = list(sa_by_int.get(zid, []))
+        elif level in ("DEA", "LEA"):                       # outer node → grandchild small areas
+            members = [sa for it in int_by_outer.get(zid, []) for sa in sa_by_int.get(it, [])]
+        else:                                               # orphan DZ/SA node → itself
+            members = [zid]
+        membership[zid] = members
+    return membership, nodes
+
+
+# ── POI → external-zone assignment (point-in-zone) ─────────────────────────────
+
+def assign_pois(zone_polys, pois):
+    """{zone_id: {'parking': (coords, w), 'school': (coords, {col: w})}} via point-in-zone
+    containment of the global POI clouds (build_n_of_t.load_poi_layers)."""
+    zids = list(zone_polys)
+    zgdf = gpd.GeoDataFrame({"zid": zids}, geometry=[zone_polys[z] for z in zids],
+                            crs="EPSG:4326")
+    out = {z: {} for z in zids}
+    for layer, (coords, w) in pois.items():
+        pts = gpd.GeoDataFrame(geometry=[Point(lo, la) for lo, la in coords], crs="EPSG:4326")
+        j = gpd.sjoin(pts, zgdf, predicate="within", how="inner")
+        for z, grp in j.groupby("zid"):
+            idx = grp.index.values
+            if layer == "parking":
+                out[z]["parking"] = (coords[idx], w[idx])
+            else:
+                out[z]["school"] = (coords[idx], {c: w[c][idx] for c in w})
+    return out
+
+
+# ── Per zone × component sampling ──────────────────────────────────────────────
+
+def sample_zone_component(comp, members, area_points, area_mass, zpois,
+                          S, D, batches, edges, osrm_table, rng):
+    """Weighted histogram of intra-zonal times for one zone × component, or None if the
+    zone has no producer or no attractor for this component."""
+    from build_n_of_t import SNAP_TOL_M
+    prod_col = COMP_PRODUCER[comp]
+    pw = np.array([area_mass.get(a, {}).get(prod_col, 0.0) for a in members], dtype=float)
+    if pw.sum() <= 0:
+        return None
+    pw = pw / pw.sum()
+
+    dkind = COMP_DEST[comp][0]
+    if dkind == "area":
+        dcol = COMP_DEST[comp][1]
+        aw = np.array([area_mass.get(a, {}).get(dcol, 0.0) for a in members], dtype=float)
+        if aw.sum() <= 0:
+            return None
+        aw = aw / aw.sum()
+    else:                                                   # poi
+        _, layer, wcol = COMP_DEST[comp]
+        entry = zpois.get(layer)
+        if entry is None:
+            return None
+        pcoords, pw_raw = entry
+        pw_raw = pw_raw if wcol is None else pw_raw[wcol]
+        m = pw_raw > 0
+        if not m.any():
+            return None
+        poi_coords, poi_w = pcoords[m], pw_raw[m] / pw_raw[m].sum()
+
+    def _area_point(a):
+        pts = area_points.get(members[a])
+        return pts[rng.integers(len(pts))] if pts else None
+
+    counts = np.zeros(len(edges) - 1, dtype=np.float64)
+    for _ in range(batches):
+        oi = rng.choice(len(members), size=S, p=pw)
+        src = [_area_point(a) for a in oi]
+        keep_s = [p is not None for p in src]
+        src = [p for p in src if p is not None]
+        if not src:
+            continue
+        if dkind == "area":
+            di = rng.choice(len(members), size=D, p=aw)
+            dst = [_area_point(a) for a in di]
+            keep_d = [p is not None for p in dst]
+            dst = [p for p in dst if p is not None]
+        else:
+            di = rng.choice(len(poi_coords), size=D, p=poi_w)
+            dst = [tuple(poi_coords[k]) for k in di]
+        if not dst:
+            continue
+        res = osrm_table(src, dst)
+        if res is None:
+            continue
+        dur, ssnap, dsnap = res
+        valid = (np.isfinite(dur)
+                 & (ssnap < SNAP_TOL_M)[:, None]
+                 & (dsnap < SNAP_TOL_M)[None, :])
+        counts += np.histogram(dur[valid], bins=edges)[0]
+
+    if counts.sum() <= 0:
+        return None
+    centers = 0.5 * (edges[:-1] + np.minimum(edges[1:], BIN_CAP_S + BIN_STEP_S))
+    nz = counts > 0
+    w = counts[nz] / counts.sum()
+    return {"t": [round(float(t), 1) for t in centers[nz]],
+            "w": [round(float(x), 6) for x in w]}
+
 
 def main():
-    M = M_DEFAULT
-    if "--m" in sys.argv:
-        M = int(sys.argv[sys.argv.index("--m") + 1])
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--s", type=int, default=S_DEFAULT, help="origin points per /table batch")
+    ap.add_argument("--d", type=int, default=D_DEFAULT, help="destination points per /table batch")
+    ap.add_argument("--batches", type=int, default=BATCHES, help="/table batches per zone-component")
+    args = ap.parse_args()
 
-    print("Loading census zones …")
-    with open(CENSUS_ZONES_FILE) as f:
-        external_nodes = json.load(f)["external_nodes"]
-    print(f"  {len(external_nodes)} external nodes")
-
-    print("Loading zone polygons …")
-    polys = load_polygons()
-
+    from build_n_of_t import (osrm_table, _check_osrm, load_area_masses,
+                              load_poi_layers, build_point_cache)
     _check_osrm()
 
-    print(f"\nSampling {M} intra-zonal point-pairs per zone "
-          f"(~{len(external_nodes) * M:,} OSRM routes) …")
+    print("Reconstructing zone → member-area membership …")
+    membership, nodes = build_membership()
+    print(f"  {len(membership)} external zones")
+
+    print("Loading area masses + geometries + POIs …")
+    df, geoms = load_area_masses()                          # df ∝ opportunity table, geoms WGS84
+    code_to_row = {c: i for i, c in enumerate(df["area_code"].values)}
+    area_mass = df.set_index("area_code").to_dict("index")
+    pois = load_poi_layers()
+
+    print("Building road-point cache (shared with build_n_of_t) …")
     rng = np.random.default_rng(SEED)
+    cache = build_point_cache(df, geoms, rng)               # aligned to df rows
+    area_points = {c: cache[i] for c, i in code_to_row.items()}
 
-    intra_times = {}
-    missing_poly = []
-    degenerate = []
-    for node in external_nodes:
-        zid, level = node["id"], node["level"]
-        geom = polys.get((level, str(zid)))
-        if geom is None:
-            missing_poly.append((level, zid))
-            continue
-        origins = sample_points(geom, M, rng)
-        dests   = sample_points(geom, M, rng)
-        times = []
-        for (olon, olat), (dlon, dlat) in zip(origins, dests):
-            dur = osrm_duration(olat, olon, dlat, dlon)
-            if dur is not None and dur > 0:
-                times.append(round(float(dur), 2))
-        if not times:
-            degenerate.append((level, zid))
-            continue
-        intra_times[zid] = times
-        if len(times) < M:
-            degenerate.append((level, zid, len(times)))
+    print("Assigning POIs to zones (point-in-zone) …")
+    zone_polys = {}
+    for zid, members in membership.items():
+        gs = [geoms[code_to_row[c]] for c in members if c in code_to_row]
+        if gs:
+            zone_polys[zid] = gs[0] if len(gs) == 1 else gpd.GeoSeries(gs).unary_union
+    zpois = assign_pois(zone_polys, pois)
 
-    # ── Report (loud on any zone we could not fully sample) ──────────────────────
-    print(f"\nSampled {len(intra_times)}/{len(external_nodes)} external zones")
-    if missing_poly:
-        print(f"  WARNING: {len(missing_poly)} zones have NO polygon (no self-term applied):")
-        for level, zid in missing_poly:
-            print(f"    {level} {zid}")
-    if degenerate:
-        print(f"  WARNING: {len(degenerate)} zones had < {M} successful routes:")
-        for d in degenerate:
-            print(f"    {d}")
-    allt = np.array([t for ts in intra_times.values() for t in ts])
-    if len(allt):
-        print(f"  intra-zonal times (s): median {np.median(allt):.0f}  "
-              f"p10 {np.percentile(allt,10):.0f}  p90 {np.percentile(allt,90):.0f}")
+    edges = np.append(np.arange(0.0, BIN_CAP_S + BIN_STEP_S, BIN_STEP_S), np.inf)
+    print(f"\nSampling {args.s}×{args.d}×{args.batches} intra-zonal pairs per zone × "
+          f"{len(COMPONENTS)} components …")
+    t0 = time.time()
+    out_zones = {}
+    empty_zone, skipped = [], defaultdict(int)
+    for n, zid in enumerate(membership):
+        members = [c for c in membership[zid] if c in code_to_row]
+        if not members:
+            empty_zone.append(zid)
+            continue
+        byc = {}
+        for comp in COMPONENTS:
+            h = sample_zone_component(comp, members, area_points, area_mass,
+                                      zpois.get(zid, {}), args.s, args.d, args.batches,
+                                      edges, osrm_table, rng)
+            if h is not None:
+                byc[comp] = h
+            else:
+                skipped[comp] += 1
+        if byc:
+            out_zones[zid] = byc
+        if (n + 1) % 25 == 0:
+            print(f"  {n+1}/{len(membership)} zones ({time.time()-t0:.0f}s)", flush=True)
+
+    print(f"\nSampled {len(out_zones)}/{len(membership)} zones in {time.time()-t0:.0f}s")
+    if empty_zone:
+        print(f"  {len(empty_zone)} zones had no member areas in the opportunity table (no self-term)")
+    for comp, k in skipped.items():
+        if k:
+            print(f"  component {comp}: {k} zones had no producer/attractor (no self-term for that component)")
 
     out = {
         "_meta": {
-            "M": M, "seed": SEED, "n_zones": len(intra_times),
-            "sampling": "uniform-in-polygon random pairs",
-            "note": "intra-zonal OSRM durations (s); denominator-only self-term. "
-                    "Same OSRM profile as build_external_links.py.",
+            "seed": SEED, "components": list(COMPONENTS),
+            "s": args.s, "d": args.d, "batches": args.batches,
+            "bin_step_s": BIN_STEP_S, "bin_cap_s": BIN_CAP_S,
+            "n_zones": len(out_zones),
+            "sampling": "mass-weighted (producer×attractor) intra-zonal, road-snapped, real POIs",
+            "note": "per-zone per-component weighted time histograms; denominator-only self-term. "
+                    "Model applies the tuned kernel f_c to the bin centres (see model.load_self_terms).",
         },
-        **intra_times,
+        **out_zones,
     }
     with open(OUTPUT_FILE, "w") as f:
         json.dump(out, f)
-    print(f"\nWrote {OUTPUT_FILE}")
+    print(f"Wrote {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

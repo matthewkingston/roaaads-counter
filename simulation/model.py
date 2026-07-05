@@ -10,6 +10,7 @@ import json
 import math
 import os
 import sys
+from collections import defaultdict
 import numpy as np
 
 # The kernel's mode-substitution + speed factors live in analysis/ (shared with the
@@ -216,7 +217,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          willingness,
                          with_school=False,
                          w_school_levels=None, w_school_prod_levels=None,
-                         self_src=None, self_dist=None, self_w=None,
+                         self_terms=None,
                          w_commute_prod=None,
                          gen_scale=None):
     """Per-OD-pair, pre-K production-constrained component flows.
@@ -250,16 +251,16 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     ext→ext virtual edges), so each origin's production budget is conserved.
 
     External intra-zonal self-term (optional, denominator-only):
-      self_src  — node indices i of external zones, each repeated M_i× (one entry
-                  per sampled intra-zonal OSRM time).
-      self_dist — the sampled intra-zonal times (seconds), parallel to self_src.
-      self_w    — per-entry multiplicity weight (1/M_i), so the M_i entries of a
-                  zone collectively count as one diagonal destination.
-    Adds  a^c_i·(1/M_i)·Σ_m F_c(t_im)  to each per-origin denominator D^c_i — i.e.
+      self_terms — {component: (self_src, self_dist, self_w)} from model.load_self_terms
+                  (mass-weighted per-component intra-zonal time histograms, build_intra_times.py).
+                  Per component: self_src = external-zone node indices (one per bin), self_dist =
+                  bin centre times (s), self_w = bin weights (Σ=1 per zone).  Both legs of a
+                  component share its entry (the p×a interaction is symmetric).
+    Adds  a^c_i·Σ_bin w·F_c(t_bin) = a^c_i·S^c_i  to each per-origin denominator D^c_i — i.e.
     restores the k=i diagonal that collapsing a zone to a centroid dropped (see
     project_production_constrained_gravity, "external intra-zonal self-term").  These
     entries touch ONLY the denominators; they contribute no link flow (no pair_idx).
-    self_src=None ⇒ exact prior behaviour.
+    self_terms=None ⇒ no self-term.
     """
     src = od_src
     dst = od_dst
@@ -284,30 +285,32 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     ret_s  = w_retail[src];    ret_d  = w_retail[dst]
     commprod_s = w_commute_prod[src]; commprod_d = w_commute_prod[dst]  # resident commuters
 
-    _has_self = self_src is not None and len(self_src) > 0
-    if _has_self:
-        F_res_self = _modesub_kernel(self_dist, willingness["res"], "res")
-        F_com_self = _modesub_kernel(self_dist, willingness["commute"], "commute")
-        F_ret_self = _modesub_kernel(self_dist, willingness["retail"], "retail")
-    else:
-        F_res_self = F_com_self = F_ret_self = None
+    # Per-component self-term arrays (self_src, F_self, self_w) or None, from the mass-weighted
+    # intra-zonal histograms; the kernel is applied to the stored bin-centre times here.
+    def _self(comp, wparams):
+        if not self_terms or comp not in self_terms:
+            return None
+        s_src, s_dist, s_w = self_terms[comp]
+        return (s_src, _modesub_kernel(s_dist, wparams, comp), s_w)
+    st_res = _self("res", willingness["res"])
+    st_com = _self("commute", willingness["commute"])
+    st_ret = _self("retail", willingness["retail"])
 
     # Per-origin denominators D^c_i = Σ_k a^c_k·F_c(d_ik) (+ intra-zonal self-term);
     # inverse with 0/0 → 0.  attr_d/F = per-pair destination attraction × kernel;
-    # attr_full/F_self = per-node own-zone attraction × self-kernel for the diagonal.
-    def _inv_denom(attr_d, F, attr_full, F_self):
+    # st = (self_src, F_self, self_w): the diagonal a^c_i·Σ_bin w·F_c(t_bin).
+    def _inv_denom(attr_d, F, attr_full, st):
         D = np.bincount(src, weights=attr_d * F, minlength=N_nodes)
-        if _has_self:
-            D += np.bincount(self_src,
-                             weights=attr_full[self_src] * F_self * self_w,
-                             minlength=N_nodes)
+        if st is not None:
+            s_src, F_self, s_w = st
+            D += np.bincount(s_src, weights=attr_full[s_src] * F_self * s_w, minlength=N_nodes)
         return np.where(D > 0, 1.0 / D, 0.0)
 
-    iD_res_pop  = _inv_denom(pop_d,  F_res, w_pop,       F_res_self)   # res: attraction = pop
-    iD_com_work = _inv_denom(work_d,     F_com, w_workplace,    F_com_self)   # commute leg home→work: attraction = workplace
-    iD_com_home = _inv_denom(commprod_d, F_com, w_commute_prod, F_com_self)   # commute leg work→home: attraction = resident commuters
-    iD_ret_ret  = _inv_denom(ret_d,  F_ret, w_retail,    F_ret_self)   # retail leg home→shop:  attraction = retail
-    iD_ret_pop  = _inv_denom(pop_d,  F_ret, w_pop,       F_ret_self)   # retail leg shop→home:  attraction = pop
+    iD_res_pop  = _inv_denom(pop_d,  F_res, w_pop,       st_res)   # res: attraction = pop
+    iD_com_work = _inv_denom(work_d,     F_com, w_workplace,    st_com)   # commute leg home→work: attraction = workplace
+    iD_com_home = _inv_denom(commprod_d, F_com, w_commute_prod, st_com)   # commute leg work→home: attraction = resident commuters
+    iD_ret_ret  = _inv_denom(ret_d,  F_ret, w_retail,    st_ret)   # retail leg home→shop:  attraction = retail
+    iD_ret_pop  = _inv_denom(pop_d,  F_ret, w_pop,       st_ret)   # retail leg shop→home:  attraction = pop
 
     # res: pop_i·pop_j·F_res / D^res,pop_i  (single leg covers both directions)
     t_res = gs_res * pop_s * pop_d * F_res * iD_res_pop[src]
@@ -342,13 +345,12 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                 continue
             w_sch_params = willingness[f"school_{lvl}"]
             F_sch = _modesub_kernel(od_dist, w_sch_params, f"school_{lvl}")
-            F_sch_self = (_modesub_kernel(self_dist, w_sch_params, f"school_{lvl}")
-                          if _has_self else None)
+            st_sch = _self(f"school_{lvl}", w_sch_params)
             sch_s = w_sch[src]; sch_d = w_sch[dst]
             prod = w_school_prod_levels[lvl]                           # resident students of this level
             schprod_s = prod[src]; schprod_d = prod[dst]
-            iD_sch_sch  = _inv_denom(sch_d,     F_sch, w_sch, F_sch_self)   # out leg students→school: attraction = this level's school
-            iD_sch_home = _inv_denom(schprod_d, F_sch, prod,  F_sch_self)   # return leg school→home: attraction = this level's resident students
+            iD_sch_sch  = _inv_denom(sch_d,     F_sch, w_sch, st_sch)   # out leg students→school: attraction = this level's school
+            iD_sch_home = _inv_denom(schprod_d, F_sch, prod,  st_sch)   # return leg school→home: attraction = this level's resident students
             gs_out = gs.get(f"sch_{lvl}_out", 1.0)
             gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
             t_sch_by_level[lvl] = F_sch * (
@@ -449,50 +451,60 @@ def scatter_od_to_links(t_pair, pair_idx, link_idx, link_weight, N_links):
 
 
 def load_self_terms(node_ids, intra_times_file=INTRA_TIMES):
-    """Build (self_src, self_dist, self_w) for constrained_od_flows from the
-    intra-zonal OSRM time samples written by build_intra_times.py.
+    """Build the PER-COMPONENT intra-zonal self-term arrays for constrained_od_flows from
+    the mass-weighted time histograms written by build_intra_times.py.
 
-    For each external zone present BOTH in the intra-times file and in node_ids,
-    emits one entry per sampled time: self_src = the zone's node index (repeated
-    M_i×), self_dist = the sampled times, self_w = 1/M_i (so a zone's M_i samples
-    collectively count as one diagonal destination, contributing mean_m F(t_im)).
+    File format: {"<zone census code>": {"<component>": {"t": [bin centres s], "w": [weights,
+    Σ=1]}}} — one weighted histogram per external zone per component (res/commute/retail +
+    the three school levels), the producer×attractor mass-weighted intra-zonal time
+    distribution.  For each component this returns (self_src, self_dist, self_w) where
+    self_src = the zone's node index (one per histogram bin), self_dist = bin centres,
+    self_w = bin weights (so the zone contributes  a^c_i · Σ_bin w·F_c(t_bin) = a^c_i·S^c_i
+    to its denominator).  Both legs of a component share its self-term (symmetric interaction).
 
-    Returns (None, None, None) if the file is absent or yields no usable entries
-    (⇒ constrained_od_flows reverts to no self-term).  Zones in the file but absent
-    from node_ids are skipped (printed); they cannot be indexed into the weight arrays.
+    Returns {component: (self_src, self_dist, self_w)} (only components with ≥1 entry), or
+    None if the file is absent / yields nothing (⇒ constrained_od_flows reverts to no
+    self-term).  Zones in the file but absent from node_ids are skipped (printed).
     """
     if not os.path.exists(intra_times_file):
         print(f"  [self-term] {intra_times_file} not found — no intra-zonal self-term")
-        return None, None, None
+        return None
     with open(intra_times_file) as f:
         data = json.load(f)
     data.pop("_meta", None)
     node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-    src, dist, wt = [], [], []
+    per = defaultdict(lambda: ([], [], []))
     n_zones = 0
     missing = []
-    for zid, times in data.items():
+    for zid, by_comp in data.items():
         idx = node_to_idx.get(zid)
         if idx is None:
             missing.append(zid)
             continue
-        if not times:
-            continue
-        m = len(times)
-        src.extend([idx] * m)
-        dist.extend(times)
-        wt.extend([1.0 / m] * m)
-        n_zones += 1
-    if not src:
+        used = False
+        for comp, hist in by_comp.items():
+            t, w = hist.get("t", []), hist.get("w", [])
+            if not t:
+                continue
+            s_src, s_dist, s_w = per[comp]
+            s_src.extend([idx] * len(t))
+            s_dist.extend(t)
+            s_w.extend(w)
+            used = True
+        if used:
+            n_zones += 1
+    out = {c: (np.asarray(s, dtype=np.intp),
+               np.asarray(d, dtype=np.float64),
+               np.asarray(w, dtype=np.float64))
+           for c, (s, d, w) in per.items() if s}
+    if not out:
         print(f"  [self-term] {intra_times_file} has no zones matching the cache nodes — no self-term")
-        return None, None, None
+        return None
     if missing:
         print(f"  [self-term] {len(missing)} intra-times zones absent from cache node_ids (skipped)")
-    print(f"  [self-term] intra-zonal self-term active for {n_zones} external zones "
-          f"({len(src)} samples)")
-    return (np.asarray(src, dtype=np.intp),
-            np.asarray(dist, dtype=np.float64),
-            np.asarray(wt, dtype=np.float64))
+    print(f"  [self-term] mass-weighted intra-zonal self-term active for {n_zones} external zones, "
+          f"components " + ", ".join(f"{c}({len(v[0])})" for c, v in out.items()))
+    return out
 
 # ── Flow extraction ───────────────────────────────────────────────────────────
 
