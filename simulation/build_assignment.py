@@ -69,10 +69,20 @@ slot_fracs_commute = {}
 slot_fracs_retail  = {}
 slot_fracs_school  = {lvl: {} for lvl in SCHOOL_LEVELS}
 
+_DBLC = None   # doubly-constrained (Furness) components; None ⇒ singly-constrained everywhere
 if os.path.exists(TUNED_PARAMS):
     with open(TUNED_PARAMS) as f:
         _tp = json.load(f)
     K             = _tp.get("K",             K)
+    _dblc_raw = _tp.get("doubly_constrained")
+    if _dblc_raw:
+        _valid_dblc = {"commute", "retail"} | {f"school_{lvl}" for lvl in SCHOOL_LEVELS}
+        _bad = set(_dblc_raw) - _valid_dblc
+        if _bad:
+            raise SystemExit(f"tuned_params.json doubly_constrained has unknown components "
+                             f"{sorted(_bad)} (valid: {sorted(_valid_dblc)})")
+        _DBLC = set(_dblc_raw)
+        print(f"  Doubly-constrained (Furness) components: {sorted(_DBLC)}")
     if all(k in _tp for k in willingness_keys()):
         willingness = willingness_from_flat(_tp)     # 6 double-exp kernels (natural units)
     if "K_res" in _tp and "K_commute" in _tp and "K_retail" in _tp:
@@ -165,7 +175,8 @@ t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
     w_school_levels=w_school_levels, w_school_prod_levels=w_school_prod_levels,
     self_terms=self_terms,
     w_commute_prod=w_commute_prod,
-    gen_scale=_GEN_SCALE)
+    gen_scale=_GEN_SCALE,
+    doubly_constrained=_DBLC)
 raw_res     = scatter_od_to_links(t_res,     pair_idx, link_idx, link_weight, N_links)
 raw_commute = scatter_od_to_links(t_commute, pair_idx, link_idx, link_weight, N_links)
 raw_retail  = scatter_od_to_links(t_retail,  pair_idx, link_idx, link_weight, N_links)

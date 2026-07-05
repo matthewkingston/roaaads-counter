@@ -230,6 +230,23 @@ _gen_rates = load_generation_rates()
 _GEN_SCALE = (compute_generation_scales(wdata, _gen_rates, verbose=True)
               if _gen_rates is not None else None)
 
+# Doubly-constrained (Furness) components: read from tuned_params.json if present.  The listed
+# components' legs are ALSO attraction-constrained (Σ_i T_ij ∝ attractor_j; see
+# model.constrained_od_flows); absent/empty ⇒ singly (production) constrained everywhere.
+# Residential is held singly by design and is not a valid entry.
+_DBLC = None
+if os.path.exists(TUNED_PARAMS):
+    with open(TUNED_PARAMS) as _f:
+        _dblc_raw = json.load(_f).get("doubly_constrained")
+    if _dblc_raw:
+        _valid_dblc = {"commute", "retail"} | {f"school_{lvl}" for lvl in SCHOOL_LEVELS}
+        _bad = set(_dblc_raw) - _valid_dblc
+        if _bad:
+            raise SystemExit(f"tuned_params.json doubly_constrained has unknown components "
+                             f"{sorted(_bad)} (valid: {sorted(_valid_dblc)})")
+        _DBLC = set(_dblc_raw)
+        print(f"  Doubly-constrained (Furness) components: {sorted(_DBLC)}")
+
 # ── Load street names from consolidated GraphML (sequential node IDs) ─────────
 
 link_name = {}
@@ -690,7 +707,8 @@ def run_assignment(willingness):
         w_school_levels=base_w_school_levels, w_school_prod_levels=base_w_school_prod_levels,
         self_terms=_self_terms,
         w_commute_prod=base_w_commute_prod,
-        gen_scale=_GEN_SCALE)
+        gen_scale=_GEN_SCALE,
+        doubly_constrained=_DBLC)
     # Scatter only onto observed links (compact space) — see the observed-link
     # scatter-restriction block above. flow_* are indexed by COMPACT link id
     # (0.._N_obs_links-1); model_obs_4c reads them via the compact remap.

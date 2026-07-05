@@ -219,7 +219,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          w_school_levels=None, w_school_prod_levels=None,
                          self_terms=None,
                          w_commute_prod=None,
-                         gen_scale=None):
+                         gen_scale=None,
+                         doubly_constrained=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
     Returns (t_res, t_commute, t_retail, t_sch_by_level), where the first three are
@@ -261,6 +262,20 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     project_production_constrained_gravity, "external intra-zonal self-term").  These
     entries touch ONLY the denominators; they contribute no link flow (no pair_idx).
     self_terms=None ⇒ no self-term.
+
+    Doubly-constrained (Furness) option:
+      doubly_constrained — a set/list of component names ({"commute","retail",
+                  "school_primary","school_postprimary","school_tertiary"}) whose legs
+                  are ALSO attraction-constrained.  For a flagged component every leg is
+                  balanced (Furness) so BOTH margins hold: Σ_j T_ij (+ self diagonal) =
+                  gen-scaled producer_i (production, the absolute magnitude anchor) AND
+                  Σ_i T_ij (+ self diagonal) ∝ attractor_j (attraction — the attractor's
+                  raw scale is normalised away, only its cross-zone proportions enter).
+                  Unflagged components (and residential, always) keep the singly
+                  (production) constrained  gs·p_i·a_j·F/D_i.  Flow stays linear in K_c
+                  (balancing factors normalise to the raw margins, not K), so the caller's
+                  convex K-solve is unchanged.  None/empty ⇒ exact singly-constrained
+                  behaviour.
     """
     src = od_src
     dst = od_dst
@@ -280,11 +295,6 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     F_com = _modesub_kernel(od_dist, willingness["commute"], "commute")
     F_ret = _modesub_kernel(od_dist, willingness["retail"], "retail")
 
-    pop_s  = w_pop[src];       pop_d  = w_pop[dst]
-    work_s = w_workplace[src]; work_d = w_workplace[dst]
-    ret_s  = w_retail[src];    ret_d  = w_retail[dst]
-    commprod_s = w_commute_prod[src]; commprod_d = w_commute_prod[dst]  # resident commuters
-
     # Per-component self-term arrays (self_src, F_self, self_w) or None, from the mass-weighted
     # intra-zonal histograms; the kernel is applied to the stored bin-centre times here.
     def _self(comp, wparams):
@@ -296,6 +306,12 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     st_com = _self("commute", willingness["commute"])
     st_ret = _self("retail", willingness["retail"])
 
+    # Nodes appearing as an origin / destination in the pair set (the reachable support),
+    # used to normalise the doubly-constrained attraction margin to the production total.
+    src_present = np.zeros(N_nodes, dtype=bool); src_present[src] = True
+    dst_present = np.zeros(N_nodes, dtype=bool); dst_present[dst] = True
+    dbl = set(doubly_constrained) if doubly_constrained else set()
+
     # Per-origin denominators D^c_i = Σ_k a^c_k·F_c(d_ik) (+ intra-zonal self-term);
     # inverse with 0/0 → 0.  attr_d/F = per-pair destination attraction × kernel;
     # st = (self_src, F_self, self_w): the diagonal a^c_i·Σ_bin w·F_c(t_bin).
@@ -306,29 +322,87 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
             D += np.bincount(s_src, weights=attr_full[s_src] * F_self * s_w, minlength=N_nodes)
         return np.where(D > 0, 1.0 / D, 0.0)
 
-    iD_res_pop  = _inv_denom(pop_d,  F_res, w_pop,       st_res)   # res: attraction = pop
-    iD_com_work = _inv_denom(work_d,     F_com, w_workplace,    st_com)   # commute leg home→work: attraction = workplace
-    iD_com_home = _inv_denom(commprod_d, F_com, w_commute_prod, st_com)   # commute leg work→home: attraction = resident commuters
-    iD_ret_ret  = _inv_denom(ret_d,  F_ret, w_retail,    st_ret)   # retail leg home→shop:  attraction = retail
-    iD_ret_pop  = _inv_denom(pop_d,  F_ret, w_pop,       st_ret)   # retail leg shop→home:  attraction = pop
+    def _furness(O_full, A_full, F, st, comp, max_iter=1000, tol=1e-9):
+        """Doubly-constrained (Furness) per-pair flow for one leg.
 
-    # res: pop_i·pop_j·F_res / D^res,pop_i  (single leg covers both directions)
-    t_res = gs_res * pop_s * pop_d * F_res * iD_res_pop[src]
+        O_full = per-node generator (gen-scaled producer; the absolute magnitude anchor).
+        A_full = per-node attractor weight, used PROPORTIONALLY — its raw scale is
+        normalised away so ΣD == ΣO over the reachable support (both margins consistent).
+        The fixed point pins Σ_j T_ij (+ self diagonal) = O_i (production, the hard
+        constraint) and Σ_i T_ij (+ self diagonal) = D_j ∝ A_j (attraction).  `st`
+        (self_src, F_self, self_w) restores the intra-zonal diagonal to BOTH balancing
+        sums (the p·a·f interaction is symmetric, so one histogram serves both margins);
+        it is denominator-only (no link flow) exactly as in the singly-constrained path.
 
-    # commute: symmetric producer↔attractor round-trip, each leg per-origin-normalised.
-    # Home→work producer = resident commuters (node_commute_producers), attractor = jobs;
-    # work→home is its reverse — producer = jobs, attractor = resident commuters (the
-    # returning commuters' homes are distributed as commute_producers, NOT raw population).
-    t_commute = F_com * (
-        gs_com_out * commprod_s * work_d * iD_com_work[src]     # commuters i → work j  (attraction jobs)
-        + gs_com_ret * work_s * commprod_d * iD_com_home[src]   # work i → home j        (attraction resident commuters)
-    )
+        Convergence is monitored on the PRODUCTION (row) residual — the physically
+        load-bearing margin.  Columns are exact after every b-update, so only rows
+        (perturbed by the following b-update) need to settle.  Raises RuntimeError if the
+        row residual does not reach `tol` within `max_iter` (no silent cap)."""
+        sumO = float(O_full[src_present].sum())
+        sumA = float(A_full[dst_present].sum())
+        if sumO <= 0.0 or sumA <= 0.0:
+            return np.zeros(len(src), dtype=np.float64)
+        D_full = A_full * (sumO / sumA)                 # ΣD == ΣO over the reachable support
+        has_self = st is not None
+        if has_self:
+            s_src, F_self, s_w = st
 
-    # retail: symmetric pop↔retail split, each per-origin-normalised (no weight, no cross term).
-    t_retail = F_ret * (
-        gs_ret_out * pop_s * ret_d * iD_ret_ret[src]          # home i → shop j        (attraction retail)
-        + gs_ret_ret * ret_s * pop_d * iD_ret_pop[src]        # shop i → home j        (attraction pop)
-    )
+        def _dena(bvec):                                # Σ_j b_j D_j F_ij (+ self diagonal)
+            bd = bvec * D_full
+            d = np.bincount(src, weights=bd[dst] * F, minlength=N_nodes)
+            if has_self:
+                d += np.bincount(s_src, weights=bd[s_src] * F_self * s_w, minlength=N_nodes)
+            return d
+
+        def _denb(avec):                                # Σ_i a_i O_i F_ij (+ self diagonal)
+            aO = avec * O_full
+            d = np.bincount(dst, weights=aO[src] * F, minlength=N_nodes)
+            if has_self:
+                d += np.bincount(s_src, weights=aO[s_src] * F_self * s_w, minlength=N_nodes)
+            return d
+
+        prod_mask = O_full > 0
+        O_mean = sumO / max(int(prod_mask.sum()), 1)
+        a = np.ones(N_nodes, dtype=np.float64)
+        b = np.ones(N_nodes, dtype=np.float64)
+        denom_a = _dena(b)
+        rel = np.inf
+        for it in range(1, max_iter + 1):
+            a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)
+            b = np.where((db := _denb(a)) > 0, 1.0 / db, 0.0)
+            denom_a = _dena(b)                          # for the next iter AND the residual
+            rowsum = a * O_full * denom_a               # → O_i at the fixed point
+            rel = float(np.abs(rowsum - O_full)[prod_mask].max() / O_mean) if prod_mask.any() else 0.0
+            if rel < tol:
+                break
+        else:
+            raise RuntimeError(
+                f"Furness ({comp}) did not converge: max relative production residual "
+                f"{rel:.2e} after {max_iter} iterations (tol {tol:.0e})")
+        if os.environ.get("MODEL_FURNESS_DEBUG"):
+            print(f"    [furness {comp}] {it} iters, prod residual {rel:.1e}")
+        return a[src] * O_full[src] * b[dst] * D_full[dst] * F
+
+    def _leg(prod_full, gs_c, attr_full, F, st, comp):
+        """One producer→attractor leg: doubly-constrained (Furness) if `comp` is flagged,
+        else the singly (production) constrained  gs·p_i·a_j·F/D_i."""
+        if comp in dbl:
+            return _furness(gs_c * prod_full, attr_full, F, st, comp)
+        iD = _inv_denom(attr_full[dst], F, attr_full, st)
+        return gs_c * prod_full[src] * attr_full[dst] * F * iD[src]
+
+    # res: single leg covers both directions (pop↔pop, symmetric).  Held singly-constrained.
+    t_res = _leg(w_pop, gs_res, w_pop, F_res, st_res, "res")
+
+    # commute: symmetric producer↔attractor round-trip.  Out leg home→work (producer =
+    # resident commuters, attractor = jobs); return leg work→home (producer = jobs,
+    # attractor = resident commuters — returning commuters land where commuters live).
+    t_commute = (_leg(w_commute_prod, gs_com_out, w_workplace,     F_com, st_com, "commute")
+                 + _leg(w_workplace,   gs_com_ret, w_commute_prod, F_com, st_com, "commute"))
+
+    # retail: symmetric pop↔retail round-trip (out home→shop, return shop→home).
+    t_retail = (_leg(w_pop,    gs_ret_out, w_retail, F_ret, st_ret, "retail")
+                + _leg(w_retail, gs_ret_ret, w_pop,    F_ret, st_ret, "retail"))
 
     # School: three INDEPENDENT components (primary / post-primary / tertiary), each a symmetric
     # two-leg producer↔attractor round-trip with its OWN producer, attractor, generation scale, K,
@@ -336,27 +410,22 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     # the levels are fully independent (no shared τ_school).  Out leg = students→school (attraction
     # = this level's enrolment); return leg = school→home (attraction = this level's resident
     # students, NOT raw population — returning students land where that level's producers live).
-    # The kernel F_sch and BOTH its denominators are per-level, computed inside the loop.
+    # Each leg is doubly-constrained iff "school_<lvl>" is in doubly_constrained.
     t_sch_by_level = {lvl: np.zeros(len(src), dtype=np.float64) for lvl in SCHOOL_LEVELS}
     if with_school and w_school_levels:
         for lvl in SCHOOL_LEVELS:
             w_sch = w_school_levels.get(lvl)
             if w_sch is None or w_sch.sum() <= 0:
                 continue
-            w_sch_params = willingness[f"school_{lvl}"]
-            F_sch = _modesub_kernel(od_dist, w_sch_params, f"school_{lvl}")
-            st_sch = _self(f"school_{lvl}", w_sch_params)
-            sch_s = w_sch[src]; sch_d = w_sch[dst]
+            comp = f"school_{lvl}"
+            w_sch_params = willingness[comp]
+            F_sch = _modesub_kernel(od_dist, w_sch_params, comp)
+            st_sch = _self(comp, w_sch_params)
             prod = w_school_prod_levels[lvl]                           # resident students of this level
-            schprod_s = prod[src]; schprod_d = prod[dst]
-            iD_sch_sch  = _inv_denom(sch_d,     F_sch, w_sch, st_sch)   # out leg students→school: attraction = this level's school
-            iD_sch_home = _inv_denom(schprod_d, F_sch, prod,  st_sch)   # return leg school→home: attraction = this level's resident students
             gs_out = gs.get(f"sch_{lvl}_out", 1.0)
             gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
-            t_sch_by_level[lvl] = F_sch * (
-                gs_out * schprod_s * sch_d * iD_sch_sch[src]      # students i → school j  (attraction school)
-                + gs_ret * sch_s * schprod_d * iD_sch_home[src]   # school i → home j       (attraction resident students)
-            )
+            t_sch_by_level[lvl] = (_leg(prod,  gs_out, w_sch, F_sch, st_sch, comp)     # students i → school j
+                                   + _leg(w_sch, gs_ret, prod,  F_sch, st_sch, comp))  # school i → home j
 
     return t_res, t_commute, t_retail, t_sch_by_level
 
