@@ -84,11 +84,16 @@ COMP_PRODUCER = {
     "school_postprimary": "school_producers_postprimary",
     "school_tertiary": "school_producers_tertiary",
 }
-# destination spec: ("area", <opp col>) or ("poi", <layer>, <weight col or None>)
+# destination spec: ("area", <opp col>) or ("poi", <layer>, <weight col or None>[, <area fallback col>]).
+# The optional 4th element is an opportunity-table column to fall back to (area-level, road-snapped)
+# when the zone has no POIs of that layer — used for retail, whose attractor `retail_spaces` carries a
+# workplace-derived fallback for no-parking zones (build_census_zones / build_opportunity_table), so the
+# self-term must mirror it. School levels have no fallback: no school of a level ⇒ no intra-zonal school
+# trips of that level ⇒ correctly no self-term.
 COMP_DEST = {
     "res":     ("area", "population"),
     "commute": ("area", "commute_attractor"),
-    "retail":  ("poi", "parking", None),
+    "retail":  ("poi", "parking", None, "retail_spaces"),
     "school_primary":     ("poi", "school", "enrol_primary"),
     "school_postprimary": ("poi", "school", "enrol_postprimary"),
     "school_tertiary":    ("poi", "school", "enrol_tertiary"),
@@ -184,24 +189,33 @@ def sample_zone_component(comp, members, area_points, area_mass, zpois,
         return None
     pw = pw / pw.sum()
 
-    dkind = COMP_DEST[comp][0]
-    if dkind == "area":
-        dcol = COMP_DEST[comp][1]
-        aw = np.array([area_mass.get(a, {}).get(dcol, 0.0) for a in members], dtype=float)
-        if aw.sum() <= 0:
+    def _area_weights(col):
+        aw = np.array([area_mass.get(a, {}).get(col, 0.0) for a in members], dtype=float)
+        return (aw / aw.sum()) if aw.sum() > 0 else None
+
+    dspec = COMP_DEST[comp]
+    dest_mode = dspec[0]                                     # "area" or "poi"
+    if dest_mode == "area":
+        aw = _area_weights(dspec[1])
+        if aw is None:
             return None
-        aw = aw / aw.sum()
-    else:                                                   # poi
-        _, layer, wcol = COMP_DEST[comp]
+    else:                                                   # poi, with an optional area fallback (dspec[3])
+        layer, wcol = dspec[1], dspec[2]
         entry = zpois.get(layer)
-        if entry is None:
-            return None
-        pcoords, pw_raw = entry
-        pw_raw = pw_raw if wcol is None else pw_raw[wcol]
-        m = pw_raw > 0
-        if not m.any():
-            return None
-        poi_coords, poi_w = pcoords[m], pw_raw[m] / pw_raw[m].sum()
+        pw_raw = None
+        if entry is not None:
+            pcoords, pw_raw = entry
+            pw_raw = pw_raw if wcol is None else pw_raw[wcol]
+        if pw_raw is not None and (pw_raw > 0).any():
+            m = pw_raw > 0
+            poi_coords, poi_w = pcoords[m], pw_raw[m] / pw_raw[m].sum()
+        elif len(dspec) > 3:                                # no POIs in zone → area-level fallback column
+            aw = _area_weights(dspec[3])                    # retail: workplace-derived retail_spaces
+            if aw is None:
+                return None
+            dest_mode = "area"
+        else:
+            return None                                     # e.g. no school of this level ⇒ no self-term
 
     def _area_point(a):
         pts = area_points.get(members[a])
@@ -210,15 +224,12 @@ def sample_zone_component(comp, members, area_points, area_mass, zpois,
     counts = np.zeros(len(edges) - 1, dtype=np.float64)
     for _ in range(batches):
         oi = rng.choice(len(members), size=S, p=pw)
-        src = [_area_point(a) for a in oi]
-        keep_s = [p is not None for p in src]
-        src = [p for p in src if p is not None]
+        src = [p for p in (_area_point(a) for a in oi) if p is not None]
         if not src:
             continue
-        if dkind == "area":
+        if dest_mode == "area":
             di = rng.choice(len(members), size=D, p=aw)
             dst = [_area_point(a) for a in di]
-            keep_d = [p is not None for p in dst]
             dst = [p for p in dst if p is not None]
         else:
             di = rng.choice(len(poi_coords), size=D, p=poi_w)
