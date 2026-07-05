@@ -16,7 +16,9 @@ solve_scales recomputes them on the first step regardless.  `kernel` is set to
 Legacy keys — the single-exp willingness (TAU_res/TAU_commute/TAU_retail/TAU_school,
 THETA), the 3-component biz keys (K, K_biz, W_BIZ, …), the pre-split single school
 scale/shape (K_sch, slot_fracs_school) and dead MU/SIGMA — are stripped so the result
-is a clean 6-component double-exp param file.
+is a clean 6-component double-exp param file.  The `doubly_constrained` list (which
+components are ALSO attraction-constrained via Furness) is carried across from
+tuner_config.json if present.
 
 Usage:
   python3 simulation/sync_kernel_anchor.py     # seed gravity_ref (18 keys) first
@@ -67,6 +69,16 @@ for k in SCALE_KEYS:
 for k in STALE_KEYS:
     existing.pop(k, None)
 existing["kernel"] = "modesub_double"
+
+# Doubly-constrained (Furness) components — carried from tuner_config.json (a structural
+# model choice: which components are ALSO attraction-constrained, Σ_i T_ij ∝ attractor_j).
+# Absent ⇒ singly (production) constrained everywhere.
+_dblc = config.get("doubly_constrained")
+if _dblc:
+    existing["doubly_constrained"] = list(_dblc)
+    print(f"  {'doubly_constrained':<14}  {'':>12}  {sorted(_dblc)}")
+else:
+    existing.pop("doubly_constrained", None)
 
 with open(TUNED_PARAMS, "w") as f:
     json.dump(existing, f, indent=2)
