@@ -260,7 +260,12 @@ def main():
     ap.add_argument("--s", type=int, default=S_DEFAULT, help="origin points per /table batch")
     ap.add_argument("--d", type=int, default=D_DEFAULT, help="destination points per /table batch")
     ap.add_argument("--batches", type=int, default=BATCHES, help="/table batches per zone-component")
+    ap.add_argument("--component", choices=list(COMPONENTS),
+                    help="sample ONLY this component and MERGE it into the existing "
+                         "external_intra_times.json (updates that component per zone, keeps the "
+                         "others). Default: all 6, overwrite.")
     args = ap.parse_args()
+    comps_to_run = [args.component] if args.component else list(COMPONENTS)
 
     from build_n_of_t import (osrm_table, _check_osrm, load_area_masses,
                               load_poi_layers, build_point_cache)
@@ -291,7 +296,7 @@ def main():
 
     edges = np.append(np.arange(0.0, BIN_CAP_S + BIN_STEP_S, BIN_STEP_S), np.inf)
     print(f"\nSampling {args.s}×{args.d}×{args.batches} intra-zonal pairs per zone × "
-          f"{len(COMPONENTS)} components …")
+          f"{len(comps_to_run)} component(s): {', '.join(comps_to_run)} …")
     t0 = time.time()
     out_zones = {}
     empty_zone, skipped = [], defaultdict(int)
@@ -301,7 +306,7 @@ def main():
             empty_zone.append(zid)
             continue
         byc = {}
-        for comp in COMPONENTS:
+        for comp in comps_to_run:
             h = sample_zone_component(comp, members, area_points, area_mass,
                                       zpois.get(zid, {}), args.s, args.d, args.batches,
                                       edges, osrm_table, rng)
@@ -321,21 +326,40 @@ def main():
         if k:
             print(f"  component {comp}: {k} zones had no producer/attractor (no self-term for that component)")
 
+    per_comp = {c: {"s": args.s, "d": args.d, "batches": args.batches} for c in comps_to_run}
+    if args.component and os.path.exists(OUTPUT_FILE):
+        # MERGE: replace only this component per zone, keep the others from the existing file.
+        with open(OUTPUT_FILE) as f:
+            prev = json.load(f)
+        prev_meta = prev.pop("_meta", {})
+        c = args.component
+        for zid in list(prev):
+            prev[zid].pop(c, None)                          # drop the stale target-component entry
+        for zid, byc in out_zones.items():
+            prev.setdefault(zid, {}).update(byc)            # add the freshly-sampled one
+        zones = {z: d for z, d in prev.items() if d}        # drop zones left with no components
+        per_comp = {**prev_meta.get("per_component", {}), **per_comp}  # keep other comps' provenance
+        print(f"  MERGED component '{c}' into existing {OUTPUT_FILE}")
+    else:
+        if args.component:
+            print(f"  NOTE: {OUTPUT_FILE} absent — writing '{args.component}' only "
+                  f"(other components missing until a full run)")
+        zones = out_zones
+
+    components = sorted({k for d in zones.values() for k in d})
     out = {
         "_meta": {
-            "seed": SEED, "components": list(COMPONENTS),
-            "s": args.s, "d": args.d, "batches": args.batches,
-            "bin_step_s": BIN_STEP_S, "bin_cap_s": BIN_CAP_S,
-            "n_zones": len(out_zones),
+            "seed": SEED, "components": components, "per_component": per_comp,
+            "bin_step_s": BIN_STEP_S, "bin_cap_s": BIN_CAP_S, "n_zones": len(zones),
             "sampling": "mass-weighted (producer×attractor) intra-zonal, road-snapped, real POIs",
             "note": "per-zone per-component weighted time histograms; denominator-only self-term. "
                     "Model applies the tuned kernel f_c to the bin centres (see model.load_self_terms).",
         },
-        **out_zones,
+        **zones,
     }
     with open(OUTPUT_FILE, "w") as f:
         json.dump(out, f)
-    print(f"Wrote {OUTPUT_FILE}")
+    print(f"Wrote {OUTPUT_FILE} ({len(zones)} zones, components: {', '.join(components)})")
 
 
 if __name__ == "__main__":
