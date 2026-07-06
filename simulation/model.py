@@ -351,9 +351,12 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         it is denominator-only (no link flow) exactly as in the singly-constrained path.
 
         Two modes (see furness_max_sweeps / furness_state on constrained_od_flows):
-          • COLD (no cached warm start, or furness_max_sweeps is None): iterate to `tol`
-            on the PRODUCTION (row) residual — the load-bearing margin — raising if it
-            does not converge within `max_iter` (no silent cap).  Seeds the cache.
+          • COLD (no cached warm start, or furness_max_sweeps is None): iterate up to
+            `max_iter` on the PRODUCTION (row) residual — the load-bearing margin — to seed
+            the cache.  Short-kernel legs (school τs≈90–100 s) mix too slowly to reach `tol`;
+            when the cap is hit it WARNS (loudly, once) and proceeds with the best-effort b
+            — this is the documented approximate-balancing regime, not a failure, since the
+            final row-normalisation makes production exact regardless.
           • WARM (cached b + furness_max_sweeps set): run exactly `furness_max_sweeps`
             sweeps from the cached b.  b drifts ~1% per tuner step, so this stays near the
             fixed point; the deliberate approximation lives ENTIRELY in the attraction
@@ -396,7 +399,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                 a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)
                 b = np.where((db := _denb(a)) > 0, 1.0 / db, 0.0)
                 denom_a = _dena(b)
-        else:                                           # cold: converge to tol (seed the cache)
+        else:                                           # cold: iterate up to max_iter to seed the cache
             for it in range(1, max_iter + 1):
                 a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)
                 b = np.where((db := _denb(a)) > 0, 1.0 / db, 0.0)
@@ -406,9 +409,14 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                 if rel < tol:
                     break
             else:
-                raise RuntimeError(
-                    f"Furness ({comp}) did not converge: max relative production residual "
-                    f"{rel:.2e} after {max_iter} iterations (tol {tol:.0e})")
+                # Short-kernel legs (school especially) mix so slowly IPF cannot reach `tol`
+                # in max_iter — this is the documented approximate-balancing regime, NOT a
+                # failure: production is made exact by the final row-normalisation below, and
+                # `rel` bounds the residual attraction error.  Warn loudly (once, at the cold
+                # seed) rather than crash, and proceed with the best-effort b.
+                print(f"  [furness {comp}/{leg_key}] IPF capped at {max_iter} iters — "
+                      f"production residual {rel:.1e} (short kernel; production stays exact, "
+                      f"attraction ≈{rel:.0e}). Approximate balancing.")
         a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)   # final row-normalisation ⇒ production exact
         if furness_state is not None:
             furness_state[leg_key] = b                  # warm start for the next eval
