@@ -69,6 +69,7 @@ Usage:
   python3 analysis/diagnose_imbalance.py --top 25        # longer source/sink tables
   python3 analysis/diagnose_imbalance.py --component commute          # one component
   python3 analysis/diagnose_imbalance.py --sides --component commute  # commute·worker + commute·job
+  python3 analysis/diagnose_imbalance.py --sides --doubly             # SANITY CHECK: apply the doubly_constrained set (ratios → ~1)
   python3 analysis/diagnose_imbalance.py --no-plot --no-map   # tables + CSV only
 """
 import os, sys, json, argparse
@@ -100,6 +101,8 @@ def load_context():
     if not all(k in tp for k in ("K_res", "K_commute", "K_retail")):
         raise SystemExit("tuned_params.json lacks the multi-component K's — re-tune first")
     willingness = willingness_from_flat(tp)
+    doubly_set = set(tp.get("doubly_constrained") or [])     # honoured only under --doubly
+    furness_sweeps = tp.get("furness_max_sweeps")
     K = {"res": tp["K_res"], "commute": tp["K_commute"], "retail": tp["K_retail"]}
     for lvl in SCHOOL_LEVELS:
         K[f"school_{lvl}"] = tp.get(f"K_{lvl}", 0.0)
@@ -132,20 +135,23 @@ def load_context():
                 w_retail=arr(nw("node_retail_spaces")), w_commute_pr=arr(nw("node_commute_producers")),
                 w_sch=w_sch, w_schp={lvl: arr(nw(f"node_school_producers_{lvl}")) for lvl in SCHOOL_LEVELS},
                 willingness=willingness, self_terms=self_terms,
-                active=active, gen_scale=gen_scale, K=K, W=W)
+                active=active, gen_scale=gen_scale, K=K, W=W,
+                doubly=False, doubly_set=doubly_set, furness_sweeps=furness_sweeps)
 
 
 def _run(ctx, gen_scale, with_school=None):
     """One constrained_od_flows pass with a given (possibly leg-masked) gen_scale."""
     if with_school is None:
         with_school = len(ctx["active"]) > 0
+    extra = (dict(doubly_constrained=ctx["doubly_set"], furness_max_sweeps=ctx.get("furness_sweeps"))
+             if ctx.get("doubly") else {})
     return constrained_od_flows(
         ctx["od_src"], ctx["od_dst"], ctx["od_dist"], ctx["N"],
         ctx["w_pop"], ctx["w_commute_at"], ctx["w_retail"], ctx["willingness"],
         with_school=with_school,
         w_school_levels=ctx["w_sch"], w_school_prod_levels=ctx["w_schp"],
         self_terms=ctx["self_terms"],
-        w_commute_prod=ctx["w_commute_pr"], gen_scale=gen_scale)
+        w_commute_prod=ctx["w_commute_pr"], gen_scale=gen_scale, **extra)
 
 
 def _select(comp, t_res, t_com, t_ret, t_sch):
@@ -510,6 +516,12 @@ def main():
                     help="do NOT materialise the intra-zonal self-flow — external gen/con show only "
                          "the exported (inter-zonal) slice (the old behaviour; ratios read wild for "
                          "self-contained coarse zones)")
+    ap.add_argument("--doubly", action="store_true",
+                    help="apply the doubly_constrained set from tuned_params.json (Furness) when "
+                         "computing flows — a sanity check that flagged components' imbalance → ~0 "
+                         "(con/gen ratio → 1). SLOW (cold-seeds each doubly leg, minutes). Default is "
+                         "the singly diagnostic (the relocatable-fraction estimate of what doubly "
+                         "WOULD move). Self-flow materialisation is skipped under --doubly.")
     ap.add_argument("--no-plot", action="store_true", help="skip the scatter PNG")
     ap.add_argument("--no-map", action="store_true", help="skip the interactive folium map")
     ap.add_argument("--no-csv", action="store_true")
@@ -522,11 +534,23 @@ def main():
     print(f"Loaded {len(node_ids):,} nodes  ({is_ext.sum():,} external / {(~is_ext).sum():,} internal), "
           f"{len(ctx['od_src']):,} OD pairs.")
 
-    materialize = not args.exported_only
+    if args.doubly:
+        if not ctx["doubly_set"]:
+            raise SystemExit("--doubly: tuned_params.json has no non-empty doubly_constrained list "
+                             "(activate it in tuner_config.json + reset_gravity_params.py first).")
+        ctx["doubly"] = True
+        print(f"DOUBLY: applying Furness attraction constraint to {sorted(ctx['doubly_set'])} "
+              f"(cold-seeded per leg — slow). Flagged components' imbalance should read ~0 (ratio ~1); "
+              f"unflagged components (e.g. res) still read their singly imbalance.")
+
+    materialize = not args.exported_only and not args.doubly    # doubly ⇒ gen=con already; skip the singly self-flow
     sf = self_flows(ctx) if materialize else {}       # per-leg implied intra-zonal self-flow
     if sf:
         print("Self-flow: intra-zonal self-term MATERIALISED into external gen & con "
               "(imbalance con−gen unchanged; ratios/relocatable now measured vs full production).")
+    elif args.doubly:
+        print("Self-flow: not materialised under --doubly (doubly-constrained gen=con on-network "
+              "already; raw gen/con used).")
     else:
         print("Self-flow: EXPORTED-ONLY (self-term not materialised; external ratios read wild)."
               if args.exported_only else "Self-flow: none (no self-term/gen-pinning present).")
