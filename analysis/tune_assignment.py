@@ -1268,6 +1268,10 @@ tuned = {
     "stage":      "gravity",
     # f is always pinned at the NTS profile now (never tuned); kept for clarity.
     "temporal_profile": "nts_pinned",
+    # Carry the doubly-constrained config through so it survives a tune (build_assignment /
+    # diagnose_imbalance read it from here); only written when active.
+    **({"doubly_constrained": sorted(_DBLC), "furness_max_sweeps": _FURNESS_SWEEPS}
+       if _DBLC else {}),
 }
 
 with open(TUNED_PARAMS, "w") as f:
