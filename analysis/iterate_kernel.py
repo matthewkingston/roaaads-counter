@@ -40,19 +40,42 @@ from equiv_miles import equiv_miles
 KERNEL_FIT = "analysis/kernel_fit.json"          # f^(0)
 OUT_JSON = "analysis/kernel_fit_constrained.json"
 PLOT_PATH = "reports/kernel_fit_constrained.png"
-CACHE_TMPL = "data/_kernel_iter_cache_{p}.npz"    # gitignored, resumable
+CACHE_TMPL = "data/_kernel_iter_cache_{p}.npz"    # gitignored, resumable (now carries dest-area IDs)
+TUNER_CONFIG = "simulation/tuner_config.json"    # single source of truth for doubly_constrained
 
 SEED = 20260703
-M_ACC = 64          # dests per origin for D_i
-B_ACC = 35          # origins per accessibility /table batch (B_ACC + M_ACC <= max-table-size)
+M_ACC = 128         # dests per origin for the accessibility (a via group-by-origin, b via invert-by-dest)
+B_ACC = 35          # origins per accessibility /table batch chunk (B_ACC + chunk <= max-table-size)
+ACC_CHUNK = 60      # dest-chunk per /table (B_ACC + ACC_CHUNK <= 100); M_ACC routed in chunks
 NEAR_BUDGET = 150_000
 FAR_BUDGET = 1_000_000
 DESTS_PER_CALL = 49
 B_FAR = 45
+FURNESS_SWEEPS = 200    # IPF sweeps for the doubly (Furness) a,b (approximate balancing, M≈128)
 MAX_ITERS = 20
 CONV_TOL = 0.01     # max relative change in (w, tau_s, tau_l) to stop
 DAMP = 0.7          # relaxation on the param update (log-space for tau); 1.0 = pure Picard
 T_FLOOR = 30.0      # clamp c before equiv_miles (avoid the log-quadratic blow-up at t→0)
+
+# component → (producer column, AREA-level attractor column) in island_opportunity_table.csv.
+# Doubly-constrained components (per tuner_config) balance a,b at AREA level using these masses.
+COMP_COLS = {
+    "res":                ("population",                    "population"),
+    "commute":            ("commute_producers",             "commute_attractor"),
+    "retail":             ("population",                    "retail_spaces"),
+    "school_primary":     ("school_producers_primary",      "school_demand_primary"),
+    "school_postprimary": ("school_producers_postprimary",  "school_demand_postprimary"),
+    "school_tertiary":    ("school_producers_tertiary",     "school_demand_tertiary"),
+}
+
+
+def load_doubly_set():
+    """The doubly-constrained component set — read from tuner_config.json (single source of truth)."""
+    try:
+        s = set(json.load(open(TUNER_CONFIG)).get("doubly_constrained", []))
+    except Exception:
+        s = set()
+    return s
 
 
 # ── kernel evaluation ─────────────────────────────────────────────────────────
@@ -103,33 +126,46 @@ def fit_double_warm(t, W, wts, x0):
 
 
 # ── Phase A: sample + route + cache (once per purpose) ─────────────────────────
-def build_accessibility(kind, ocent, prod, dloc, dw, dll, cache, rng):
-    """Per-origin M dest-times (∝ A, global) → acc[N, M] (nan on route/snap fail). For D_i."""
-    N = len(prod); dwn = dw / dw.sum()
-    acc = np.full((N, M_ACC), np.nan, np.float32)
+def build_accessibility(O_area, D_area, ocent, cache, rng):
+    """Per-origin M_ACC dest-AREAS ∝ D_area, road-timed. Returns acc_t[N,M], acc_dst[N,M] (dest-area
+    IDs; nan/-1 on fail). Grouped by origin → a_i = 1/Σ_j b_j D_j f; inverted by dest → b_j (doubly).
+    Area-level (all dests are areas ∝ the AREA attractor), so it also serves res's singly D_i."""
+    N = len(O_area); dwn = D_area / D_area.sum()
+    acc_t = np.full((N, M_ACC), np.nan, np.float32)
+    acc_dst = np.full((N, M_ACC), -1, np.int32)
     t0 = time.time()
     for s in range(0, N, B_ACC):
         oidx = np.arange(s, min(s + B_ACC, N))
-        di = rng.choice(len(dwn), size=M_ACC, p=dwn)          # M dests shared within this batch
+        di = rng.choice(N, size=M_ACC, p=dwn)                 # M dest-AREAS shared within this batch
         src = [cache[int(i)][rng.integers(len(cache[int(i)]))] for i in oidx]
-        dst = [_dpt(kind, int(k), cache, dll, rng) for k in di]
-        res = osrm_table(src, dst)
-        if res is None:
-            continue
-        dur, ts, td = res
-        good = (ts[:, None] < SNAP_TOL_M) & (td[None, :] < SNAP_TOL_M) & np.isfinite(dur)
-        acc[oidx, :] = np.where(good, dur, np.nan).astype(np.float32)
+        acc_dst[oidx, :] = di[None, :]
+        for c0 in range(0, M_ACC, ACC_CHUNK):                 # chunk dests (B_ACC+chunk <= max-table-size)
+            ch = di[c0:c0 + ACC_CHUNK]
+            dst = [cache[int(k)][rng.integers(len(cache[int(k)]))] for k in ch]
+            res = osrm_table(src, dst)
+            if res is None:
+                continue
+            dur, ts, td = res
+            good = (ts[:, None] < SNAP_TOL_M) & (td[None, :] < SNAP_TOL_M) & np.isfinite(dur)
+            acc_t[oidx, c0:c0 + len(ch)] = np.where(good, dur, np.nan).astype(np.float32)
         if (s // B_ACC) % 200 == 0:
             print(f"    acc {s:,}/{N:,} ({time.time()-t0:.0f}s)", flush=True)
-    return acc
+    return acc_t, acc_dst
 
 
-def build_density(kind, ocent, prod, dloc, dw, dll, cache, rng, edges_m):
-    """Stratified pair sample, tagged by origin/band and cached (for Ñ reconstruction)."""
+def _da(k, poi_area):
+    """Dest index → dest-AREA index (identity for area dests, POI→area map for POI dests)."""
+    return int(k) if poi_area is None else int(poi_area[int(k)])
+
+
+def build_density(kind, ocent, prod, dloc, dw, dll, poi_area, cache, rng, edges_m):
+    """Stratified pair sample, tagged by origin/band AND dest-AREA (for Ñ / Ñ_double reconstruction).
+    Keeps POI dests for retail/school head resolution; each pair also records its dest AREA (for the
+    doubly b_j lookup)."""
     tree, S, _, _ = _band_masses(ocent, prod, dloc, dw, edges_m)
     Sfar = np.maximum(0.0, dw.sum() - S.sum(axis=1))
     nb = len(edges_m) - 1
-    n_oi, n_b, n_t = [], [], []
+    n_oi, n_b, n_t, n_dst = [], [], [], []
     for b in range(nb):
         ow = prod * S[:, b]
         if ow.sum() <= 0:
@@ -155,12 +191,13 @@ def build_density(kind, ocent, prod, dloc, dw, dll, cache, rng, edges_m):
             ok = np.isfinite(dur[0]) & (td < SNAP_TOL_M) & (ts[0] < SNAP_TOL_M)
             tt = dur[0][ok]
             if tt.size:
+                da = np.array([_da(k, poi_area) for k in pick[ok]], np.int32)
                 n_oi.append(np.full(tt.size, i, np.int32)); n_b.append(np.full(tt.size, b, np.int8))
-                n_t.append(tt.astype(np.float32))
+                n_t.append(tt.astype(np.float32)); n_dst.append(da)
         print(f"    near band {BANDS_KM[b]:g}-{BANDS_KM[b+1]:g}km cached "
               f"{sum(x.size for x in n_t):,}", flush=True)
     # far tail (outer product, far-masked)
-    f_oi, f_t = [], []
+    f_oi, f_t, f_dst = [], [], []
     owf = prod / prod.sum(); dwn = dw / dw.sum(); n = 0
     while n < FAR_BUDGET:
         oi = rng.choice(len(owf), size=B_FAR, p=owf); di = rng.choice(len(dwn), size=B_FAR, p=dwn)
@@ -175,52 +212,130 @@ def build_density(kind, ocent, prod, dloc, dw, dll, cache, rng, edges_m):
                       ocent[oi][:, None, 1] - dloc[di][None, :, 1])
         ok = np.isfinite(dur) & (ts[:, None] < SNAP_TOL_M) & (td[None, :] < SNAP_TOL_M) \
             & (dd >= edges_m[-1])
-        rows, _cols = np.where(ok)
+        rows, cols = np.where(ok)
         f_oi.append(oi[rows].astype(np.int32)); f_t.append(dur[ok].astype(np.float32))
+        f_dst.append(np.array([_da(di[c], poi_area) for c in cols], np.int32))
     print(f"    far cached {sum(x.size for x in f_t):,}", flush=True)
     return (S.astype(np.float32), Sfar.astype(np.float32),
-            np.concatenate(n_oi), np.concatenate(n_b), np.concatenate(n_t),
-            np.concatenate(f_oi), np.concatenate(f_t))
+            np.concatenate(n_oi), np.concatenate(n_b), np.concatenate(n_t), np.concatenate(n_dst),
+            np.concatenate(f_oi), np.concatenate(f_t), np.concatenate(f_dst))
 
 
-def phase_a(name, df, pois, cache, rng):
-    """Route + cache (resumable). Returns the geometry + cached samples for one purpose."""
-    _, _, kind, ocent, prod, dloc, dw, dll = _geo(name, df, pois)
+def _poi_area_map(df, geoms, pois, layer):
+    """poi_idx → area_idx for a POI layer (sjoin POI points → area polygons), or None for area dests."""
+    import geopandas as gpd
+    from shapely.geometry import Point
+    coords = pois[layer][0]                                  # Nx2 lon/lat
+    zones = gpd.GeoDataFrame({"aidx": np.arange(len(geoms))}, geometry=list(geoms), crs="EPSG:4326")
+    pts = gpd.GeoDataFrame({"pidx": np.arange(len(coords))},
+                           geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
+    j = gpd.sjoin(pts, zones, how="left", predicate="within")
+    m = np.full(len(coords), -1, np.int32)
+    m[j["pidx"].values] = j["aidx"].fillna(-1).astype(int).values
+    # nearest-area fallback for the few POIs snapping outside any polygon
+    if (m < 0).any():
+        from scipy.spatial import cKDTree
+        cent = np.array([[g.centroid.x, g.centroid.y] for g in geoms])
+        miss = np.where(m < 0)[0]
+        m[miss] = cKDTree(cent).query(coords[miss])[1].astype(np.int32)
+    return m
+
+
+def phase_a(name, df, pois, cache, rng, geoms):
+    """Route + cache (resumable). Area-level O/D masses + POI→area map; caches dest-area IDs."""
+    prod_col, attr_col = COMP_COLS[name]
+    O_area = df[prod_col].to_numpy(float)
+    D_area = df[attr_col].to_numpy(float)
+    _, _, kind, ocent, prod, dloc, dw, dll = _geo(name, df, pois)     # density dests (POI for retail/school)
+    poi_area = None if kind == "area" else _poi_area_map(df, geoms, pois, _geo_layer(name))
     cf = CACHE_TMPL.format(p=name)
     if os.path.exists(cf):
         z = np.load(cf)
         print(f"  [{name}] loaded cached sample from {cf}")
-        return (kind, ocent, prod, dw, z["acc"], z["S"], z["Sfar"],
-                z["n_oi"], z["n_b"], z["n_t"], z["f_oi"], z["f_t"])
+        return dict(name=name, O=O_area, D=D_area, ocent=ocent, prod=prod, dw=dw, S=z["S"],
+                    Sfar=z["Sfar"], acc_t=z["acc_t"], acc_dst=z["acc_dst"], n_oi=z["n_oi"],
+                    n_b=z["n_b"], n_t=z["n_t"], n_dst=z["n_dst"], f_oi=z["f_oi"], f_t=z["f_t"],
+                    f_dst=z["f_dst"])
     edges_m = np.array(BANDS_KM) * 1000.0
-    print(f"  [{name}] accessibility pass (D_i) …", flush=True)
-    acc = build_accessibility(kind, ocent, prod, dloc, dw, dll, cache, rng)
+    print(f"  [{name}] accessibility pass (area-level, M={M_ACC}) …", flush=True)
+    acc_t, acc_dst = build_accessibility(O_area, D_area, ocent, cache, rng)
     print(f"  [{name}] stratified density pass (Ñ) …", flush=True)
-    S, Sfar, n_oi, n_b, n_t, f_oi, f_t = build_density(kind, ocent, prod, dloc, dw, dll,
-                                                       cache, rng, edges_m)
-    np.savez(cf, acc=acc, S=S, Sfar=Sfar, n_oi=n_oi, n_b=n_b, n_t=n_t, f_oi=f_oi, f_t=f_t)
+    S, Sfar, n_oi, n_b, n_t, n_dst, f_oi, f_t, f_dst = build_density(
+        kind, ocent, prod, dloc, dw, dll, poi_area, cache, rng, edges_m)
+    np.savez(cf, acc_t=acc_t, acc_dst=acc_dst, S=S, Sfar=Sfar, n_oi=n_oi, n_b=n_b, n_t=n_t,
+             n_dst=n_dst, f_oi=f_oi, f_t=f_t, f_dst=f_dst)
     print(f"  [{name}] cached → {cf}")
-    return kind, ocent, prod, dw, acc, S, Sfar, n_oi, n_b, n_t, f_oi, f_t
+    return dict(name=name, O=O_area, D=D_area, ocent=ocent, prod=prod, dw=dw, S=S, Sfar=Sfar,
+                acc_t=acc_t, acc_dst=acc_dst, n_oi=n_oi, n_b=n_b, n_t=n_t, n_dst=n_dst,
+                f_oi=f_oi, f_t=f_t, f_dst=f_dst)
+
+
+def _geo_layer(name):
+    """The POI layer feeding a component's density dests (retail→parking, school→school)."""
+    return "parking" if name == "retail" else "school"
 
 
 # ── Phase B: fixed-point iteration (cheap) ────────────────────────────────────
-def reconstruct_Ntilde(inv, S, Sfar, n_oi, n_b, n_t, f_oi, f_t, edges):
-    """Ñ(t) per-bin mass = Σ_b M̃_b·ŝ_b, with origins reweighted by inv=P_i/D_i."""
-    nb = S.shape[1]
-    Mtil = (inv[:, None] * S).sum(axis=0)             # per near band
-    Mtil_far = float((inv * Sfar).sum())
+def furness_ab(O, D, acc_src, acc_dst, F, sweeps):
+    """Doubly-constrained (Furness/IPF) balancing factors a (per origin area), b (per dest area) over
+    the area-level accessibility sample. Mirrors model._furness margins in the MC-sampled setting:
+      a_i = 1/(Σ_j b_j D_j f_ij)  — dests sampled ∝ D, so ∝ 1/Σ_m b[dest] f  (group by origin);
+      b_j = D_j/(Σ_i a_i O_i f_ij) — origins uniform in the sample, so weight by O_i and correct ∝D_j
+                                     oversampling (invert by dest).  Approximate balancing (M≈128)."""
+    N = len(O)
+    b = np.ones(N)
+    with np.errstate(divide="ignore", invalid="ignore"):              # 1/0 on unreachable → masked to 0
+        for _ in range(sweeps):
+            aden = np.bincount(acc_src, weights=b[acc_dst] * F, minlength=N)
+            a = np.where(aden > 0, 1.0 / aden, 0.0)
+            pos = a > 0
+            if pos.any():
+                a = a / a[pos].mean()                 # gauge fix each sweep (prevents drift/overflow)
+            bden = np.bincount(acc_dst, weights=a[acc_src] * O[acc_src] * F, minlength=N)
+            b = np.where(bden > 0, D / bden, 0.0)
+        aden = np.bincount(acc_src, weights=b[acc_dst] * F, minlength=N)   # final row-normalise
+        a = np.where(aden > 0, 1.0 / aden, 0.0)
+    return a, b
+
+
+def reconstruct_singly(inv, g, edges):
+    """Singly Ñ = Σ_b (Σ_i inv_i S_i(b))·ŝ_b, origins reweighted by inv=P_i/D_i (res)."""
+    S, Sfar = g["S"], g["Sfar"]
+    n_oi, n_b, n_t, f_oi, f_t = g["n_oi"], g["n_b"], g["n_t"], g["f_oi"], g["f_t"]
+    Mtil = (inv[:, None] * S).sum(axis=0); Mtil_far = float((inv * Sfar).sum())
     Nt = np.zeros(len(edges) - 1)
-    for b in range(nb):
-        m = n_b == b
+    for bnd in range(S.shape[1]):
+        m = n_b == bnd
         if not m.any():
             continue
-        h, _ = np.histogram(n_t[m], bins=edges, weights=inv[n_oi[m]])
-        s = h.sum()
+        h, _ = np.histogram(n_t[m], bins=edges, weights=inv[n_oi[m]]); s = h.sum()
         if s > 0:
-            Nt += Mtil[b] * h / s
+            Nt += Mtil[bnd] * h / s
     hf, _ = np.histogram(f_t, bins=edges, weights=inv[f_oi]); sf = hf.sum()
     if sf > 0:
         Nt += Mtil_far * hf / sf
+    return Nt
+
+
+def reconstruct_doubly(a, b, g, edges):
+    """Doubly Ñ = Σ_b M_single_b · hist(a_i·b_{dest_area})/n_b (+ far). M_single_b = Σ_i O_i S_i(b) is
+    the exact O·A band mass (production-side, easy); the a·b reweighting rides the sample histogram, so
+    no b-weighted ring sums are needed."""
+    O, S, Sfar = g["O"], g["S"], g["Sfar"]
+    n_oi, n_b, n_t, n_dst = g["n_oi"], g["n_b"], g["n_t"], g["n_dst"]
+    f_oi, f_t, f_dst = g["f_oi"], g["f_t"], g["f_dst"]
+    Msingle = O @ S; Msingle_far = float(O @ Sfar)
+    Nt = np.zeros(len(edges) - 1)
+    for bnd in range(S.shape[1]):
+        m = n_b == bnd
+        nm = int(m.sum())
+        if nm == 0:
+            continue
+        h, _ = np.histogram(n_t[m], bins=edges, weights=a[n_oi[m]] * b[n_dst[m]])
+        Nt += Msingle[bnd] * h / nm
+    if f_t.size:
+        hf, _ = np.histogram(f_t, bins=edges, weights=a[f_oi] * b[f_dst])
+        Nt += Msingle_far * hf / f_t.size
     return Nt
 
 
@@ -250,8 +365,15 @@ def _damp(old, new, alpha):
             "tau_l_s": float(np.exp((1 - alpha) * np.log(old["tau_l_s"]) + alpha * np.log(new["tau_l_s"])))}
 
 
-def iterate(name, tld, edges, tc, width, geom, single=False):
-    kind, ocent, prod, dw, acc, S, Sfar, n_oi, n_b, n_t, f_oi, f_t = geom
+def iterate(name, tld, edges, tc, width, geom, doubly, single=False):
+    O, D_area, prod = geom["O"], geom["D"], geom["prod"]
+    N = len(O)
+    # flat accessibility pairs (valid): src = origin area, dst = dest area, t = routed time
+    acc_t, acc_dst = geom["acc_t"], geom["acc_dst"]
+    src_flat = np.repeat(np.arange(N), acc_t.shape[1])
+    dst_flat = acc_dst.ravel(); t_flat = acc_t.ravel()
+    valid = np.isfinite(t_flat) & (dst_flat >= 0)
+    acc_src, acc_dstf, acc_tf = src_flat[valid], dst_flat[valid].astype(np.int64), t_flat[valid]
     if single:                                                        # single-exp: W=exp(-t/τ), w≡1
         p = {"logA": 0.0, "w": 1.0,
              "tau_s_s": json.load(open(KERNEL_FIT))["components"][name]["tau_single_s"],
@@ -261,12 +383,17 @@ def iterate(name, tld, edges, tc, width, geom, single=False):
     p0 = {k: p[k] for k in ("w", "tau_s_s", "tau_l_s")}
     trace = []
     for k in range(MAX_ITERS):
-        with warnings.catch_warnings():                                # some origins are unroutable
-            warnings.simplefilter("ignore", RuntimeWarning)            # (all-nan rows → median below)
-            D = np.nanmean(kernel_f(name, p, acc), axis=1)             # per-origin accessibility
-        D = np.where(np.isfinite(D) & (D > 0), D, np.nanmedian(D[np.isfinite(D)]))
-        inv = prod / D                                                 # P_i / D_i
-        Nt = reconstruct_Ntilde(inv, S, Sfar, n_oi, n_b, n_t, f_oi, f_t, edges)
+        Facc = kernel_f(name, p, acc_tf)                              # per accessibility pair
+        if doubly:                                                    # Furness a,b → doubly Ñ
+            a, b = furness_ab(O, D_area, acc_src, acc_dstf, Facc, FURNESS_SWEEPS)
+            Nt = reconstruct_doubly(a, b, geom, edges)
+        else:                                                         # singly: D_i = mean f; inv=P_i/D_i
+            sf = np.bincount(acc_src, weights=Facc, minlength=N)
+            cnt = np.bincount(acc_src, minlength=N)
+            Di = np.where(cnt > 0, sf / np.maximum(cnt, 1), np.nan)
+            Di = np.where(np.isfinite(Di) & (Di > 0), Di, np.nanmedian(Di[np.isfinite(Di)]))
+            inv = prod / Di
+            Nt = reconstruct_singly(inv, geom, edges)
         n_dens_s = Nt / width
         W, effn, dom = willingness_from_ndens(tld, name, tc, n_dens_s)
         if single:
@@ -322,6 +449,8 @@ def main():
     pois = load_poi_layers()
     rng = np.random.default_rng(SEED)
     cache = build_point_cache(df, geoms, rng)
+    doubly_set = load_doubly_set()
+    print(f"doubly_constrained (from {TUNER_CONFIG}): {sorted(doubly_set) or '[] (all singly)'}")
 
     if args.single:                                                   # prototype: single-exp, print-only
         names = [args.purpose] if args.purpose else \
@@ -331,8 +460,8 @@ def main():
         print(f"  {'purpose':20s}{'conv':>6}{'it':>4}  {'tau uncon->iter':>18}  "
               f"{'wrms single':>12}  {'wrms double(ref)':>16}")
         for name in names:
-            geom = phase_a(name, df, pois, cache, rng)
-            res = iterate(name, tld, edges_fin, tc, width, geom, single=True)
+            geom = phase_a(name, df, pois, cache, rng, geoms)
+            res = iterate(name, tld, edges_fin, tc, width, geom, name in doubly_set, single=True)
             it = res["double_iterated"]; last = res["trace"][-1]
             u_single = kf[name]["tau_single_s"]; u_dbl_wrms = kf[name]["wrms_double"]
             print(f"  {name:20s}{str(res['converged']):>6}{res['n_iter']:>4}  "
@@ -342,30 +471,41 @@ def main():
     names = [args.purpose] if args.purpose else list(PURPOSES)
     results = {}
     for name in names:
-        print(f"\n=== {name} ===")
-        geom = phase_a(name, df, pois, cache, rng)
+        dbl = name in doubly_set
+        print(f"\n=== {name} ({'doubly' if dbl else 'singly'}) ===")
+        geom = phase_a(name, df, pois, cache, rng, geoms)
         # reconstruct on finite bins only (drop the [last,inf) overflow, matching tc/width)
-        res = iterate(name, tld, edges_fin, tc, width, geom)
+        res = iterate(name, tld, edges_fin, tc, width, geom, dbl)
+        res["constraint"] = "doubly" if dbl else "singly"
         u = json.load(open(KERNEL_FIT))["components"][name]["double"]
         it = res["double_iterated"]
-        print(f"  {name}: tau_l {u['tau_l_s']:.0f}s (uncon) -> {it['tau_s_s']:.0f}/{it['tau_l_s']:.0f}s "
-              f"(iterated tau_s/tau_l); converged={res['converged']}")
+        print(f"  {name} [{res['constraint']}]: tau_l {u['tau_l_s']:.0f}s (uncon) -> "
+              f"{it['tau_s_s']:.0f}/{it['tau_l_s']:.0f}s (iterated); converged={res['converged']}")
         results[name] = res
-    _write(results, tld)
+    _write(results, tld, doubly_set)
     _plot(results, tld, tc, width, edges_fin)
 
 
-def _write(results, tld):
+def _write(results, tld, doubly_set):
     out = {"_meta": {
-        "purpose": "constrained (1/D_i) iterated double-exp willingness kernels",
-        "method": "fixed-point f -> D_i -> Ñ=Σ(P_i/D_i)A_j δ -> fit_double([TLD/Ñ]/driveshare)",
+        "purpose": "production-constraint iterated double-exp willingness kernels (singly + doubly)",
+        "method": "fixed-point f -> constraint geometry Ñ -> fit_double([TLD/Ñ]/driveshare). "
+                  "Singly: Ñ=Σ(P_i/D_i)A_j δ. Doubly (Furness): Ñ=Σ(a_iO_i)(b_jD_j)δ, a,b balanced "
+                  "at AREA level over the M=128 accessibility sample (per component's constraint).",
+        "doubly_constrained": sorted(doubly_set),
+        "doubly_source": TUNER_CONFIG + " (single source of truth; per-component at runtime)",
         "input_kernel": KERNEL_FIT, "tld_file": TLD_FILE, "n_of_t_file": NT_FILE,
         "schools": "per-level (one kernel each, NOT shared)",
-        "damp": DAMP, "conv_tol": CONV_TOL, "seed": SEED,
-        "removes": "the 1/D_i production-constraint mis-attribution that inflated tau_l in the "
-                   "unconstrained fit",
+        "damp": DAMP, "conv_tol": CONV_TOL, "seed": SEED, "m_acc": M_ACC, "furness_sweeps": FURNESS_SWEEPS,
+        "removes": "the production/attraction-constraint mis-attribution that inflated tau_l in the "
+                   "unconstrained fit (both margins for doubly components; production-only for res)",
+        "balancing_caveat": "the doubly attraction factor b is MC-sampled over the geometry (M=128), so "
+                            "it is APPROXIMATE (attraction margin ~5%); this is in the same spirit as "
+                            "the deployed model's own approximate balancing (furness_max_sweeps). The "
+                            "b-sample-hunger, plus area-level (vs the model's per-node) attraction "
+                            "granularity, are the doubly-specific approximations. res is held singly.",
         "still_caveated": "n_Ire not n_Eng (source-region geometry ratio); finite-island truncation; "
-                          "n(t) sampling from the same v1 machinery.",
+                          "outbound leg only; n(t) sampling from the same v1 machinery.",
         "converged_note": "res/commute/retail/school_primary converge cleanly; tau_l shortens (the "
                           "1/D_i tail de-inflation).",
         "weak_tail_note": "school_postprimary + school_tertiary have tail_weakly_identified=true: "
@@ -377,8 +517,8 @@ def _write(results, tld):
     }, "components": {}}
     for name, r in results.items():
         out["components"][name] = {k: r[k] for k in
-                                   ("p0", "double_iterated", "converged", "tail_weakly_identified",
-                                    "n_iter", "trace")}
+                                   ("constraint", "p0", "double_iterated", "converged",
+                                    "tail_weakly_identified", "n_iter", "trace")}
     json.dump(out, open(OUT_JSON, "w"), indent=2)
     print(f"\nSaved -> {OUT_JSON}")
 
