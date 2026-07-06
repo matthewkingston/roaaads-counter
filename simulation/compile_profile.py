@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import osrm_lua
 import profile_spec as ps
 
-OSRM_DATA_DIR = "/home/matthew/Documents/CodingFun/osrm"
+from demographics_config import OSRM_DIR as OSRM_DATA_DIR   # single-source OSRM path
 DEFAULT_SPEC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tuned_profile.json")
 DEFAULT_PREF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tuned_preference.json")
 PBF_NAME = "ireland-and-northern-ireland-latest.osm.pbf"

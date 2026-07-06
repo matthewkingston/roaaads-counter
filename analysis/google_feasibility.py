@@ -42,7 +42,7 @@ import http.client
 # ── Repo paths ────────────────────────────────────────────────────────────────
 # This script may run from an isolated worktree, but census_zones.json and the
 # cache live in the real checkout so results persist across worktree cleanup.
-REPO_ROOT   = "/home/matthew/Documents/CodingFun/roaaads"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CENSUS_FILE = os.path.join(REPO_ROOT, "data", "census_zones.json")
 CACHE_DIR   = os.path.join(REPO_ROOT, "data", "google_cache")
 

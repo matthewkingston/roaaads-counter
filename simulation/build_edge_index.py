@@ -49,8 +49,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 from google_routing_common import (        # noqa: E402
     decode_polyline, downsample_by_distance, osrm_match_detail)
 
-REPO_ROOT = "/home/matthew/Documents/CodingFun/roaaads"
-OSRM_ROOT = "/home/matthew/Documents/CodingFun/osrm"
+from demographics_config import OSRM_DIR as OSRM_ROOT   # noqa: E402  (single-source OSRM path)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PBF_NAME = "ireland-and-northern-ireland-latest.osm.pbf"
 WORK_DIR = os.path.join(OSRM_ROOT, "edge_index")     # scratch (o5m / .osm extract)
 

@@ -6,6 +6,8 @@ Pure constants only — no heavy imports — so both scripts agree on the study-
 centre, file paths, OSM tag handling, and map styling without drifting apart.
 """
 
+import os
+
 # ── Study area ──────────────────────────────────────────────────────────────────
 # CENTRE lives in zones_config.py (single source); re-exported here so the
 # demographics/map scripts can keep importing it from demographics_config.
@@ -24,6 +26,19 @@ PROJECTED_CRS = "EPSG:2157"
 # network's own extent is governed by BOUNDARY_BBOX_MARGIN_M below, not this.)
 NETWORK_MARGIN_M = 1000
 
+# ── OSRM backend location (single source of truth) ────────────────────────────
+# The local OSRM data directory — holds the .osm.pbf snapshot, the built .osrm
+# files, and car_roaaads.lua. Defaults to the sibling 'osrm/' directory next to
+# the repo (…/CodingFun/osrm); override with $ROAAADS_OSRM_DIR for a one-time
+# non-default layout. PBF_PATH and OSRM_LUA are derived from it, and every OSRM
+# consumer (build_network/schools/parking/wz_apportionment, the profile tooling,
+# build_n_of_t) imports OSRM_DIR from here rather than hardcoding a path.
+OSRM_DIR = os.environ.get(
+    "ROAAADS_OSRM_DIR",
+    os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "osrm")),
+)
+
 # ── Road-network source (build_network.py) ───────────────────────────────────────
 # build_network.py reads the road graph from the local NI .osm.pbf — the same
 # snapshot OSRM is built from (see build_osrm_profile.py / build_external_links.py).
@@ -31,8 +46,8 @@ NETWORK_MARGIN_M = 1000
 # route node IDs. The graph is read for a bounding box of the core polygon buffered
 # by BOUNDARY_BBOX_MARGIN_M, which supersedes the old 1 km Overpass download margin
 # (it only needs to reach boundary nodes' external neighbours; 5 km is generous).
-PBF_PATH = ("/home/matthew/Documents/CodingFun/osrm/"
-            "ireland-and-northern-ireland-latest.osm.pbf")
+PBF_PATH = os.path.join(OSRM_DIR, "ireland-and-northern-ireland-latest.osm.pbf")
+OSRM_LUA = os.path.join(OSRM_DIR, "car_roaaads.lua")
 BOUNDARY_BBOX_MARGIN_M = 5000
 
 # ── File paths ──────────────────────────────────────────────────────────────────

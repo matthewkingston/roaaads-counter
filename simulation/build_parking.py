@@ -25,7 +25,7 @@ import geopandas as gpd
 from shapely.geometry import Polygon
 
 # Reuse build_edge_index.py's o5m scratch + image (one OSM snapshot, one cache).
-OSRM_ROOT = "/home/matthew/Documents/CodingFun/osrm"
+from demographics_config import OSRM_DIR as OSRM_ROOT   # single-source OSRM path
 PBF_NAME  = "ireland-and-northern-ireland-latest.osm.pbf"
 WORK_DIR  = os.path.join(OSRM_ROOT, "edge_index")     # ni.o5m lives here
 OSMCTOOLS_IMAGE = "osmctools-roaaads"                 # built by build_network.py

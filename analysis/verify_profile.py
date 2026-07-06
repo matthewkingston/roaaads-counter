@@ -34,7 +34,7 @@ import skeleton_model as sm         # noqa: E402
 from google_routing_common import (  # noqa: E402
     CONF_MIN, decode_polyline, downsample_by_distance, osrm_match)
 
-REPO_ROOT = "/home/matthew/Documents/CodingFun/roaaads"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR = os.path.join(REPO_ROOT, "data", "google_cache")
 RAW_DIR = os.path.join(CACHE_DIR, "raw")
 SKELETONS_FILE = os.path.join(CACHE_DIR, "skeletons.jsonl")

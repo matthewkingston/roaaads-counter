@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 from google_routing_common import (        # noqa: E402
     CONF_MIN, decode_polyline, downsample_by_distance, osrm_match_detail)
 
-REPO_ROOT = "/home/matthew/Documents/CodingFun/roaaads"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CACHE_DIR = os.path.join(REPO_ROOT, "data", "google_cache")
 RAW_DIR = os.path.join(CACHE_DIR, "raw")

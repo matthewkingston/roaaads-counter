@@ -32,7 +32,7 @@ from google_routing_common import (
     CONF_MIN, decode_polyline, downsample_by_distance,
     osrm_route, osrm_match_detail, google_routes, parse_google_duration)
 
-REPO_ROOT     = "/home/matthew/Documents/CodingFun/roaaads"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR         = os.path.join(REPO_ROOT, "data", "google_cache")
 RAW_DIR           = os.path.join(CACHE_DIR, "raw")
 MANIFEST_FILE     = os.path.join(CACHE_DIR, "od_manifest.json")

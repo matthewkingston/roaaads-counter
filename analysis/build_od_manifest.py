@@ -33,7 +33,7 @@ from google_routing_common import haversine_m
 
 import networkx as nx
 
-REPO_ROOT     = "/home/matthew/Documents/CodingFun/roaaads"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CENSUS_FILE   = os.path.join(REPO_ROOT, "data", "census_zones.json")
 LINKS_FILE    = os.path.join(REPO_ROOT, "data", "external_links.json")
 WEIGHTS_FILE  = os.path.join(REPO_ROOT, "simulation", "node_weights.json")

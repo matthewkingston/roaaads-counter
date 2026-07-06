@@ -68,7 +68,7 @@ MAXSPEED_KEYS = ("maxspeed:advisory", "maxspeed", "source:maxspeed", "maxspeed:t
 # Symbolic maxspeed values OSRM resolves via profile.maxspeed_table (km/h). Only
 # the entries that occur in GB/IE/NI data are listed; the country-prefixed forms
 # (gb:/uk:) plus the bare highway_type defaults from maxspeed_table_default.
-# Source: /home/matthew/Documents/CodingFun/osrm/car_roaaads.lua.
+# Source: <OSRM_DIR>/car_roaaads.lua.
 _SYMBOLIC_MAXSPEED_KMH = {
     "gb:nsl_single": (60 * 1609) / 1000, "uk:nsl_single": (60 * 1609) / 1000,
     "gb:nsl_dual":   (70 * 1609) / 1000, "uk:nsl_dual":   (70 * 1609) / 1000,

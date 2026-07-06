@@ -49,11 +49,11 @@ import geopandas as gpd
 from build_intra_times import sample_points, OSRM_HOST, OSRM_PORT
 from school_attractor import add_level_enrolments, LEVEL_ENROL_COLS
 from parking_demand import parking_spaces
-from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE, SCHOOL_ISLAND_CACHE
+from demographics_config import PROJECTED_CRS, PARKING_ISLAND_CACHE, SCHOOL_ISLAND_CACHE, OSRM_LUA
 
 OPP_TABLE   = "data/island_opportunity_table.csv"
 OUTPUT_FILE = "data/national_n_of_t.json"
-OSRM_LUA    = "/home/matthew/Documents/CodingFun/osrm/car_roaaads.lua"   # for a profile hash (best-effort)
+# OSRM_LUA (single-source, from demographics_config) — used for a profile hash (best-effort)
 
 SEED         = 20260703
 SNAP_TOL_M   = 250.0        # reject a trip end snapping further than this from a road

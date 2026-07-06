@@ -36,7 +36,7 @@ import pandas as pd
 from pyproj import Transformer
 from shapely.geometry import Point
 
-from demographics_config import PROJECTED_CRS, EXCLUDE_AMENITY, POI_WEIGHTS
+from demographics_config import PROJECTED_CRS, EXCLUDE_AMENITY, POI_WEIGHTS, OSRM_DIR
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ SA_BOUNDARY_GLOB = f"{_BASE}/Small_Area_National_Statistical_Boundaries_2022_*.g
 SA_WP_OUT        = f"{_BASE}/cache_sa_workplace.csv"
 POI_CACHE        = f"{_BASE}/cache_roi_pois.geojson"
 
-OSRM_ROOT        = "/home/matthew/Documents/CodingFun/osrm"
+OSRM_ROOT        = OSRM_DIR   # single-source OSRM path
 PBF_NAME         = "ireland-and-northern-ireland-latest.osm.pbf"
 OSMCTOOLS_IMAGE  = "osmctools-roaaads"
 

@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import profile_spec as ps          # noqa: E402
 import skeleton_model as sm         # noqa: E402
 
-REPO_ROOT = "/home/matthew/Documents/CodingFun/roaaads"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR = os.path.join(REPO_ROOT, "data", "google_cache")
 SKELETONS_FILE = os.path.join(CACHE_DIR, "skeletons.jsonl")
 BASE_SPEEDS_FILE = os.path.join(CACHE_DIR, "base_speeds.json")

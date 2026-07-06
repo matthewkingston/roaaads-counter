@@ -24,7 +24,7 @@ from shapely.prepared import prep
 
 from school_demand import assign_enrolments
 
-OSRM_ROOT = "/home/matthew/Documents/CodingFun/osrm"
+from demographics_config import OSRM_DIR as OSRM_ROOT   # single-source OSRM path
 PBF_NAME  = "ireland-and-northern-ireland-latest.osm.pbf"
 WORK_DIR  = os.path.join(OSRM_ROOT, "edge_index")
 OSMCTOOLS_IMAGE = "osmctools-roaaads"
