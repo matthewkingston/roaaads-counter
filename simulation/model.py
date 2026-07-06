@@ -220,7 +220,9 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          self_terms=None,
                          w_commute_prod=None,
                          gen_scale=None,
-                         doubly_constrained=None):
+                         doubly_constrained=None,
+                         furness_max_sweeps=None,
+                         furness_state=None):
     """Per-OD-pair, pre-K production-constrained component flows.
 
     Returns (t_res, t_commute, t_retail, t_sch_by_level), where the first three are
@@ -276,6 +278,20 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                   (balancing factors normalise to the raw margins, not K), so the caller's
                   convex K-solve is unchanged.  None/empty ⇒ exact singly-constrained
                   behaviour.
+      furness_max_sweeps — approximate-balancing budget for warm-started legs.  Plain IPF
+                  converges pathologically slowly on the real short-range kernels (~1000+
+                  iters/leg), so for tuning the balancing is run as a FIXED number of
+                  warm-started sweeps instead of to tolerance: a leg with a cached warm
+                  start (see furness_state) runs exactly `furness_max_sweeps` sweeps and
+                  ends on a row-normalisation, so PRODUCTION stays exact and only the
+                  attraction margin is approximate (<1% at k≈10, well under count noise).
+                  A COLD leg (no warm start) always converges to tolerance to seed the
+                  cache.  None ⇒ every leg converges to tolerance (exact; used by
+                  build_assignment for the deployed flows).
+      furness_state — a mutable {leg_key: b} dict the caller keeps ACROSS evals so each
+                  leg's balancing factors warm-start from the previous eval (b drifts only
+                  ~1% per tuner step, so k≈10 sweeps keep it current).  None ⇒ no cache
+                  (every call cold).
     """
     src = od_src
     dst = od_dst
@@ -322,7 +338,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
             D += np.bincount(s_src, weights=attr_full[s_src] * F_self * s_w, minlength=N_nodes)
         return np.where(D > 0, 1.0 / D, 0.0)
 
-    def _furness(O_full, A_full, F, st, comp, max_iter=1000, tol=1e-9):
+    def _furness(O_full, A_full, F, st, comp, leg_key, max_iter=3000, tol=1e-9):
         """Doubly-constrained (Furness) per-pair flow for one leg.
 
         O_full = per-node generator (gen-scaled producer; the absolute magnitude anchor).
@@ -334,10 +350,17 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         sums (the p·a·f interaction is symmetric, so one histogram serves both margins);
         it is denominator-only (no link flow) exactly as in the singly-constrained path.
 
-        Convergence is monitored on the PRODUCTION (row) residual — the physically
-        load-bearing margin.  Columns are exact after every b-update, so only rows
-        (perturbed by the following b-update) need to settle.  Raises RuntimeError if the
-        row residual does not reach `tol` within `max_iter` (no silent cap)."""
+        Two modes (see furness_max_sweeps / furness_state on constrained_od_flows):
+          • COLD (no cached warm start, or furness_max_sweeps is None): iterate to `tol`
+            on the PRODUCTION (row) residual — the load-bearing margin — raising if it
+            does not converge within `max_iter` (no silent cap).  Seeds the cache.
+          • WARM (cached b + furness_max_sweeps set): run exactly `furness_max_sweeps`
+            sweeps from the cached b.  b drifts ~1% per tuner step, so this stays near the
+            fixed point; the deliberate approximation lives ENTIRELY in the attraction
+            margin (a few tenths of a % at k≈10).
+        BOTH modes end on a final row-normalisation, so PRODUCTION is exact either way and
+        only the attraction margin is (slightly) approximate in the warm mode.  The final
+        b is written back to furness_state[leg_key] for the next eval's warm start."""
         sumO = float(O_full[src_present].sum())
         sumA = float(A_full[dst_present].sum())
         if sumO <= 0.0 or sumA <= 0.0:
@@ -363,46 +386,57 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
 
         prod_mask = O_full > 0
         O_mean = sumO / max(int(prod_mask.sum()), 1)
-        a = np.ones(N_nodes, dtype=np.float64)
-        b = np.ones(N_nodes, dtype=np.float64)
+        b0 = furness_state.get(leg_key) if furness_state is not None else None
+        warm = furness_max_sweeps is not None and b0 is not None
+        b = (b0.copy() if b0 is not None else np.ones(N_nodes, dtype=np.float64))
         denom_a = _dena(b)
         rel = np.inf
-        for it in range(1, max_iter + 1):
-            a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)
-            b = np.where((db := _denb(a)) > 0, 1.0 / db, 0.0)
-            denom_a = _dena(b)                          # for the next iter AND the residual
-            rowsum = a * O_full * denom_a               # → O_i at the fixed point
-            rel = float(np.abs(rowsum - O_full)[prod_mask].max() / O_mean) if prod_mask.any() else 0.0
-            if rel < tol:
-                break
-        else:
-            raise RuntimeError(
-                f"Furness ({comp}) did not converge: max relative production residual "
-                f"{rel:.2e} after {max_iter} iterations (tol {tol:.0e})")
+        if warm:                                        # fixed k sweeps from the cached b
+            for it in range(1, int(furness_max_sweeps) + 1):
+                a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)
+                b = np.where((db := _denb(a)) > 0, 1.0 / db, 0.0)
+                denom_a = _dena(b)
+        else:                                           # cold: converge to tol (seed the cache)
+            for it in range(1, max_iter + 1):
+                a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)
+                b = np.where((db := _denb(a)) > 0, 1.0 / db, 0.0)
+                denom_a = _dena(b)                      # for the next iter AND the residual
+                rel = float(np.abs(a * O_full * denom_a - O_full)[prod_mask].max() / O_mean) \
+                    if prod_mask.any() else 0.0
+                if rel < tol:
+                    break
+            else:
+                raise RuntimeError(
+                    f"Furness ({comp}) did not converge: max relative production residual "
+                    f"{rel:.2e} after {max_iter} iterations (tol {tol:.0e})")
+        a = np.where(denom_a > 0, 1.0 / denom_a, 0.0)   # final row-normalisation ⇒ production exact
+        if furness_state is not None:
+            furness_state[leg_key] = b                  # warm start for the next eval
         if os.environ.get("MODEL_FURNESS_DEBUG"):
-            print(f"    [furness {comp}] {it} iters, prod residual {rel:.1e}")
+            mode = f"warm {it} sweeps" if warm else f"cold {it} iters (resid {rel:.1e})"
+            print(f"    [furness {comp}/{leg_key}] {mode}")
         return a[src] * O_full[src] * b[dst] * D_full[dst] * F
 
-    def _leg(prod_full, gs_c, attr_full, F, st, comp):
+    def _leg(prod_full, gs_c, attr_full, F, st, comp, leg_key):
         """One producer→attractor leg: doubly-constrained (Furness) if `comp` is flagged,
         else the singly (production) constrained  gs·p_i·a_j·F/D_i."""
         if comp in dbl:
-            return _furness(gs_c * prod_full, attr_full, F, st, comp)
+            return _furness(gs_c * prod_full, attr_full, F, st, comp, leg_key)
         iD = _inv_denom(attr_full[dst], F, attr_full, st)
         return gs_c * prod_full[src] * attr_full[dst] * F * iD[src]
 
     # res: single leg covers both directions (pop↔pop, symmetric).  Held singly-constrained.
-    t_res = _leg(w_pop, gs_res, w_pop, F_res, st_res, "res")
+    t_res = _leg(w_pop, gs_res, w_pop, F_res, st_res, "res", "res")
 
     # commute: symmetric producer↔attractor round-trip.  Out leg home→work (producer =
     # resident commuters, attractor = jobs); return leg work→home (producer = jobs,
     # attractor = resident commuters — returning commuters land where commuters live).
-    t_commute = (_leg(w_commute_prod, gs_com_out, w_workplace,     F_com, st_com, "commute")
-                 + _leg(w_workplace,   gs_com_ret, w_commute_prod, F_com, st_com, "commute"))
+    t_commute = (_leg(w_commute_prod, gs_com_out, w_workplace,     F_com, st_com, "commute", "commute_out")
+                 + _leg(w_workplace,   gs_com_ret, w_commute_prod, F_com, st_com, "commute", "commute_ret"))
 
     # retail: symmetric pop↔retail round-trip (out home→shop, return shop→home).
-    t_retail = (_leg(w_pop,    gs_ret_out, w_retail, F_ret, st_ret, "retail")
-                + _leg(w_retail, gs_ret_ret, w_pop,    F_ret, st_ret, "retail"))
+    t_retail = (_leg(w_pop,    gs_ret_out, w_retail, F_ret, st_ret, "retail", "retail_out")
+                + _leg(w_retail, gs_ret_ret, w_pop,    F_ret, st_ret, "retail", "retail_ret"))
 
     # School: three INDEPENDENT components (primary / post-primary / tertiary), each a symmetric
     # two-leg producer↔attractor round-trip with its OWN producer, attractor, generation scale, K,
@@ -424,8 +458,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
             prod = w_school_prod_levels[lvl]                           # resident students of this level
             gs_out = gs.get(f"sch_{lvl}_out", 1.0)
             gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
-            t_sch_by_level[lvl] = (_leg(prod,  gs_out, w_sch, F_sch, st_sch, comp)     # students i → school j
-                                   + _leg(w_sch, gs_ret, prod,  F_sch, st_sch, comp))  # school i → home j
+            t_sch_by_level[lvl] = (_leg(prod,  gs_out, w_sch, F_sch, st_sch, comp, f"{comp}_out")     # students i → school j
+                                   + _leg(w_sch, gs_ret, prod,  F_sch, st_sch, comp, f"{comp}_ret"))  # school i → home j
 
     return t_res, t_commute, t_retail, t_sch_by_level
 

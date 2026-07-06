@@ -76,9 +76,12 @@ existing["kernel"] = "modesub_double"
 _dblc = config.get("doubly_constrained")
 if _dblc:
     existing["doubly_constrained"] = list(_dblc)
+    existing["furness_max_sweeps"] = config.get("furness_max_sweeps", 12)
     print(f"  {'doubly_constrained':<14}  {'':>12}  {sorted(_dblc)}")
+    print(f"  {'furness_max_sweeps':<14}  {'':>12}  {existing['furness_max_sweeps']}")
 else:
     existing.pop("doubly_constrained", None)
+    existing.pop("furness_max_sweeps", None)
 
 with open(TUNED_PARAMS, "w") as f:
     json.dump(existing, f, indent=2)

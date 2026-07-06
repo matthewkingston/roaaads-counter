@@ -247,6 +247,18 @@ if os.path.exists(TUNED_PARAMS):
         _DBLC = set(_dblc_raw)
         print(f"  Doubly-constrained (Furness) components: {sorted(_DBLC)}")
 
+# Approximate-balancing sweep budget for the doubly-constrained legs (see
+# model.constrained_od_flows / project note): the first eval per leg converges to seed the
+# cache; every later eval runs this many warm sweeps (production stays exact, attraction
+# <1% at k≈10).  From tuner_config.json via tuned_params.json; default 12.  `_FURNESS_STATE`
+# persists the balancing factors across evals (Powell objective runs single-process).
+_FURNESS_SWEEPS = None
+_FURNESS_STATE = {}
+if _DBLC and os.path.exists(TUNED_PARAMS):
+    with open(TUNED_PARAMS) as _f:
+        _FURNESS_SWEEPS = json.load(_f).get("furness_max_sweeps", 12)
+    print(f"  Furness approximate-balancing sweeps/eval (warm): {_FURNESS_SWEEPS}")
+
 # ── Load street names from consolidated GraphML (sequential node IDs) ─────────
 
 link_name = {}
@@ -708,7 +720,9 @@ def run_assignment(willingness):
         self_terms=_self_terms,
         w_commute_prod=base_w_commute_prod,
         gen_scale=_GEN_SCALE,
-        doubly_constrained=_DBLC)
+        doubly_constrained=_DBLC,
+        furness_max_sweeps=_FURNESS_SWEEPS,
+        furness_state=_FURNESS_STATE)
     # Scatter only onto observed links (compact space) — see the observed-link
     # scatter-restriction block above. flow_* are indexed by COMPACT link id
     # (0.._N_obs_links-1); model_obs_4c reads them via the compact remap.

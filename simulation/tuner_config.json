@@ -2,6 +2,7 @@
   "lambda": 1,
   "gamma_coupling_scale": 1.0,
   "doubly_constrained": [],
+  "furness_max_sweeps": 12,
   "K_prior_std": {
     "res": 0.5,
     "commute": 0.5,
