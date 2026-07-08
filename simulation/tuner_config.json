@@ -1,7 +1,13 @@
 {
   "lambda": 1,
   "gamma_coupling_scale": 1.0,
-  "doubly_constrained": [],
+  "doubly_constrained": [
+    "commute",
+    "retail",
+    "school_primary",
+    "school_postprimary",
+    "school_tertiary"
+  ],
   "furness_max_sweeps": 12,
   "K_prior_std": {
     "res": 0.5,
