@@ -37,7 +37,14 @@
     "school_tertiary_taul": 0.2,
     "school_tertiary_w": 0.2
   },
-  "gravity_fixed": [],
+   "gravity_fixed": [
+    "res_taul", "res_w",
+    "commute_taul", "commute_w",
+    "retail_taul", "retail_w",
+    "school_primary_taul", "school_primary_w",
+    "school_postprimary_taul", "school_postprimary_w",
+    "school_tertiary_taul", "school_tertiary_w"
+  ],
   "gravity_ref": {
     "res_taus": 400.5338,
     "res_taul": 3184.7061,
