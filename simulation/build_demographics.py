@@ -662,8 +662,17 @@ else:
         _core_poly_wgs = _Polygon(_census_zones["core_polygon"])
         _internal_ids = {n for n, d in _G_raw_bd.nodes(data=True)
                          if _core_poly_wgs.contains(Point(float(d["x"]), float(d["y"])))}
-        _boundary_ids = {u for u, v in _G_raw_bd.edges()
-                         if u in _internal_ids and v not in _internal_ids}
+        # A node is on the boundary if it is the internal endpoint of an edge that
+        # crosses the core polygon — in EITHER direction. Direction matters on one-way
+        # dual carriageways split by the core boundary: the outbound lane's node has an
+        # internal→external edge, but the inbound lane's entry node only has an
+        # external→internal edge, so an outbound-only test silently drops it (leaving
+        # that direction of traffic with no clean entry point).
+        _boundary_ids = set()
+        for _u, _v in _G_raw_bd.edges():
+            _ui, _vi = _u in _internal_ids, _v in _internal_ids
+            if _ui != _vi:                       # exactly one endpoint inside the core
+                _boundary_ids.add(_u if _ui else _v)
 
         # Map OSM boundary IDs → consolidated IDs for map display and build_paths.py
         # osmnx stores original OSM IDs in 'osmid_original': string for single nodes,
