@@ -26,7 +26,10 @@ from driveshare import driveshare        # vehicle-driver share by trip length (
 COUNT_SITES = [
     {"label": "site 507, A21 Bangor Road",     "node": None, "links": [(538692601,550205936),(550205936,538692601)], "observed": 21_202},
     {"label": "site 508, A48 Donaghadee Road", "node": None, "links": [(544419411,136173596),(136173596,544419411)], "observed": 10_792},
-    {"label": "site 444, A20 Portaferry Road", "node": 449111329, "links": None, "observed":  7_282},
+    # site 444 (A20 Portaferry Road) removed: the ODS count point is artificially misplaced (it sits
+    # ~1 km into the core at node 449111329, not its true location much further down the peninsula),
+    # so it under-reads relative to where the peninsula traffic actually is — it was dominating and
+    # distorting the calibration (it "wanted" K≈0.66, pulling the fit down). Dropped as a bad obs.
 ]
 
 # Links present in link_aadt.json but excluded from calibration.
