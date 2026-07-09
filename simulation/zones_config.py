@@ -12,5 +12,5 @@ data/census_zones.json); CENTRE feeds build_census_zones.py and build_network.py
 """
 
 CENTRE          = (54.5933779, -5.6960935)   # (lat, lon) of Newtownards town centre
-CORE_RADIUS     = 3000     # metres — SDZs intersecting this circle → their DZs become core
-SDZ_ZONE_RADIUS = 10000    # metres — DEAs intersecting this circle → broken into SDZs
+CORE_RADIUS     = 4000     # metres — SDZs intersecting this circle → their DZs become core
+SDZ_ZONE_RADIUS = 20000    # metres — DEAs intersecting this circle → broken into SDZs
