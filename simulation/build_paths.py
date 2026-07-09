@@ -55,7 +55,9 @@ N_PASSES          = 25       # stochastic Dijkstra passes for probit loading
 # PROBIT_CV / PROBIT_LL_SIGMA imported from routing_config (paths-cache signature inputs)
 RANDOM_SEED       = 42
 MAX_HOPS          = 120      # path-trace hop limit per OD pair per pass
-N_WORKERS         = 1        # parallel worker processes (increase if RAM allows)
+N_WORKERS         = int(os.environ.get("BUILD_PATHS_WORKERS", "1"))  # parallel probit-pass workers;
+                             # default 1 (portable). Override per-run, e.g. BUILD_PATHS_WORKERS=3, on a
+                             # multi-core box with spare RAM (~100-150 MB/worker). Output is identical.
 
 # ── Module-level globals shared with worker processes (fork-inherited) ─────────
 # Set in main body before Pool creation; workers read them as copy-on-write.
