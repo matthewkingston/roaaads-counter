@@ -21,30 +21,35 @@ component (out and return), so the previous leg-asymmetry (different diagonal pe
 dissolves.
 
 Method (per external zone × per component, mirrors analysis/build_n_of_t.py):
-  origins ∝ producer over the zone's member small areas (road-proximate cached points);
+  origins ∝ producer over the zone's member small areas, each a FRESH uniform-in-polygon
+  point snapped to a road on demand (live, over a thread pool — no static point cache, whose
+  fixed few-points-per-area collapsed small single-area zones onto one OSRM node);
   destinations ∝ attractor — member-area road points (res/commute) or real POIs within the
   zone (parking ∝ spaces for retail, schools ∝ per-level enrolment); one OSRM `/table` per
   batch (independent draws ⇒ the S×D matrix is ∝ p⊗a, histogrammed unweighted); off-road
-  endpoints (`/nearest`/`/table` snap > SNAP_TOL_M) discarded.
+  endpoints (`/nearest`/`/table` snap > SNAP_TOL_M) discarded.  A zone with genuinely one road
+  node collapses to all-zero times ⇒ correctly no self-term.
 
-Reuses: build_n_of_t (osrm_table, road_point, build_point_cache, load_area_masses,
-load_poi_layers, _check_osrm, SNAP_TOL_M, K_CACHE); ingest_ni_census/ingest_roi_census +
+Reuses: build_n_of_t (osrm_table, load_area_masses, load_poi_layers, _check_osrm, SNAP_TOL_M,
+NEAREST_TRIES) + the local sample_points; ingest_ni_census/ingest_roi_census +
 build_census_zones' parent-map aggregation for zone→member-area membership.
 
 Inputs:  data/census_zones.json, data/island_opportunity_table.csv, the NI/RoI boundary files,
-         the parking/school POI caches, and the road-point cache data/_area_road_points.json
-         (built here if absent — shared with build_n_of_t).  Needs OSRM up (localhost:5000).
+         and the parking/school POI caches.  Needs OSRM up (localhost:5000).
 Output:  data/external_intra_times.json — {"<code>": {"<component>": {"t":[s…], "w":[…]}}} + _meta.
 
 Model-layer only: NOT in the paths-cache signature, so re-running needs no paths rebuild —
 re-tune afterwards.  `--s/--d/--batches` set the (fixed-generous) sample budget per zone-component.
 """
 import argparse
+import http.client
 import json
 import os
 import sys
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -118,6 +123,67 @@ def sample_points(geom, n, rng):
     return pts
 
 
+# ── Concurrent b-faithful road-point sampling (live, no static point cache) ─────
+# Each intra-zonal origin/destination is a FRESH uniform-in-polygon point retried
+# until it snaps < SNAP_TOL_M to a road (so it preserves the drawn area's mass) —
+# identical in spirit to build_n_of_t.road_point, but sampled on demand instead of
+# from a fixed 3-point-per-area cache (which collapsed to one OSRM node for small
+# single-area zones). The /nearest snap calls dominate the runtime and are
+# independent, so they run over a thread pool. build_n_of_t's OSRM helpers share one
+# HTTPConnection (not thread-safe), so this path uses its own per-thread connections
+# and never touches build_n_of_t._conn.
+N_SNAP_WORKERS = 16                     # concurrent /nearest workers
+
+_tls = threading.local()
+
+
+def _nearest_conn():
+    c = getattr(_tls, "conn", None)
+    if c is None:
+        c = _tls.conn = http.client.HTTPConnection(OSRM_HOST, OSRM_PORT, timeout=60)
+    return c
+
+
+def _osrm_nearest_ts(lon, lat):
+    """Thread-safe /nearest snap distance (m), or None — one HTTPConnection per thread."""
+    for _ in range(3):
+        try:
+            c = _nearest_conn()
+            c.request("GET", f"/nearest/v1/driving/{lon},{lat}?number=1")
+            d = json.loads(c.getresponse().read())
+            return d["waypoints"][0]["distance"] if d.get("code") == "Ok" else None
+        except (http.client.HTTPException, ConnectionError, OSError, ValueError):
+            _tls.conn = None
+    return None
+
+
+def sample_road_points(geoms, seeds, snap_tol, tries, pool):
+    """One road-proximate point per geom (b-faithful: a fresh uniform-in-polygon point retried
+    until it snaps < snap_tol, else the best-snapping candidate). Retries proceed in rounds:
+    the GEOS point sampling runs on THIS thread only — shapely/GEOS is NOT thread-safe — while
+    each round's independent /nearest snap calls fan out over `pool`. Deterministic: each point
+    has its own rng seeded from `seeds` (assigned in caller order), independent of scheduling.
+    A point is None only if it never reached OSRM in any round."""
+    n = len(geoms)
+    rngs = [np.random.default_rng(s) for s in seeds]
+    best = [None] * n
+    best_d = [np.inf] * n
+    pending = list(range(n))
+    for _ in range(tries):
+        if not pending:
+            break
+        cand = [sample_points(geoms[i], 1, rngs[i])[0] for i in pending]   # GEOS — single-thread
+        dists = list(pool.map(lambda ll: _osrm_nearest_ts(*ll), cand))     # /nearest — concurrent
+        still = []
+        for i, lonlat, d in zip(pending, cand, dists):
+            if d is not None and d < best_d[i]:
+                best_d[i], best[i] = d, lonlat
+            if d is None or d >= snap_tol:
+                still.append(i)
+        pending = still
+    return best
+
+
 # ── Zone → member small-area membership (reconstructed like build_census_zones) ──
 
 def build_membership():
@@ -178,11 +244,11 @@ def assign_pois(zone_polys, pois):
 
 # ── Per zone × component sampling ──────────────────────────────────────────────
 
-def sample_zone_component(comp, members, area_points, area_mass, zpois,
-                          S, D, batches, edges, osrm_table, rng):
+def sample_zone_component(comp, members, area_geom, area_mass, zpois,
+                          S, D, batches, edges, osrm_table, rng, snap_tol, tries, pool):
     """Weighted histogram of intra-zonal times for one zone × component, or None if the
-    zone has no producer or no attractor for this component."""
-    from build_n_of_t import SNAP_TOL_M
+    zone has no producer/attractor for this component, or all intra-zonal pairs collapse
+    onto a single road node (a zone with genuinely one road node ⇒ correctly no self-term)."""
     prod_col = COMP_PRODUCER[comp]
     pw = np.array([area_mass.get(a, {}).get(prod_col, 0.0) for a in members], dtype=float)
     if pw.sum() <= 0:
@@ -217,20 +283,20 @@ def sample_zone_component(comp, members, area_points, area_mass, zpois,
         else:
             return None                                     # e.g. no school of this level ⇒ no self-term
 
-    def _area_point(a):
-        pts = area_points.get(members[a])
-        return pts[rng.integers(len(pts))] if pts else None
+    def _geoms(idx):                                    # geometries of the drawn member areas
+        return [area_geom[members[a]] for a in idx]
 
     counts = np.zeros(len(edges) - 1, dtype=np.float64)
     for _ in range(batches):
         oi = rng.choice(len(members), size=S, p=pw)
-        src = [p for p in (_area_point(a) for a in oi) if p is not None]
+        src = [p for p in sample_road_points(_geoms(oi), rng.integers(0, 2**63 - 1, size=S),
+                                             snap_tol, tries, pool) if p is not None]
         if not src:
             continue
         if dest_mode == "area":
             di = rng.choice(len(members), size=D, p=aw)
-            dst = [_area_point(a) for a in di]
-            dst = [p for p in dst if p is not None]
+            dst = [p for p in sample_road_points(_geoms(di), rng.integers(0, 2**63 - 1, size=D),
+                                                 snap_tol, tries, pool) if p is not None]
         else:
             di = rng.choice(len(poi_coords), size=D, p=poi_w)
             dst = [tuple(poi_coords[k]) for k in di]
@@ -241,8 +307,8 @@ def sample_zone_component(comp, members, area_points, area_mass, zpois,
             continue
         dur, ssnap, dsnap = res
         valid = (np.isfinite(dur) & (dur > 0)          # drop degenerate same-node self-pairs
-                 & (ssnap < SNAP_TOL_M)[:, None]
-                 & (dsnap < SNAP_TOL_M)[None, :])
+                 & (ssnap < snap_tol)[:, None]
+                 & (dsnap < snap_tol)[None, :])
         counts += np.histogram(dur[valid], bins=edges)[0]
 
     if counts.sum() <= 0:
@@ -268,7 +334,7 @@ def main():
     comps_to_run = [args.component] if args.component else list(COMPONENTS)
 
     from build_n_of_t import (osrm_table, _check_osrm, load_area_masses,
-                              load_poi_layers, build_point_cache)
+                              load_poi_layers, SNAP_TOL_M, NEAREST_TRIES)
     _check_osrm()
 
     print("Reconstructing zone → member-area membership …")
@@ -281,10 +347,8 @@ def main():
     area_mass = df.set_index("area_code").to_dict("index")
     pois = load_poi_layers()
 
-    print("Building road-point cache (shared with build_n_of_t) …")
     rng = np.random.default_rng(SEED)
-    cache = build_point_cache(df, geoms, rng)               # aligned to df rows
-    area_points = {c: cache[i] for c, i in code_to_row.items()}
+    area_geom = {c: geoms[i] for c, i in code_to_row.items()}   # area code → WGS84 polygon
 
     print("Assigning POIs to zones (point-in-zone) …")
     zone_polys = {}
@@ -296,35 +360,41 @@ def main():
 
     edges = np.append(np.arange(0.0, BIN_CAP_S + BIN_STEP_S, BIN_STEP_S), np.inf)
     print(f"\nSampling {args.s}×{args.d}×{args.batches} intra-zonal pairs per zone × "
-          f"{len(comps_to_run)} component(s): {', '.join(comps_to_run)} …")
+          f"{len(comps_to_run)} component(s): {', '.join(comps_to_run)} "
+          f"(live road-point sampling, {N_SNAP_WORKERS} snap workers) …")
     t0 = time.time()
     out_zones = {}
     empty_zone, skipped = [], defaultdict(int)
-    for n, zid in enumerate(membership):
-        members = [c for c in membership[zid] if c in code_to_row]
-        if not members:
-            empty_zone.append(zid)
-            continue
-        byc = {}
-        for comp in comps_to_run:
-            h = sample_zone_component(comp, members, area_points, area_mass,
-                                      zpois.get(zid, {}), args.s, args.d, args.batches,
-                                      edges, osrm_table, rng)
-            if h is not None:
-                byc[comp] = h
-            else:
-                skipped[comp] += 1
-        if byc:
-            out_zones[zid] = byc
-        if (n + 1) % 25 == 0:
-            print(f"  {n+1}/{len(membership)} zones ({time.time()-t0:.0f}s)", flush=True)
+    pool = ThreadPoolExecutor(max_workers=N_SNAP_WORKERS)
+    try:
+        for n, zid in enumerate(membership):
+            members = [c for c in membership[zid] if c in code_to_row]
+            if not members:
+                empty_zone.append(zid)
+                continue
+            byc = {}
+            for comp in comps_to_run:
+                h = sample_zone_component(comp, members, area_geom, area_mass,
+                                          zpois.get(zid, {}), args.s, args.d, args.batches,
+                                          edges, osrm_table, rng, SNAP_TOL_M, NEAREST_TRIES, pool)
+                if h is not None:
+                    byc[comp] = h
+                else:
+                    skipped[comp] += 1
+            if byc:
+                out_zones[zid] = byc
+            if (n + 1) % 25 == 0:
+                print(f"  {n+1}/{len(membership)} zones ({time.time()-t0:.0f}s)", flush=True)
+    finally:
+        pool.shutdown(wait=True)
 
     print(f"\nSampled {len(out_zones)}/{len(membership)} zones in {time.time()-t0:.0f}s")
     if empty_zone:
         print(f"  {len(empty_zone)} zones had no member areas in the opportunity table (no self-term)")
     for comp, k in skipped.items():
         if k:
-            print(f"  component {comp}: {k} zones had no producer/attractor (no self-term for that component)")
+            print(f"  component {comp}: {k} zones with no self-term "
+                  f"(no producer/attractor, or intra-zonal pairs collapse to a single road node)")
 
     per_comp = {c: {"s": args.s, "d": args.d, "batches": args.batches} for c in comps_to_run}
     if args.component and os.path.exists(OUTPUT_FILE):
