@@ -1395,6 +1395,13 @@ history_entry = {
 }
 history_entry["objective"] = "poisson_deviance_walking"
 history_entry["temporal_profile"] = "nts_pinned"
+# Constraint mode, recorded UNCONDITIONALLY so every run's history is unambiguous
+# (empty list ⇒ singly-constrained everywhere; non-empty ⇒ those components are also
+# attraction-constrained via Furness). Mirrors the tuned_params.json fields, which are
+# written only when active — history always records it so runs can be compared.
+# _DBLC is None when singly (never set) ⇒ record [] / null.
+history_entry["doubly_constrained"] = sorted(_DBLC) if _DBLC else []
+history_entry["furness_max_sweeps"] = _FURNESS_SWEEPS if _DBLC else None
 if note:
     history_entry["note"] = note
 
