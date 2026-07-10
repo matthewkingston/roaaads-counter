@@ -135,6 +135,78 @@ def _duration_up_to_index(annotation_durs, idx):
     return sum(annotation_durs[:idx])
 
 
+def _classify_bb_shortcut(node_seq, b1_id, b2_id, boundary_ids, internal_ids):
+    """Decide whether an OSRM route B1→B2 is a valid *exterior* boundary→boundary
+    shortcut: a route that leaves B1 and reaches B2 as the first boundary node
+    encountered WITHOUT passing through the core interior.
+
+    Returns the index of B2 in node_seq (so the caller can price the segment up to it)
+    if the shortcut should be KEPT, or None to DISCARD it.  Raises ValueError on a
+    snapping anomaly that needs human review — deliberately loud, per design.
+
+      1. Locate B1.  OSRM snaps the passed coordinate to the nearest *edge* and reports
+         both endpoints of that first edge, so the origin boundary node lands at index 0
+         OR 1.  Absent, or index > 1 → start-snap anomaly → raise.
+      2. B2 must appear somewhere in the route.  If not, the destination coordinate
+         snapped elsewhere — most often onto B2's dual-carriageway twin ~14 m away — which
+         needs review rather than a silent drop → raise.  (We'd likely want to KEEP the
+         shortcut in that case, but for now surface it.)
+      3. Scan forward from just past B1 to the first boundary node, tracking whether the
+         route dipped into the core interior:
+           - B1 again        → raise (a shortest route must not revisit its origin);
+           - a different B3   → discard (that trip is covered by B1→B3 + B3→B2 directly);
+           - B2               → stop.
+      4. If an interior node was seen before B2 → discard (the route went *through* the
+         core, not around it).  Else keep.
+
+    Known limitation (accepted): the interior test only sees nodes present in the model's
+    node set.  A boundary→boundary road crossing the core interior on a *junction-free*
+    corridor touches only off-model shape points and no model junction, so it is not
+    detected as through-core and would be recorded as an exterior shortcut.  Such a road
+    has no junctions (nothing is measured on it); the only cost is a redundant
+    near-duplicate of the real internal route, which mildly perturbs the probit
+    route-choice split there.  Closing this fully would need a geometric
+    (route-polyline vs core-polygon) test.
+    """
+    # 1. locate the origin boundary node — must be at index 0 or 1
+    try:
+        b1_pos = node_seq.index(b1_id)
+    except ValueError:
+        raise ValueError(
+            f"[bb-shortcut] B1 {b1_id} absent from OSRM route to B2 {b2_id} "
+            f"(start-snap anomaly — review)")
+    if b1_pos > 1:
+        raise ValueError(
+            f"[bb-shortcut] B1 {b1_id} at position {b1_pos} (>1) in route to B2 {b2_id} "
+            f"(start-snap anomaly — review)")
+
+    # 2. the destination boundary node must appear at all
+    if b2_id not in node_seq:
+        raise ValueError(
+            f"[bb-shortcut] B2 {b2_id} absent from OSRM route from B1 {b1_id} "
+            f"(dest-snap anomaly, likely a carriageway-twin snap — review)")
+
+    # 3-4. scan to the first boundary node, tracking interior incursion
+    entered_core = False
+    for i in range(b1_pos + 1, len(node_seq)):
+        nid = node_seq[i]
+        if nid in boundary_ids:            # boundary tested first (boundary ⊆ internal)
+            if nid == b1_id:
+                raise ValueError(
+                    f"[bb-shortcut] route B1 {b1_id} → B2 {b2_id} revisits B1 at "
+                    f"position {i} (review)")
+            if nid == b2_id:
+                return None if entered_core else i
+            return None                    # a different boundary first → B1→B3→B2, drop
+        if nid in internal_ids:
+            entered_core = True
+
+    # defensive: B2 present but never reached as the first boundary after B1
+    raise ValueError(
+        f"[bb-shortcut] route B1 {b1_id} → B2 {b2_id}: scan ended without reaching B2 "
+        f"as the first boundary (review)")
+
+
 # ── Check OSRM is reachable ────────────────────────────────────────────────────
 
 print(f"\nChecking OSRM at {OSRM_HOST}:{OSRM_PORT} …")
@@ -277,21 +349,15 @@ for b1 in boundary_nodes:
         if len(node_seq) < 2:
             continue
 
-        # Only keep if the route exits core first (first node after B1 is external)
-        if node_seq[1] in internal_node_ids:
+        # Keep only genuine EXTERIOR shortcuts: B2 is the first boundary reached after
+        # leaving B1, and the route never dips into the core interior.  Handles the
+        # start/dest coordinate-snap cases explicitly and fails loud on anomalies.
+        b2_idx = _classify_bb_shortcut(
+            node_seq, b1["id"], b2["id"], boundary_node_ids, internal_node_ids)
+        if b2_idx is None:
             continue
 
-        # Symmetric with X→B: keep only if B2 is the first boundary node hit.
-        # If an intermediate B_mid is hit first, discard — B1→B_mid will be
-        # found and kept when querying the (B1, B_mid) pair directly.
-        first_b_idx = _first_boundary_in_sequence(node_seq, boundary_node_ids)
-        if first_b_idx is None:
-            continue
-
-        if node_seq[first_b_idx] != b2["id"]:
-            continue
-
-        seg_dur = _duration_up_to_index(ann_durs, first_b_idx)
+        seg_dur = _duration_up_to_index(ann_durs, b2_idx)
         boundary_boundary_links.append({
             "from":       b1["id"],
             "to":         b2["id"],
