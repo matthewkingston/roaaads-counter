@@ -130,19 +130,16 @@ def _first_boundary_in_sequence(node_seq, boundary_ids):
     return None
 
 
-def _duration_up_to_index(annotation_durs, idx):
-    """Sum annotation durations for steps 0..idx-1 (travel from node[0] to node[idx])."""
-    return sum(annotation_durs[:idx])
-
-
-def _classify_bb_shortcut(node_seq, b1_id, b2_id, boundary_ids, internal_ids):
+def _classify_bb_shortcut(node_seq, ann_durs, total_dur, b1_id, b2_id, boundary_ids, internal_ids):
     """Decide whether an OSRM route B1→B2 is a valid *exterior* boundary→boundary
     shortcut: a route that leaves B1 and reaches B2 as the first boundary node
     encountered WITHOUT passing through the core interior.
 
-    Returns the index of B2 in node_seq (so the caller can price the segment up to it)
-    if the shortcut should be KEPT, or None to DISCARD it.  Raises ValueError on a
-    snapping anomaly that needs human review — deliberately loud, per design.
+    Returns the penalty-inclusive B1→B2 leg duration (`total_dur` minus the per-edge
+    travel time AFTER B2 — a raw sum of annotation durations would drop OSRM turn/signal
+    penalties, and also strips a destination snap that overshoots B2 and loops back) if
+    the shortcut should be KEPT, or None to DISCARD it.  Raises ValueError on a snapping
+    anomaly that needs human review — deliberately loud, per design.
 
       1. Locate B1.  OSRM snaps the passed coordinate to the nearest *edge* and reports
          both endpoints of that first edge, so the origin boundary node lands at index 0
@@ -196,7 +193,7 @@ def _classify_bb_shortcut(node_seq, b1_id, b2_id, boundary_ids, internal_ids):
                     f"[bb-shortcut] route B1 {b1_id} → B2 {b2_id} revisits B1 at "
                     f"position {i} (review)")
             if nid == b2_id:
-                return None if entered_core else i
+                return None if entered_core else total_dur - sum(ann_durs[i:])
             return None                    # a different boundary first → B1→B3→B2, drop
         if nid in internal_ids:
             entered_core = True
@@ -205,6 +202,75 @@ def _classify_bb_shortcut(node_seq, b1_id, b2_id, boundary_ids, internal_ids):
     raise ValueError(
         f"[bb-shortcut] route B1 {b1_id} → B2 {b2_id}: scan ended without reaching B2 "
         f"as the first boundary (review)")
+
+
+def _classify_xb_link(node_seq, ann_durs, total_dur, b_id, boundary_ids, internal_ids):
+    """Decide whether an OSRM route X→B yields a valid external→boundary (inbound) link:
+    B is the natural entry into the core from external node X (the first boundary node
+    reached).  The criterion is pure boundary-node membership, so off-model shape points
+    are transparent — only snapping needs guarding.
+
+    Returns the leg duration (X→B, priced *up to B's first appearance*) to KEEP the link,
+    or None to DISCARD (B is present but a *different* boundary is X's natural entry —
+    that boundary's own X→B′ query keeps it).  Raises ValueError on an anomaly for review.
+
+      - node_seq[0] is X's snapped origin.  If it is an internal/boundary model node the
+        external centroid snapped onto/into the core (boundary ⊆ internal) — a
+        data-consistency fault → raise.
+      - B must appear in the route; if not, the destination coordinate snapped elsewhere
+        (e.g. a carriageway twin) or the route never reached B → raise.
+      - Duration is `total_dur` minus the per-edge travel time AFTER B, i.e. the time to
+        reach B.  Priced this way (not as a raw sum of per-edge annotation durations, which
+        OMITS OSRM turn/signal penalties) so it preserves the penalty-inclusive leg time in
+        the normal case (nothing after B) while still stripping a destination snap onto the
+        wrong side of a one-way, where OSRM overshoots B and loops back.
+    """
+    if node_seq[0] in internal_ids:                       # boundary ⊆ internal
+        raise ValueError(
+            f"[X→B] external origin snapped onto core node {node_seq[0]} en route to "
+            f"boundary {b_id} (external centroid inside/on the core — review)")
+    if b_id not in node_seq:
+        raise ValueError(
+            f"[X→B] boundary {b_id} absent from OSRM route from external origin "
+            f"(dest-snap anomaly, e.g. carriageway twin — review)")
+    first_b_idx = _first_boundary_in_sequence(node_seq, boundary_ids)  # B present ⇒ non-None
+    if node_seq[first_b_idx] != b_id:
+        return None                                       # a different boundary is the entry
+    return total_dur - sum(ann_durs[first_b_idx:])        # penalty-inclusive time to reach B
+
+
+def _classify_bx_link(node_seq, b_id, boundary_ids):
+    """Decide whether an OSRM route B→X yields a valid boundary→external (outbound) link:
+    B is the last boundary departed on the way to external node X (no *other* boundary
+    node appears).  Boundary-membership criterion again, so only snapping needs guarding.
+
+    Returns True to KEEP, or None to DISCARD (another boundary B′ appears → the trip is
+    covered by B→B′ + B′→X).  Raises ValueError on a snapping anomaly for review.
+
+      - B (the origin) must sit at index 0 or 1 (OSRM snaps the origin coordinate to the
+        nearest edge, reporting both endpoints).  Absent, or index > 1 → raise.
+      - B must not reappear after its start (a shortest route revisiting its origin) → raise.
+    (X, the destination, is an external centroid — not a node — so its snap is guarded by
+    the Step-1 X→B check on the same centroid, which runs first.)
+    """
+    try:
+        b_pos = node_seq.index(b_id)
+    except ValueError:
+        raise ValueError(
+            f"[B→X] origin boundary {b_id} absent from its own OSRM route "
+            f"(start-snap anomaly — review)")
+    if b_pos > 1:
+        raise ValueError(
+            f"[B→X] origin boundary {b_id} at position {b_pos} (>1) "
+            f"(start-snap anomaly — review)")
+    for i in range(b_pos + 1, len(node_seq)):
+        nid = node_seq[i]
+        if nid == b_id:
+            raise ValueError(
+                f"[B→X] route from boundary {b_id} revisits it at position {i} (review)")
+        if nid in boundary_ids:                # a different boundary B′ appears
+            return None                        # B→B′ + B′→X covers it → discard
+    return True                                # B is the sole/last boundary → keep
 
 
 # ── Check OSRM is reachable ────────────────────────────────────────────────────
@@ -261,19 +327,17 @@ for xi, ext in enumerate(external_nodes):
         if len(node_seq) < 2:
             continue
 
-        # Find first boundary node in sequence (after the start)
-        first_b_idx = _first_boundary_in_sequence(node_seq, boundary_node_ids)
-        if first_b_idx is None:
-            continue  # route doesn't reach core
-
-        first_b_nid = node_seq[first_b_idx]
-        if first_b_nid == bid:
-            # B is the natural entry point — keep X→B link
-            ext_boundary_links.append({
-                "from_ext":    xid,
-                "to_boundary": bid,
-                "duration_s":  round(total_dur, 2),
-            })
+        # Keep only if B is the natural entry (first boundary reached); price up to B.
+        # Fails loud on snap faults (external origin snapped into the core, or B absent).
+        dur = _classify_xb_link(node_seq, ann_durs, total_dur, bid,
+                                 boundary_node_ids, internal_node_ids)
+        if dur is None:
+            continue  # B present but a different boundary is X's natural entry
+        ext_boundary_links.append({
+            "from_ext":    xid,
+            "to_boundary": bid,
+            "duration_s":  round(dur, 2),
+        })
 
     if (xi + 1) % 10 == 0:
         print(f"  {xi+1}/{len(external_nodes)} external nodes  "
@@ -309,14 +373,10 @@ for bi, bnode in enumerate(boundary_nodes):
         if len(node_seq) < 2:
             continue
 
-        # Symmetric with X→B: discard if any other boundary node appears in the route.
-        # That journey is covered by B→B' + B'→X, so B→X would be redundant.
-        # (A route that re-enters the core must also pass another boundary node,
-        # so this single check subsumes the old internal-node check.)
-        if any(nid in boundary_node_ids and nid != bid for nid in node_seq[1:]):
+        # Keep only if B is the last boundary departed (no other boundary appears);
+        # B→B'+B'→X covers the rest.  Fails loud on origin-snap faults / B revisits.
+        if _classify_bx_link(node_seq, bid, boundary_node_ids) is None:
             continue
-
-        # B is the last boundary node departed on the way to X — keep B→X
         bnd_external_links.append({
             "from_boundary": bid,
             "to_ext":        xid,
@@ -352,12 +412,12 @@ for b1 in boundary_nodes:
         # Keep only genuine EXTERIOR shortcuts: B2 is the first boundary reached after
         # leaving B1, and the route never dips into the core interior.  Handles the
         # start/dest coordinate-snap cases explicitly and fails loud on anomalies.
-        b2_idx = _classify_bb_shortcut(
-            node_seq, b1["id"], b2["id"], boundary_node_ids, internal_node_ids)
-        if b2_idx is None:
+        seg_dur = _classify_bb_shortcut(
+            node_seq, ann_durs, total_dur, b1["id"], b2["id"],
+            boundary_node_ids, internal_node_ids)
+        if seg_dur is None:
             continue
 
-        seg_dur = _duration_up_to_index(ann_durs, b2_idx)
         boundary_boundary_links.append({
             "from":       b1["id"],
             "to":         b2["id"],
