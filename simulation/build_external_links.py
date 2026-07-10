@@ -273,6 +273,30 @@ def _classify_bx_link(node_seq, b_id, boundary_ids):
     return True                                # B is the sole/last boundary → keep
 
 
+def _ext_ext_transits_core(node_seq, boundary_ids, internal_ids):
+    """Classify an external→external OSRM route: True if it transits the core (passes a
+    boundary node → a flow-carrying through-pair), False if it stays outside (a
+    denominator-only pair).  The boundary-membership criterion is robust to off-model
+    shape points, and a pressure test found no through-route that dodges every boundary
+    node, so only endpoint snapping is guarded here.
+
+    Raises ValueError if either external endpoint (node_seq[0] origin, node_seq[-1]
+    destination) snapped onto a core node (boundary ⊆ internal) — its centroid is
+    inside/on the core, a data-consistency fault to review.  Mirrors the X→B origin
+    guard; guarding both ends here additionally catches a boundary-straddling snap edge
+    whose exterior endpoint let the same centroid pass its Step-1 origin check.
+    """
+    if node_seq[0] in internal_ids:
+        raise ValueError(
+            f"[X→X] origin external centroid snapped onto core node {node_seq[0]} "
+            f"(centroid inside/on the core — review)")
+    if node_seq[-1] in internal_ids:
+        raise ValueError(
+            f"[X→X] destination external centroid snapped onto core node {node_seq[-1]} "
+            f"(centroid inside/on the core — review)")
+    return any(nid in boundary_ids for nid in node_seq)
+
+
 # ── Check OSRM is reachable ────────────────────────────────────────────────────
 
 print(f"\nChecking OSRM at {OSRM_HOST}:{OSRM_PORT} …")
@@ -458,7 +482,7 @@ for xi, ext1 in enumerate(external_nodes):
             continue   # no road route at all (e.g. across water) → no denom term
         node_seq, total_dur, ann_durs, snaps = result
 
-        if any(nid in boundary_node_ids for nid in node_seq):
+        if _ext_ext_transits_core(node_seq, boundary_node_ids, internal_node_ids):
             dsts.append(ext2["id"])
         else:
             # Fastest real route does not enter the core → denominator-only virtual edge.
