@@ -78,20 +78,24 @@ def _get_conn():
     return _conn
 
 
-def osrm_route(lat1, lon1, lat2, lon2, retries=3):
+def osrm_route(lat1, lon1, lat2, lon2, retries=3, want_geometry=False):
     """Query OSRM route from (lat1,lon1) to (lat2,lon2) using a persistent connection.
 
-    Returns (node_sequence, total_duration_s, annotation_durations, snaps)
+    Returns (node_sequence, total_duration_s, annotation_durations, snaps, coords)
     or None if no route found.
       node_sequence       — list of OSM node IDs along the route
       total_duration_s    — total trip duration in seconds
       annotation_durations— per-step durations (len = len(node_sequence)-1)
       snaps               — list of {distance: metres from input to snap point}
+      coords              — per-node [lon,lat] geometry (1:1 with node_sequence) if
+                            want_geometry else None; only the legs that run a crow-flies
+                            revisit check (B→X, B→B) request it, to keep X→X/X→B lean.
     """
     global _request_count, _conn
+    _ov = "full&geometries=geojson" if want_geometry else "false"
     path = (f"/route/v1/driving/"
             f"{lon1},{lat1};{lon2},{lat2}"
-            f"?annotations=nodes,duration&overview=false")
+            f"?annotations=nodes,duration&overview={_ov}")
     for attempt in range(retries):
         try:
             conn = _get_conn()
@@ -111,7 +115,8 @@ def osrm_route(lat1, lon1, lat2, lon2, retries=3):
             durs  = leg["annotation"]["duration"]
             total = data["routes"][0]["duration"]
             snaps = [{"distance": w.get("distance", 0)} for w in data["waypoints"]]
-            return nodes, total, durs, snaps
+            coords = data["routes"][0]["geometry"]["coordinates"] if want_geometry else None
+            return nodes, total, durs, snaps, coords
         except (http.client.HTTPException, ConnectionError, json.JSONDecodeError, KeyError):
             _conn = None  # force reconnect on next call
             if attempt < retries - 1:
@@ -130,40 +135,60 @@ def _first_boundary_in_sequence(node_seq, boundary_ids):
     return None
 
 
-def _classify_bb_shortcut(node_seq, ann_durs, total_dur, b1_id, b2_id, boundary_ids, internal_ids):
+def _haversine_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance in metres."""
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+# A route may legitimately return to its origin boundary node when that node sits on a
+# roundabout/complex junction (OSRM's fine per-arc nodes collapse to a single model node,
+# so entering and leaving the junction re-passes the same OSM node) — benign, priced out
+# of the leg.  But returning to it after wandering far is a snapping/routing fault → loud.
+REVISIT_MAX_LOOP_M = 500.0
+
+
+def _classify_bb_shortcut(node_seq, ann_durs, total_dur, coords, b1_id, b2_id,
+                          boundary_ids, internal_ids):
     """Decide whether an OSRM route B1→B2 is a valid *exterior* boundary→boundary
     shortcut: a route that leaves B1 and reaches B2 as the first boundary node
     encountered WITHOUT passing through the core interior.
 
-    Returns the penalty-inclusive B1→B2 leg duration (`total_dur` minus the per-edge
-    travel time AFTER B2 — a raw sum of annotation durations would drop OSRM turn/signal
-    penalties, and also strips a destination snap that overshoots B2 and loops back) if
-    the shortcut should be KEPT, or None to DISCARD it.  Raises ValueError on a snapping
-    anomaly that needs human review — deliberately loud, per design.
+    Returns the penalty-inclusive B1→B2 leg duration to KEEP the shortcut, or None to
+    DISCARD it.  Raises ValueError on a snapping anomaly that needs human review.
 
       1. Locate B1.  OSRM snaps the passed coordinate to the nearest *edge* and reports
          both endpoints of that first edge, so the origin boundary node lands at index 0
          OR 1.  Absent, or index > 1 → start-snap anomaly → raise.
       2. B2 must appear somewhere in the route.  If not, the destination coordinate
-         snapped elsewhere — most often onto B2's dual-carriageway twin ~14 m away — which
-         needs review rather than a silent drop → raise.  (We'd likely want to KEEP the
-         shortcut in that case, but for now surface it.)
-      3. Scan forward from just past B1 to the first boundary node, tracking whether the
-         route dipped into the core interior:
-           - B1 again        → raise (a shortest route must not revisit its origin);
+         snapped elsewhere — most often onto B2's dual-carriageway twin ~14 m away → raise.
+      3. Scan forward from just past B1 to the first boundary node, tracking crow-flies
+         distance from B1 and whether the route dipped into the core interior:
+           - B1 again        → benign junction re-pass IF the route stayed within
+                               REVISIT_MAX_LOOP_M of B1 (a roundabout collapses to one
+                               model node, so OSRM re-passes it); that loop is priced out
+                               of the leg and does not count as a core transit.  A return
+                               after a farther excursion is a snapping/routing fault → raise.
            - a different B3   → discard (that trip is covered by B1→B3 + B3→B2 directly);
            - B2               → stop.
       4. If an interior node was seen before B2 → discard (the route went *through* the
          core, not around it).  Else keep.
 
-    Known limitation (accepted): the interior test only sees nodes present in the model's
-    node set.  A boundary→boundary road crossing the core interior on a *junction-free*
-    corridor touches only off-model shape points and no model junction, so it is not
-    detected as through-core and would be recorded as an exterior shortcut.  Such a road
-    has no junctions (nothing is measured on it); the only cost is a redundant
-    near-duplicate of the real internal route, which mildly perturbs the probit
-    route-choice split there.  Closing this fully would need a geometric
-    (route-polyline vs core-polygon) test.
+    Duration = `total_dur` minus the per-edge travel AFTER B2 (strips a destination
+    overshoot) minus the per-edge travel up to B1's *last* occurrence (strips the start
+    junction loop).  Using `total_dur` (not a raw annotation sum) keeps OSRM turn/signal
+    penalties in the leg.
+
+    Known limitation (accepted): the interior test only sees model nodes, so a boundary→
+    boundary road crossing the interior on a *junction-free* corridor (no model junction)
+    is not detected as through-core.  Such a road has no junctions (nothing measured on
+    it); the only cost is a redundant near-duplicate of the real internal route, mildly
+    perturbing the probit split there.  Closing it fully needs a route-polyline vs
+    core-polygon test.
     """
     # 1. locate the origin boundary node — must be at index 0 or 1
     try:
@@ -183,18 +208,33 @@ def _classify_bb_shortcut(node_seq, ann_durs, total_dur, b1_id, b2_id, boundary_
             f"[bb-shortcut] B2 {b2_id} absent from OSRM route from B1 {b1_id} "
             f"(dest-snap anomaly, likely a carriageway-twin snap — review)")
 
-    # 3-4. scan to the first boundary node, tracking interior incursion
+    # 3-4. scan to the first boundary node; track excursion distance + interior incursion
+    # coords fetched lazily by the caller only when B1 re-appears; None on the common path.
+    b1_lat, b1_lon = (coords[b1_pos][1], coords[b1_pos][0]) if coords is not None else (None, None)
+    last_b1 = b1_pos
+    max_excursion = 0.0
     entered_core = False
     for i in range(b1_pos + 1, len(node_seq)):
         nid = node_seq[i]
         if nid in boundary_ids:            # boundary tested first (boundary ⊆ internal)
             if nid == b1_id:
-                raise ValueError(
-                    f"[bb-shortcut] route B1 {b1_id} → B2 {b2_id} revisits B1 at "
-                    f"position {i} (review)")
+                if max_excursion > REVISIT_MAX_LOOP_M:
+                    raise ValueError(
+                        f"[bb-shortcut] route B1 {b1_id} → B2 {b2_id} returns to B1 at "
+                        f"position {i} after a {max_excursion:.0f} m excursion "
+                        f"(> {REVISIT_MAX_LOOP_M:.0f} m — review)")
+                last_b1 = i                # benign junction loop — price it out, not a transit
+                max_excursion = 0.0
+                entered_core = False
+                continue
             if nid == b2_id:
-                return None if entered_core else total_dur - sum(ann_durs[i:])
+                if entered_core:
+                    return None
+                return total_dur - sum(ann_durs[i:]) - sum(ann_durs[:last_b1])
             return None                    # a different boundary first → B1→B3→B2, drop
+        if coords is not None:
+            max_excursion = max(max_excursion,
+                                _haversine_m(b1_lat, b1_lon, coords[i][1], coords[i][0]))
         if nid in internal_ids:
             entered_core = True
 
@@ -239,19 +279,24 @@ def _classify_xb_link(node_seq, ann_durs, total_dur, b_id, boundary_ids, interna
     return total_dur - sum(ann_durs[first_b_idx:])        # penalty-inclusive time to reach B
 
 
-def _classify_bx_link(node_seq, b_id, boundary_ids):
+def _classify_bx_link(node_seq, ann_durs, total_dur, coords, b_id, boundary_ids):
     """Decide whether an OSRM route B→X yields a valid boundary→external (outbound) link:
     B is the last boundary departed on the way to external node X (no *other* boundary
     node appears).  Boundary-membership criterion again, so only snapping needs guarding.
 
-    Returns True to KEEP, or None to DISCARD (another boundary B′ appears → the trip is
-    covered by B→B′ + B′→X).  Raises ValueError on a snapping anomaly for review.
+    Returns the penalty-inclusive B→X leg duration to KEEP, or None to DISCARD (another
+    boundary B′ appears → the trip is covered by B→B′ + B′→X).  Raises ValueError on a
+    snapping anomaly for review.
 
       - B (the origin) must sit at index 0 or 1 (OSRM snaps the origin coordinate to the
         nearest edge, reporting both endpoints).  Absent, or index > 1 → raise.
-      - B must not reappear after its start (a shortest route revisiting its origin) → raise.
-    (X, the destination, is an external centroid — not a node — so its snap is guarded by
-    the Step-1 X→B check on the same centroid, which runs first.)
+      - B may re-appear when it sits on a roundabout/complex junction (which collapses to
+        one model node, so OSRM re-passes the same OSM node): benign IF the route stayed
+        within REVISIT_MAX_LOOP_M of B, and that start loop is priced out of the leg; a
+        return after a farther excursion is a snapping/routing fault → raise.
+    Duration = `total_dur` minus the per-edge travel up to B's *last* occurrence (strips
+    the start junction loop), keeping OSRM turn/signal penalties.  X, the destination, is
+    an external centroid — guarded by the Step-1 X→B check on the same centroid.
     """
     try:
         b_pos = node_seq.index(b_id)
@@ -263,14 +308,29 @@ def _classify_bx_link(node_seq, b_id, boundary_ids):
         raise ValueError(
             f"[B→X] origin boundary {b_id} at position {b_pos} (>1) "
             f"(start-snap anomaly — review)")
+    # coords is only needed for the crow-flies revisit check; the caller fetches geometry
+    # (a second OSRM query) lazily, ONLY when B re-appears, so coords is None on the common
+    # no-revisit path (max_excursion stays 0 and is never consulted).
+    b_lat, b_lon = (coords[b_pos][1], coords[b_pos][0]) if coords is not None else (None, None)
+    last_b = b_pos
+    max_excursion = 0.0
     for i in range(b_pos + 1, len(node_seq)):
         nid = node_seq[i]
         if nid == b_id:
-            raise ValueError(
-                f"[B→X] route from boundary {b_id} revisits it at position {i} (review)")
+            if max_excursion > REVISIT_MAX_LOOP_M:
+                raise ValueError(
+                    f"[B→X] route from boundary {b_id} returns to it at position {i} "
+                    f"after a {max_excursion:.0f} m excursion "
+                    f"(> {REVISIT_MAX_LOOP_M:.0f} m — review)")
+            last_b = i                         # benign junction loop — price it out
+            max_excursion = 0.0
+            continue
         if nid in boundary_ids:                # a different boundary B′ appears
             return None                        # B→B′ + B′→X covers it → discard
-    return True                                # B is the sole/last boundary → keep
+        if coords is not None:
+            max_excursion = max(max_excursion,
+                                _haversine_m(b_lat, b_lon, coords[i][1], coords[i][0]))
+    return total_dur - sum(ann_durs[:last_b])  # keep; strip the start junction loop
 
 
 def _ext_ext_transits_core(node_seq, boundary_ids, internal_ids):
@@ -340,7 +400,7 @@ for xi, ext in enumerate(external_nodes):
         result = osrm_route(xlat, xlon, blat, blon)
         if result is None:
             continue
-        node_seq, total_dur, ann_durs, snaps = result
+        node_seq, total_dur, ann_durs, snaps, coords = result
 
         # Log snap distance for first boundary query per external node
         if first_snap is None:
@@ -392,19 +452,29 @@ for bi, bnode in enumerate(boundary_nodes):
         result = osrm_route(blat, blon, xlat, xlon)
         if result is None:
             continue
-        node_seq, total_dur, ann_durs, snaps = result
+        node_seq, total_dur, ann_durs, snaps, coords = result
 
         if len(node_seq) < 2:
             continue
 
+        # B re-appears (e.g. it sits on a roundabout) → re-query WITH geometry so the
+        # crow-flies revisit check has per-node coords.  Rare, so the common no-revisit
+        # path stays geometry-free (geometry adds ~1.5× per query).
+        if node_seq.count(bid) > 1:
+            result = osrm_route(blat, blon, xlat, xlon, want_geometry=True)
+            if result is None:
+                continue
+            node_seq, total_dur, ann_durs, snaps, coords = result
+
         # Keep only if B is the last boundary departed (no other boundary appears);
-        # B→B'+B'→X covers the rest.  Fails loud on origin-snap faults / B revisits.
-        if _classify_bx_link(node_seq, bid, boundary_node_ids) is None:
+        # B→B'+B'→X covers the rest.  Fails loud on origin-snap faults / far revisits.
+        dur = _classify_bx_link(node_seq, ann_durs, total_dur, coords, bid, boundary_node_ids)
+        if dur is None:
             continue
         bnd_external_links.append({
             "from_boundary": bid,
             "to_ext":        xid,
-            "duration_s":    round(total_dur, 2),
+            "duration_s":    round(dur, 2),
         })
 
     if (bi + 1) % 5 == 0:
@@ -428,16 +498,24 @@ for b1 in boundary_nodes:
         result = osrm_route(b1["lat"], b1["lon"], b2["lat"], b2["lon"])
         if result is None:
             continue
-        node_seq, total_dur, ann_durs, snaps = result
+        node_seq, total_dur, ann_durs, snaps, coords = result
 
         if len(node_seq) < 2:
             continue
+
+        # B1 re-appears (e.g. it sits on a roundabout) → re-query WITH geometry for the
+        # crow-flies revisit check.  Rare, so the common path stays geometry-free.
+        if node_seq.count(b1["id"]) > 1:
+            result = osrm_route(b1["lat"], b1["lon"], b2["lat"], b2["lon"], want_geometry=True)
+            if result is None:
+                continue
+            node_seq, total_dur, ann_durs, snaps, coords = result
 
         # Keep only genuine EXTERIOR shortcuts: B2 is the first boundary reached after
         # leaving B1, and the route never dips into the core interior.  Handles the
         # start/dest coordinate-snap cases explicitly and fails loud on anomalies.
         seg_dur = _classify_bb_shortcut(
-            node_seq, ann_durs, total_dur, b1["id"], b2["id"],
+            node_seq, ann_durs, total_dur, coords, b1["id"], b2["id"],
             boundary_node_ids, internal_node_ids)
         if seg_dur is None:
             continue
@@ -480,7 +558,7 @@ for xi, ext1 in enumerate(external_nodes):
                             ext2["centroid_lat"], ext2["centroid_lon"])
         if result is None:
             continue   # no road route at all (e.g. across water) → no denom term
-        node_seq, total_dur, ann_durs, snaps = result
+        node_seq, total_dur, ann_durs, snaps, coords = result
 
         if _ext_ext_transits_core(node_seq, boundary_node_ids, internal_node_ids):
             dsts.append(ext2["id"])
