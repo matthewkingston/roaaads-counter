@@ -477,17 +477,23 @@ def iterate(name, tld, edges, tc, width, geom, doubly, single=False):
         med = lambda k: float(np.median([t[k] for t in trace]))            # noqa: E731
         di = {"w": med("w"), "tau_s_s": med("tau_s_s"), "tau_l_s": med("tau_l_s")}
     # Anchor statistical covariance in internal coords (log τs, log τl, logit w) — the prior-width
-    # source.  Converged: delta-method the winning double-fit Jacobian cov.  Weak tail: single-fit
-    # cov is invalid (bimodal), so use the robust trace-spread (τl/w loose, τs tight — derived, not
-    # asserted).  Single-exp diagnostic path carries no double cov ⇒ floor-only downstream.
+    # source.  We do NOT trust `converged` (last-step Δ) to certify the Jacobian: a locally-converged
+    # but globally bimodal fit (e.g. school_tertiary, whose τs bounces 30↔740 across the trace) has a
+    # deceptively tight single-point Jacobian.  So combine BOTH — the delta-methoded Jacobian cov
+    # (keeps the w↔τl correlation) with a PSD-safe per-coordinate floor at the robust trace-MAD
+    # spread: add only the diagonal excess where the trace is wider than the local Jacobian.  No-op
+    # for the clean components (trace agrees); lifts a fragile head/tail to its honest trace width.
     if single:
         cov_int, method = np.zeros((3, 3)), "single_exp"
-    elif converged:
-        cov_int, method = _cov_internal_from_fit(last_cov3, di["w"], di["tau_s_s"], di["tau_l_s"]), "jacobian"
-        if cov_int is None:
-            cov_int, method = _cov_internal_from_trace(trace), "trace_mad"
     else:
-        cov_int, method = _cov_internal_from_trace(trace), "trace_mad"
+        C_jac = _cov_internal_from_fit(last_cov3, di["w"], di["tau_s_s"], di["tau_l_s"])
+        C_tr = _cov_internal_from_trace(trace)                       # diagonal, robust (MAD→σ)
+        if C_jac is None:
+            cov_int, method = C_tr, "trace_mad"
+        else:
+            excess = np.maximum(0.0, np.diag(C_tr) - np.diag(np.asarray(C_jac, float)))
+            cov_int = np.asarray(C_jac, float) + np.diag(excess)
+            method = "jacobian+trace_floor" if np.any(excess > 1e-12) else "jacobian"
     cov_block = {"method": method, "coords": INTERNAL_COORDS,
                  "cov": np.asarray(cov_int, float).tolist()}
     return {"p0": p0, "converged": converged, "tail_weakly_identified": not converged,
