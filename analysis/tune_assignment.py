@@ -325,38 +325,27 @@ k_prior_std_retail  = _k_prior_std.get("retail",  0.5)
 k_prior_std_school = {lvl: _k_prior_std.get(f"school_{lvl}", 0.5) for lvl in SCHOOL_LEVELS}
 
 grav_ref = config.get("gravity_ref", {})
-grav_lam_raw = config.get("gravity_lambda", 0.0)
 # Gravity params: a fully-tunable DOUBLE-EXP willingness per component for the mode-substitution
 # × willingness kernel f(c)=driveshare(equiv_miles(c))·[w·exp(−c/τs)+(1−w)·exp(−c/τl)].  The rise +
 # speed are shared/data-derived (model._modesub_kernel); the 3 willingness params {τs, τl, w} per
 # component are tuned — 6 components incl. 3 INDEPENDENT school levels ⇒ 18 params (9 with no school
-# demand).  Anchored to the TLD/n_Ire divide (analysis/fit_kernel.py → tuner_config gravity_ref,
-# seeded by sync_kernel_anchor.py) via a light L2 pull (gravity_lambda).
+# demand), ALL free (no hard pins).  Anchored to the constrained kernel fit (analysis/iterate_kernel.py
+# → tuner_config gravity_ref + gravity_stat_cov, seeded by sync_kernel_anchor.py) and regularized by a
+# per-component Gaussian prior (block precision Λ_c, assembled below).
 _w_components = ["res", "commute", "retail"]
 if _has_school:
     _w_components += [f"school_{lvl}" for lvl in SCHOOL_LEVELS]
 _all_wkeys = [f"{c}_{s}" for c in _w_components for s in ("taus", "taul", "w")]
+_grav_param_names = list(_all_wkeys)          # ALL free (gravity_fixed retired) — the Powell vector
 
 # Sane fallbacks for any key missing from gravity_ref (the anchor normally supplies all 18).
 _WDEFAULTS = {"taus": 600.0, "taul": 3000.0, "w": 0.9}
 def _wdefault(key):
     return _WDEFAULTS[key.rsplit("_", 1)[1]]
 
-# ── Config-driven fix/unfix (tuner_config "gravity_fixed") ────────────────────────────────────
-# Keys listed in gravity_fixed are HELD at their gravity_ref (anchor) value and EXCLUDED from the
-# Powell vector — a real dimensionality reduction (faster tune, no flat-direction wander for those
-# params), not a fake high-λ pin.  The fixed values still enter the kernel via _build_willingness;
-# only the FREE keys are optimized + regularized.  Default: nothing fixed (all 18 free).
-_fixed_keys = [k for k in config.get("gravity_fixed", []) if k in _all_wkeys]
-_bad_fixed  = [k for k in config.get("gravity_fixed", []) if k not in _all_wkeys]
-if _bad_fixed:
-    print(f"  WARNING: gravity_fixed has unknown keys (ignored): {_bad_fixed}")
-_grav_param_names = [k for k in _all_wkeys if k not in _fixed_keys]        # FREE = Powell vector
-_fixed_nat = {k: float(grav_ref.get(k, _wdefault(k))) for k in _fixed_keys}
-
 # Per-key transform between natural units and the unconstrained internal coords Powell optimizes:
-# log for the two τ's (positivity), logit for w (∈(0,1)).  Independent per key (so ANY subset can be
-# fixed/freed); τl≥τs is enforced in model.willingness_from_flat (a clamp), not by coupling coords.
+# log for the two τ's (positivity), logit for w (∈(0,1)).  τl≥τs is enforced in
+# model.willingness_from_flat (a clamp), not by coupling coords.
 def _to_internal(key, val):
     if key.endswith("_w"):
         v = min(max(float(val), 1e-6), 1.0 - 1e-6)
@@ -368,24 +357,31 @@ def _from_internal(key, x):
         return 1.0 / (1.0 + math.exp(-max(min(x, 100.0), -100.0)))
     return math.exp(x)
 
-def _build_willingness(free_nat):
-    """Merge the FREE natural params (dict) with the fixed-at-anchor ones → the
-    {component:(w,τs,τl)} willingness dict (model.willingness_from_flat clamps τl≥τs)."""
-    flat = dict(_fixed_nat); flat.update(free_nat)
-    return willingness_from_flat(flat)
-
-# Derive the ref + lambda vectors (internal coords) over the FREE keys only.
-log_grav_ref = np.array([_to_internal(k, grav_ref.get(k, _wdefault(k)))
-                         for k in _grav_param_names])
-if isinstance(grav_lam_raw, dict):
-    log_grav_lam = np.array([grav_lam_raw.get(k, 0.0) for k in _grav_param_names])
-else:
-    log_grav_lam = np.full(len(_grav_param_names), float(grav_lam_raw))
-
-print(f"  gravity: {len(_grav_param_names)} free willingness params"
-      + (f" + {len(_fixed_keys)} fixed at anchor: {_fixed_keys}" if _fixed_keys else " (all free)"))
-
+# Anchor in internal coords over all willingness keys.
+log_grav_ref = np.array([_to_internal(k, grav_ref.get(k, _wdefault(k))) for k in _grav_param_names])
 n_gravity = len(_grav_param_names)
+
+# ── Anchor prior: per-component precision block Λ_c = (Cov_stat + Cov_epi)⁻¹ ───────────────────────
+# Replaces the old scalar/per-key gravity_lambda.  Cov_stat (gravity_stat_cov — internal coords
+# log τs/log τl/logit w, from the fit's Jacobian or trace-spread) is the DERIVED width; Cov_epi is the
+# owned head-tight/tail-loose floor diag(head_σ², tail_σ², tail_σ²) — the two anchor_floor knobs.
+# Adding covariances is a PSD floor (width ≥ floor in every direction); the w↔τl fit correlation makes
+# each Λ_c a full 3×3, so the penalty is a per-component quadratic form (block-diagonal Λ_full).  Net:
+# head floor-dominated (σ_stat tiny ⇒ λ≈30, firm); tail data-dominated (σ_stat large ⇒ looser, floor a
+# backstop against the τl→∞ / w→1 runaway).  _grav_param_names is component-major (3 contiguous keys
+# per component in _w_components order), so component i occupies slice [3i:3i+3].
+_stat_cov = config.get("gravity_stat_cov", {})
+_floor    = config.get("anchor_floor", {"head_sigma": 0.182, "tail_sigma": 0.693})
+_cov_epi  = np.diag([_floor["head_sigma"] ** 2, _floor["tail_sigma"] ** 2, _floor["tail_sigma"] ** 2])
+Lambda_full = np.zeros((n_gravity, n_gravity))
+for _i, _c in enumerate(_w_components):
+    _cs  = np.asarray(_stat_cov.get(_c, np.zeros((3, 3))), float)          # internal (τs, τl, w)
+    _Lc  = np.linalg.pinv(_cs + _cov_epi)
+    Lambda_full[3 * _i:3 * _i + 3, 3 * _i:3 * _i + 3] = 0.5 * (_Lc + _Lc.T)  # symmetrize (numerical)
+
+print(f"  gravity: {n_gravity} free willingness params (all free), block anchor prior "
+      f"(head_σ={_floor['head_sigma']}, tail_σ={_floor['tail_sigma']}); "
+      f"eff. per-key λ=diag={np.round(np.diag(Lambda_full), 1).tolist()}")
 
 # External node weights come from node_weights.json (census data, fixed — not tuned).
 
@@ -889,11 +885,11 @@ t0         = time.time()
 
 
 def _unpack_gravity(log_params):
-    """Unpack the internal FREE-param vector → the full willingness dict {component: (w, τs, τl)}
-    (free params from log_params, fixed params from the anchor; single source of index layout,
-    shared by objective / probe / final eval)."""
-    free_nat = {k: _from_internal(k, log_params[i]) for i, k in enumerate(_grav_param_names)}
-    return _build_willingness(free_nat)
+    """Unpack the internal param vector → the willingness dict {component: (w, τs, τl)}
+    (all 18 params free; single source of index layout, shared by objective / probe / final eval;
+    model.willingness_from_flat clamps τl≥τs)."""
+    flat = {k: _from_internal(k, log_params[i]) for i, k in enumerate(_grav_param_names)}
+    return willingness_from_flat(flat)
 
 
 def objective(log_params, log_ref=None):
@@ -926,8 +922,9 @@ def objective(log_params, log_ref=None):
         _pred_w)
     chi2 = chi2_data + float(_pois_dev.sum())
 
-    if np.any(log_grav_lam > 0):
-        chi2 += float(np.dot(log_grav_lam, (log_params[:n_gravity] - log_grav_ref) ** 2))
+    # Per-component Gaussian anchor prior: Σ_c Δφ_cᵀ Λ_c Δφ_c = Δφᵀ Λ_full Δφ (block-diagonal).
+    _dphi = log_params[:n_gravity] - log_grav_ref
+    chi2 += float(_dphi @ Lambda_full @ _dphi)
 
     eval_count[0] += 1
     if chi2 < best["chi2"]:
@@ -1033,9 +1030,8 @@ if _sweep_target:
         print(f"SWEEP={_sweep_target!r} unknown; use one of {_w_components}"); sys.exit(1)
     _sweep_key = f"{_sweep_target}_taul"          # the sub-param swept (tail scale)
     def _willingness_with(key, val):
-        """Full willingness with `key` overridden to `val` (works whether key is free or fixed)."""
-        flat = dict(_fixed_nat)
-        flat.update({k: _from_internal(k, log_p0[i]) for i, k in enumerate(_grav_param_names)})
+        """Full willingness with `key` overridden to `val` (all params free)."""
+        flat = {k: _from_internal(k, log_p0[i]) for i, k in enumerate(_grav_param_names)}
         flat[key] = val
         return willingness_from_flat(flat)
     print(f"\n=== SWEEP {_sweep_target} τl (others fixed at start; no writes) ===")
@@ -1367,7 +1363,9 @@ history_entry = {
         "K_prior_std_commute":  k_prior_std_commute,
         "K_prior_std_retail":   k_prior_std_retail,
         **{f"K_prior_std_school_{lvl}": k_prior_std_school[lvl] for lvl in SCHOOL_LEVELS},
-        "gravity_lambda":       grav_lam_raw,
+        # Anchor prior: the two floor knobs + the effective per-key λ (diag of the block precision).
+        "anchor_floor":         _floor,
+        "gravity_eff_lambda":   dict(zip(_grav_param_names, np.round(np.diag(Lambda_full), 4).tolist())),
         "lambda":               lam,
         "fast":                 fast,
         "temporal_profile":     "nts_pinned",

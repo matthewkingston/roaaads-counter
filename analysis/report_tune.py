@@ -175,7 +175,9 @@ def _section_by_link(e):
 def _section_gravity(e, prev_entry, config):
     params      = e["params"]
     grav_ref    = config.get("gravity_ref", {})
-    grav_lam_raw = config.get("gravity_lambda", 0.0)
+    _hp          = e.get("tuner_hyperparams", {})
+    anchor_floor = _hp.get("anchor_floor", {})
+    grav_eff_lam = _hp.get("gravity_eff_lambda", {})   # effective per-key λ = diag of the block precision
 
     # σ in log-space = 1/sqrt(lam); pull = log(final/ref) * sqrt(lam)
     def _log_pull(val, ref, lam):
@@ -184,9 +186,7 @@ def _section_gravity(e, prev_entry, config):
         return math.log(val / ref) * math.sqrt(lam)
 
     def _param_lam(k):
-        if isinstance(grav_lam_raw, dict):
-            return grav_lam_raw.get(k, 0.0)
-        return float(grav_lam_raw)
+        return float(grav_eff_lam.get(k, 0.0)) if isinstance(grav_eff_lam, dict) else 0.0
 
     # Determine initial gravity: prefer entry's own field, else previous entry, else grav_ref
     init_src = "run start"
@@ -274,17 +274,14 @@ def _section_gravity(e, prev_entry, config):
         f"  gravity_ref: " +
         "  ".join(f"{k}={v}" for k, v in grav_ref.items())
     )
-    if grav_lam_raw and grav_lam_raw != 0:
-        if isinstance(grav_lam_raw, dict):
-            lam_str = "  ".join(f"{k}={v}" for k, v in grav_lam_raw.items())
-            lines.append(f"  gravity_lambda: {lam_str}")
-            lines.append(f"  (pull = log(final/ref)/√lambda_param)")
-        else:
-            sigma_log = 1.0 / math.sqrt(float(grav_lam_raw))
-            lines.append(
-                f"  gravity_lambda={grav_lam_raw}  "
-                f"→ L2 σ_log={sigma_log:.3f} (pull = log(final/ref)/σ_log)"
-            )
+    if anchor_floor:
+        lines.append(f"  anchor_floor: head_σ={anchor_floor.get('head_sigma')}  "
+                     f"tail_σ={anchor_floor.get('tail_sigma')}   "
+                     f"(prior Λ_c = (Cov_stat + diag(head_σ², tail_σ², tail_σ²))⁻¹)")
+    if grav_eff_lam:
+        lam_str = "  ".join(f"{k}={v}" for k, v in grav_eff_lam.items())
+        lines.append(f"  gravity_eff_lambda (diag Λ, head-tight/tail-loose): {lam_str}")
+        lines.append(f"  (pull = log(final/ref)·√λ_eff)")
     lines.append("")
     return lines
 

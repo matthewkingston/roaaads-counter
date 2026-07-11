@@ -1,21 +1,24 @@
-"""Seed the tuner's willingness anchor from the TLD ÷ n_Ire(t) kernel fit.
+"""Seed the tuner's willingness anchor + its uncertainty from the constrained kernel fit.
 
-Reads the per-component double-exp willingness fit (`analysis/kernel_fit.json`, from
-`analysis/fit_kernel.py`) and writes the 18 flat willingness keys into
-`simulation/tuner_config.json`'s `gravity_ref` — the anchor / start point + L2-pull target
-for `tune_assignment.py`.  Also (re)initialises `gravity_lambda` to a light uniform value on
-those 18 keys if it isn't already willingness-keyed, and strips the dead single-exp
-`TAU_*`/`THETA`/`TAU_school` keys.
+Reads the per-component constrained double-exp willingness fit (`analysis/kernel_fit_constrained.json`,
+from `analysis/iterate_kernel.py`) and writes into `simulation/tuner_config.json`:
+  * `gravity_ref` — the 18 flat willingness keys `{comp}_taus/_taul/_w`, the anchor / start point
+    for `tune_assignment.py`;
+  * `gravity_stat_cov` — the per-component 3×3 statistical covariance `Cov_stat` of the anchor, in
+    the tuner's internal coords (log τs, log τl, logit w), from the fit's `double_iterated_cov`
+    (Jacobian for converged components, robust trace-spread for the weakly-identified school tails).
+
+The tuner combines `Cov_stat` with the `anchor_floor` (two scalars — a head-tight / tail-loose
+epistemic floor) into the per-component prior precision block `Λ_c = (Cov_stat + Cov_epi)⁻¹`; the
+old scalar/per-key `gravity_lambda` regularizer and the hard `gravity_fixed` pins are RETIRED and
+stripped here.  `anchor_floor` is source config: seeded to defaults only if absent (user edits
+preserved), then adjustable by hand — one edit + re-tune, no re-sync.
 
 The willingness kernel is `f(c)=driveshare(equiv_miles(c),comp)·[w·exp(−c/τs)+(1−w)·exp(−c/τl)]`;
 only the shape `{w, τs, τl}` is carried (the fit's amplitude `A` is absorbed by K in the
 production constraint).
 
-**PATCH POINT for the constrained n_Ire iteration:** when that agent delivers its improved
-double-exp params, repoint `ANCHOR_FILE` and adjust `_read_anchor` to its format — everything
-downstream keys off the 18 `{comp}_taus/_taul/_w` names in `model.willingness_keys()`.
-
-Usage:  python3 simulation/sync_kernel_anchor.py [--lambda 0.2]
+Usage:  python3 simulation/sync_kernel_anchor.py [--head-sigma 0.182] [--tail-sigma 0.693]
 """
 
 import argparse
@@ -28,35 +31,37 @@ from model import WILLINGNESS_COMPONENTS, willingness_keys
 
 ANCHOR_FILE = "analysis/kernel_fit_constrained.json"   # constrained (1/D_i) iterated double-exp
 TUNER_CONFIG = "simulation/tuner_config.json"
-DEFAULT_LAMBDA = 0.2                            # light anchor-reg (per willingness param, internal coords)
+DEFAULT_HEAD_SIGMA = 0.182     # ±20% on τs  (internal log-coord 1σ) → λ_head ≈ 30
+DEFAULT_TAIL_SIGMA = 0.693     # ×÷2 on τl and on tail-mass (1−w)    → λ_tail ≈ 2.1
 
 
 def _read_anchor(path):
-    """Return {component: (w, τs, τl)} from the constrained-n_Ire kernel-fit JSON's per-component
-    `double_iterated` block (fixed-point 1/D_i iteration of fit_kernel).  Adjust this one function
-    if the anchor source/format changes.  NB: school_postprimary/tertiary carry
-    `tail_weakly_identified=True` (thin long-tail TLD ⇒ τl is the robust per-iteration median, not
-    converged); we use them as-is for now — the tuner's light anchor-reg keeps those τl near the
-    median, and per-key gravity_lambda can pin them harder later if a tune lets them run."""
+    """Return ({component: (w, τs, τl)}, {component: 3×3 Cov_stat}) from the constrained kernel-fit
+    JSON's per-component `double_iterated` (anchor) + `double_iterated_cov` (internal-coord σ_stat)
+    blocks.  Adjust this one function if the anchor source/format changes.  NB: school_postprimary/
+    tertiary carry `tail_weakly_identified=True` (thin long-tail TLD) — their `double_iterated_cov`
+    is the robust trace-spread (loose τl/w), so the tuner's derived prior lets them run."""
     d = json.load(open(path))
     comps = d["components"]
-    out = {}
+    anchor, cov = {}, {}
     for c in WILLINGNESS_COMPONENTS:
         b = comps[c]["double_iterated"]
-        out[c] = (float(b["w"]), float(b["tau_s_s"]), float(b["tau_l_s"]))
-    return out
+        anchor[c] = (float(b["w"]), float(b["tau_s_s"]), float(b["tau_l_s"]))
+        cov[c] = comps[c]["double_iterated_cov"]["cov"]      # 3×3, coords (log τs, log τl, logit w)
+    return anchor, cov
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lambda", dest="lam", type=float, default=DEFAULT_LAMBDA,
-                    help="anchor-reg strength written to gravity_lambda if not already willingness-keyed")
+    ap.add_argument("--head-sigma", dest="head_sigma", type=float, default=DEFAULT_HEAD_SIGMA,
+                    help="anchor_floor head σ (τs) seeded only if anchor_floor is absent")
+    ap.add_argument("--tail-sigma", dest="tail_sigma", type=float, default=DEFAULT_TAIL_SIGMA,
+                    help="anchor_floor tail σ (τl, w) seeded only if anchor_floor is absent")
     args = ap.parse_args()
 
-    anchor = _read_anchor(ANCHOR_FILE)
-    keys = willingness_keys()
+    anchor, cov = _read_anchor(ANCHOR_FILE)
 
-    # Flat gravity_ref (natural units).
+    # Flat gravity_ref (natural units) + per-component internal-coord statistical covariance.
     ref = {}
     for c in WILLINGNESS_COMPONENTS:
         w, tau_s, tau_l = anchor[c]
@@ -66,24 +71,27 @@ def main():
 
     cfg = json.load(open(TUNER_CONFIG))
     cfg["gravity_ref"] = ref
-    # (Re)seed gravity_lambda on the willingness keys only if it isn't already (preserve a
-    # hand-tuned per-key lambda across re-syncs; migrate away from the dead TAU_* keys otherwise).
-    lam = cfg.get("gravity_lambda")
-    if not (isinstance(lam, dict) and all(k in lam for k in keys)):
-        cfg["gravity_lambda"] = {k: args.lam for k in keys}
-        print(f"  gravity_lambda (re)initialised to {args.lam} on all 18 willingness keys")
+    cfg["gravity_stat_cov"] = {c: cov[c] for c in WILLINGNESS_COMPONENTS}
+    # anchor_floor = the two epistemic-trust knobs (source config); seed defaults only if absent so
+    # hand edits survive a re-sync.  Retire the old regularizers.
+    if "anchor_floor" not in cfg:
+        cfg["anchor_floor"] = {"head_sigma": args.head_sigma, "tail_sigma": args.tail_sigma}
+        print(f"  anchor_floor seeded: head_sigma={args.head_sigma} tail_sigma={args.tail_sigma}")
     else:
-        # keep existing per-key values but drop any stale non-willingness keys
-        cfg["gravity_lambda"] = {k: lam[k] for k in keys}
-        print("  gravity_lambda: kept existing per-key values (stale keys dropped)")
+        print(f"  anchor_floor: kept existing {cfg['anchor_floor']}")
+    for dead in ("gravity_lambda", "gravity_fixed"):
+        if cfg.pop(dead, None) is not None:
+            print(f"  stripped retired key: {dead}")
 
     with open(TUNER_CONFIG, "w") as f:
         json.dump(cfg, f, indent=2)
 
-    print(f"Seeded gravity_ref from {ANCHOR_FILE} → {TUNER_CONFIG}")
+    print(f"Seeded gravity_ref + gravity_stat_cov from {ANCHOR_FILE} → {TUNER_CONFIG}")
     for c in WILLINGNESS_COMPONENTS:
         w, tau_s, tau_l = anchor[c]
-        print(f"  {c:20s} w={w:.3f}  τs={tau_s:.0f}s  τl={tau_l:.0f}s")
+        sd = [cov[c][i][i] ** 0.5 for i in range(3)]         # σ per internal coord (τs, τl, w)
+        print(f"  {c:20s} w={w:.3f}  τs={tau_s:.0f}s  τl={tau_l:.0f}s   "
+              f"σ_stat(logτs,logτl,logitw)=({sd[0]:.2f},{sd[1]:.2f},{sd[2]:.2f})")
 
 
 if __name__ == "__main__":

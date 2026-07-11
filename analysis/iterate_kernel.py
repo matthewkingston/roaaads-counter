@@ -110,7 +110,7 @@ def fit_double_warm(t, W, wts, x0):
         return (np.log(np.clip(model, 1e-300, None)) - logW) * sw
 
     starts = [x0, [A0, 0.6, 300.0, 4000.0], [A0, 0.9, 200.0, 1500.0], [A0, 0.97, 150.0, 800.0]]
-    best, best_cost = None, np.inf
+    best, best_r, best_cost = None, None, np.inf
     for s in starts:
         s = [s[0], min(max(s[1], 1e-3), 1 - 1e-3), max(s[2], 30.0), max(s[3], 100.0)]
         try:
@@ -118,11 +118,62 @@ def fit_double_warm(t, W, wts, x0):
         except Exception:
             continue
         if r.cost < best_cost:
-            best_cost, best = r.cost, r.x
+            best_cost, best, best_r = r.cost, r.x, r
     logA, wgt, ts, tl = best
-    if ts > tl:
+    # Fit covariance of the winning basin, in NATURAL params (logA, w, τs, τl):
+    # Cov = s²·(JᵀWJ)⁻¹, s² = 2·cost/(N−4).  best_r.jac already carries √wts (resid multiplies
+    # by sw), so jacᵀjac == JᵀWJ.  pinv (SVD) because params sit on bounds (w≈1, τs at the 30 s
+    # bound) ⇒ near-singular; the degenerate directions correctly get a large variance (which the
+    # tail floor backstops downstream).
+    dof = max(len(t) - 4, 1)
+    cov4 = (2.0 * float(best_r.cost) / dof) * np.linalg.pinv(best_r.jac.T @ best_r.jac)
+    if ts > tl:                                                   # order fast head then fat tail
         ts, tl, wgt = tl, ts, 1.0 - wgt
-    return float(logA), float(wgt), float(ts), float(tl)
+        # remap cov to the RETURNED param order: w→1−w (sign flip on that coord), τs↔τl (permute)
+        M = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, -1.0, 0.0, 0.0],
+                      [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0]])
+        cov4 = M @ cov4 @ M.T
+    cov3_nat = cov4[np.ix_([1, 2, 3], [1, 2, 3])]                 # drop logA → (w, τs, τl)
+    return float(logA), float(wgt), float(ts), float(tl), cov3_nat
+
+
+# ── Anchor-uncertainty helpers: per-component σ_stat in internal coords (log τs, log τl, logit w),
+#    matching model.willingness_keys() suffix order (taus, taul, w).  Consumed by sync_kernel_anchor
+#    → tuner_config gravity_stat_cov, combined with the anchor_floor there and inverted to the tuner's
+#    per-component prior precision block Λ_c.
+INTERNAL_COORDS = ["log_taus", "log_taul", "logit_w"]
+
+
+def _logit(w):
+    w = min(max(float(w), 1e-6), 1.0 - 1e-6)
+    return np.log(w / (1.0 - w))
+
+
+def _cov_internal_from_fit(cov3_nat, w, ts, tl):
+    """Delta-method a natural-coord fit covariance over (w, τs, τl) into internal coords
+    (log τs, log τl, logit w).  D is the diagonal transform Jacobian (∂log τ/∂τ = 1/τ,
+    ∂logit w/∂w = 1/(w(1−w))).  Returns a 3×3 array, or None if no cov was captured."""
+    if cov3_nat is None:
+        return None
+    C = np.asarray(cov3_nat, float)[np.ix_([1, 2, 0], [1, 2, 0])]   # (w,τs,τl) → (τs,τl,w)
+    w = min(max(float(w), 1e-6), 1.0 - 1e-6)
+    D = np.diag([1.0 / max(ts, 1e-9), 1.0 / max(tl, 1e-9), 1.0 / (w * (1.0 - w))])
+    return D @ C @ D.T
+
+
+def _cov_internal_from_trace(trace):
+    """Robust DIAGONAL internal-coord covariance from the per-iteration trace spread (MAD→σ via
+    ×1.4826) — for weakly-identified tails where the single-fit Jacobian is invalid (bimodal τl).
+    τl/w swing across iterations (loose); τs stays stable (tight)."""
+    def mad_sigma(vals):
+        v = np.asarray([x for x in vals if np.isfinite(x)], float)
+        if len(v) < 2:
+            return 0.0
+        return 1.4826 * float(np.median(np.abs(v - np.median(v))))
+    s_ts = mad_sigma([np.log(max(t["tau_s_s"], 1e-9)) for t in trace])
+    s_tl = mad_sigma([np.log(max(t["tau_l_s"], 1e-9)) for t in trace])
+    s_w  = mad_sigma([_logit(t["w"]) for t in trace])
+    return np.diag([s_ts ** 2, s_tl ** 2, s_w ** 2])
 
 
 # ── Phase A: sample + route + cache (once per purpose) ─────────────────────────
@@ -382,6 +433,7 @@ def iterate(name, tld, edges, tc, width, geom, doubly, single=False):
         p = _p0(name)
     p0 = {k: p[k] for k in ("w", "tau_s_s", "tau_l_s")}
     trace = []
+    last_cov3 = None                                                  # natural-coord fit cov (double path)
     for k in range(MAX_ITERS):
         Facc = kernel_f(name, p, acc_tf)                              # per accessibility pair
         if doubly:                                                    # Furness a,b → doubly Ñ
@@ -402,7 +454,7 @@ def iterate(name, tld, edges, tc, width, geom, doubly, single=False):
             model = lambda tt, _a=logA, _t=tau: np.exp(_a) * np.exp(-tt / _t)     # noqa: E731
         else:
             x0 = [p["logA"], p["w"], p["tau_s_s"], p["tau_l_s"]]       # warm-start (stay in-basin)
-            logA, w, ts, tl = fit_double_warm(tc[dom], W[dom], effn[dom], x0)
+            logA, w, ts, tl, last_cov3 = fit_double_warm(tc[dom], W[dom], effn[dom], x0)
             new = {"logA": logA, "w": w, "tau_s_s": ts, "tau_l_s": tl}
             model = lambda tt, _a=logA, _w=w, _s=ts, _l=tl: \
                 np.exp(_a) * (_w * np.exp(-tt / _s) + (1 - _w) * np.exp(-tt / _l))   # noqa: E731
@@ -424,8 +476,23 @@ def iterate(name, tld, edges, tc, width, geom, doubly, single=False):
         # MEDIAN is a robust identifiable-basin estimate (τs stays stable regardless).
         med = lambda k: float(np.median([t[k] for t in trace]))            # noqa: E731
         di = {"w": med("w"), "tau_s_s": med("tau_s_s"), "tau_l_s": med("tau_l_s")}
+    # Anchor statistical covariance in internal coords (log τs, log τl, logit w) — the prior-width
+    # source.  Converged: delta-method the winning double-fit Jacobian cov.  Weak tail: single-fit
+    # cov is invalid (bimodal), so use the robust trace-spread (τl/w loose, τs tight — derived, not
+    # asserted).  Single-exp diagnostic path carries no double cov ⇒ floor-only downstream.
+    if single:
+        cov_int, method = np.zeros((3, 3)), "single_exp"
+    elif converged:
+        cov_int, method = _cov_internal_from_fit(last_cov3, di["w"], di["tau_s_s"], di["tau_l_s"]), "jacobian"
+        if cov_int is None:
+            cov_int, method = _cov_internal_from_trace(trace), "trace_mad"
+    else:
+        cov_int, method = _cov_internal_from_trace(trace), "trace_mad"
+    cov_block = {"method": method, "coords": INTERNAL_COORDS,
+                 "cov": np.asarray(cov_int, float).tolist()}
     return {"p0": p0, "converged": converged, "tail_weakly_identified": not converged,
-            "n_iter": len(trace), "double_iterated": di, "trace": trace}
+            "n_iter": len(trace), "double_iterated": di, "double_iterated_cov": cov_block,
+            "trace": trace}
 
 
 # ── driver ────────────────────────────────────────────────────────────────────
@@ -517,8 +584,8 @@ def _write(results, tld, doubly_set):
     }, "components": {}}
     for name, r in results.items():
         out["components"][name] = {k: r[k] for k in
-                                   ("constraint", "p0", "double_iterated", "converged",
-                                    "tail_weakly_identified", "n_iter", "trace")}
+                                   ("constraint", "p0", "double_iterated", "double_iterated_cov",
+                                    "converged", "tail_weakly_identified", "n_iter", "trace")}
     json.dump(out, open(OUT_JSON, "w"), indent=2)
     print(f"\nSaved -> {OUT_JSON}")
 
