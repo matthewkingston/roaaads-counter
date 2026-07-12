@@ -1,27 +1,41 @@
 """
-Fit diagnostic: true trips-per-capita for the core domain.
+Fit diagnostic: true trips-per-capita for core residents.
 
 Broad sanity check on the deployed gravity model.  Sums the modelled daily
-car-driver trips whose journey STARTS OR ENDS inside the core network, by trip
-category and overall, and divides by the core area's resident POPULATION (a true
-per-capita — never by producers/attractors).  Restricting to core-touching trips
-keeps the number inside the well-modelled domain; dividing by core population
-makes it directly comparable to NI travel-survey headline rates (TSNI car-driver
-trips/person/day by purpose).  A per-capita far from survey values flags a
-generation/distribution problem before any spatial detail is examined.
+car-driver trips of CORE RESIDENTS — trips whose HOME end lies inside the core
+network — by trip category and overall, divided by the core area's resident
+POPULATION (a true per-capita, never by producers/attractors).  Anchoring to the
+home end keeps the number inside the well-modelled domain and makes it directly
+comparable to NI travel-survey headline rates (TSNI car-driver trips/person/day
+by purpose).  A per-capita far from survey values flags a generation/distribution
+problem before any spatial detail is examined.
+
+Home-anchored counting.  Each modelled trip is one directed leg.  Its "home end"
+is the producer for an outbound (home→activity) leg and the attractor for a
+return (activity→home) leg:
+  out  = outbound leg with ORIGIN in core (home produces the trip).  Pinned by the
+         production constraint ⇒ out ≈ ρ_c·K_c (× local producer-density ratio).
+  ret  = return leg with DESTINATION in core (home receives the trip).
+  total (core-resident journeys) = out + ret.
+For the two-leg components (commute, retail, school levels) out and ret are the
+separate model legs; for a doubly-constrained component out ≈ ret (production and
+attraction both pinned), so total ≈ ρ_c·K_c (each leg carries ρ/2).
+
+Residential is single-leg (symmetric pop↔pop, held singly-constrained), so it has
+no distinct return leg: `out` is everything a core home produces (origin in core,
+including internal round-trips) and ≈ ρ_res·K_res; `ret` is the legs ARRIVING at
+core homes from OUTSIDE (external→core), which is unconstrained (no attraction
+margin) — so out ≠ ret is expected and diagnostic.  Internal round-trips sit
+entirely in `out`; the total counts each trip once.
+
+Per component the per-OD-pair DAILY trips are  τ = K_c · W_c · t  (t = pre-K leg
+flow from model.constrained_od_flows, K_c the tuned scale, W_c the daily AADT
+weight — the same "true daily trips" basis build_assignment.py uses).
 
 Fully portable: core, population, generation rates and AADT weights are all read
 from the per-centre artifacts (no hardcoded node IDs, no Newtownards assumptions),
 so a moved CENTRE or altered radius flows through unchanged once the pipeline is
 re-run.
-
-Per component c the per-OD-pair DAILY trips are  τ^c_ij = K_c · W_c · t^c_ij
-(the same "true daily trips" basis build_assignment.py uses for ext_node_trips):
-  t^c   pre-K per-OD-pair flow from model.constrained_od_flows
-  K_c   tuned component scale (tuned_params.json)
-  W_c   daily AADT weight (model.aadt_weights)
-Trips are counted one-way (each OD pair is one trip leg), matching NTS/TSNI; a
-round trip appears as its two legs (out + return are separate OD pairs).
 
 Read-only — writes nothing.  Run from the repo root:
     python3 analysis/diagnose_per_capita.py
@@ -121,10 +135,10 @@ _active_school = [lvl for lvl in SCHOOL_LEVELS
                   if K_school.get(lvl, 0.0) > 0 and w_school_levels[lvl].sum() > 0]
 _use_school = len(_active_school) > 0
 
-# ── Compute pre-K per-OD-pair component flows (same call as build_assignment) ──
+# ── Compute per-leg OD flows (same call as build_assignment, legs exposed) ─────
 
 print(f"Computing OD flows (doubly_constrained={sorted(_DBLC) if _DBLC else []}) …")
-t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
+t_res, t_commute, t_retail, t_sch_by_level, legs = constrained_od_flows(
     od_src, od_dst, od_dist, N_nodes,
     w_pop, w_commute_attr, w_retail,
     willingness,
@@ -133,7 +147,8 @@ t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
     self_terms=self_terms,
     w_commute_prod=w_commute_prod,
     gen_scale=_GEN_SCALE,
-    doubly_constrained=_DBLC)
+    doubly_constrained=_DBLC,
+    return_legs=True)
 
 # Daily AADT weights W_c (component daily-trip conversion).
 W_res, W_commute, W_retail, W_school = aadt_weights(
@@ -152,57 +167,67 @@ n_core_nodes = int(is_core.sum())
 
 src_core = is_core[od_src]
 dst_core = is_core[od_dst]
-touch_mask   = src_core | dst_core            # trip starts OR ends in core (counted once)
-out_mask     = src_core                       # origin in core: resident-generated (incl. internal→internal)
-inbound_mask = dst_core & ~src_core           # external → core: inbound-only load
 
 _rho = _gen_rates or {}
 
-# component: (label, t_array, K_c, W_c, rho_key)
+
+def _pc(arr, mask, K_c, W_c):
+    """Per-capita daily trips: Σ (K·W·flow) over `mask`, divided by core population."""
+    return float((arr[mask]).sum()) * K_c * W_c / pop_core
+
+
+# Each component: (label, K_c, W_c, rho_key, out_arr, out_mask, ret_arr, ret_mask).
+# out = outbound/home-produced leg with origin in core; ret = return leg (home = dest)
+# with destination in core.  Residential is single-leg: `out` = origin-in-core
+# (production, incl. internal); `ret` = external→core arrivals (dst in core AND origin
+# not), so out+ret counts each residential trip once.
+_ret_only = dst_core & ~src_core
 _components = [
-    ("residential",      t_res,     K_res,     W_res,     "res"),
-    ("commute",          t_commute, K_commute, W_commute, "commute"),
-    ("retail",           t_retail,  K_retail,  W_retail,  "retail"),
+    ("residential",  K_res, W_res, "res",
+     t_res, src_core, t_res, _ret_only),
+    ("commute",      K_commute, W_commute, "commute",
+     legs["commute_out"], src_core, legs["commute_ret"], dst_core),
+    ("retail",       K_retail, W_retail, "retail",
+     legs["retail_out"], src_core, legs["retail_ret"], dst_core),
 ]
 for lvl in SCHOOL_LEVELS:
-    _components.append((f"school_{lvl}", t_sch_by_level[lvl], K_school[lvl],
-                        W_school[lvl], f"school_{lvl}"))
-
-
-def _per_capita(t, K_c, W_c, mask):
-    return float((t[mask] * K_c * W_c).sum()) / pop_core
-
+    comp = f"school_{lvl}"
+    if f"{comp}_out" in legs:   # active levels only (inactive levels emit no legs)
+        _components.append((comp, K_school[lvl], W_school[lvl], comp,
+                            legs[f"{comp}_out"], src_core, legs[f"{comp}_ret"], dst_core))
 
 # ── Report ────────────────────────────────────────────────────────────────────
 
 print()
-print("Trips-per-capita diagnostic (core domain)")
+print("Core-resident trips-per-capita diagnostic")
 print(f"  core nodes: {n_core_nodes:,}   core population: {pop_core:,.0f}"
       f"   doubly_constrained: {sorted(_DBLC) if _DBLC else '[]'}")
-print("  per-capita = daily car-driver trips (start OR end in core) / core population")
-print("  one-way legs; outbound = origin in core (resident-generated); inbound = external→core")
+print("  per-capita = daily car-driver trips with HOME end in core / core population")
+print("  out = outbound leg, home(origin) in core;  ret = return leg, home(dest) in core")
 print()
-hdr = (f"  {'Component':<20s}  {'per-capita':>10s}  {'outbound':>9s}  {'inbound':>8s}"
-       f"  {'ρ (input)':>10s}  {'K_c':>7s}")
+hdr = (f"  {'Component':<20s}  {'out':>8s}  {'ret':>8s}  {'total':>8s}"
+       f"  {'ρ·K':>8s}  {'ρ (in)':>8s}  {'K_c':>7s}")
 print(hdr)
 print("  " + "-" * (len(hdr) - 2))
 
-tot_touch = tot_out = tot_in = 0.0
-for label, t, K_c, W_c, rho_key in _components:
-    pc_touch = _per_capita(t, K_c, W_c, touch_mask)
-    pc_out   = _per_capita(t, K_c, W_c, out_mask)
-    pc_in    = _per_capita(t, K_c, W_c, inbound_mask)
-    tot_touch += pc_touch
-    tot_out   += pc_out
-    tot_in    += pc_in
+tot_out = tot_ret = tot_tot = tot_rhoK = 0.0
+for label, K_c, W_c, rho_key, out_arr, out_mask, ret_arr, ret_mask in _components:
+    pc_out = _pc(out_arr, out_mask, K_c, W_c)
+    pc_ret = _pc(ret_arr, ret_mask, K_c, W_c)
+    pc_tot = pc_out + pc_ret
     rho = _rho.get(rho_key)
-    rho_s = f"{rho:>10.4f}" if rho is not None else f"{'—':>10s}"
-    print(f"  {label:<20s}  {pc_touch:>10.4f}  {pc_out:>9.4f}  {pc_in:>8.4f}  {rho_s}  {K_c:>7.3f}")
+    rhoK = (rho * K_c) if rho is not None else None
+    tot_out += pc_out; tot_ret += pc_ret; tot_tot += pc_tot
+    if rhoK is not None:
+        tot_rhoK += rhoK
+    rhoK_s = f"{rhoK:>8.4f}" if rhoK is not None else f"{'—':>8s}"
+    rho_s  = f"{rho:>8.4f}"  if rho  is not None else f"{'—':>8s}"
+    print(f"  {label:<20s}  {pc_out:>8.4f}  {pc_ret:>8.4f}  {pc_tot:>8.4f}  {rhoK_s}  {rho_s}  {K_c:>7.3f}")
 
 print("  " + "-" * (len(hdr) - 2))
-rho_tot = sum(v for v in _rho.values()) if _rho else None
-rho_tot_s = f"{rho_tot:>10.4f}" if rho_tot is not None else f"{'—':>10s}"
-print(f"  {'OVERALL':<20s}  {tot_touch:>10.4f}  {tot_out:>9.4f}  {tot_in:>8.4f}  {rho_tot_s}  {'':>7s}")
+print(f"  {'OVERALL':<20s}  {tot_out:>8.4f}  {tot_ret:>8.4f}  {tot_tot:>8.4f}  {tot_rhoK:>8.4f}  {'':>8s}  {'':>7s}")
 print()
-print("  ρ (input) = generation_rates.json per-capita car-driver trips/person/day (island-wide).")
-print("  Compare the outbound column to TSNI car-driver trips/person/day by purpose.")
+print("  ρ (in) = generation_rates.json per-capita car-driver trips/person/day (island-wide);")
+print("  ρ·K = the generation-anchored expectation.  Two-leg components: total ≈ ρ·K (out ≈ ret).")
+print("  Residential: out ≈ ρ·K (single leg); ret is the unconstrained external→core inflow.")
+print("  Compare `total` to TSNI car-driver trips/person/day by purpose.")

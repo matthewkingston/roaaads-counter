@@ -225,7 +225,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          gen_scale=None,
                          doubly_constrained=None,
                          furness_max_sweeps=None,
-                         furness_state=None):
+                         furness_state=None,
+                         return_legs=False):
     """Per-OD-pair, pre-K production-constrained component flows.
 
     Returns (t_res, t_commute, t_retail, t_sch_by_level), where the first three are
@@ -233,6 +234,14 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     {level: array} over SCHOOL_LEVELS (primary/post-primary/tertiary).  These are the
     per-pair flows BEFORE the K_res/K_commute/K_retail/K_<level> scaling; the caller
     scatters them onto links (all links, or observed rows only) and applies K.
+
+    If return_legs=True, additionally returns a dict `legs` of the individual
+    producer→attractor legs that make up each summed component (keys: "res",
+    "commute_out"/"commute_ret", "retail_out"/"retail_ret", and per active level
+    "school_<lvl>_out"/"school_<lvl>_ret").  Each out-leg is producer→attractor
+    (home→activity, home = origin); each ret-leg is attractor→producer
+    (activity→home, home = destination).  Used by diagnostics that need to anchor
+    trips to the home end; the default (return_legs=False) path is unchanged.
 
     `willingness` is a dict {component: (w, τs, τl)} of per-component double-exp
     willingness params (6 entries — res/commute/retail + school_primary/postprimary/
@@ -436,18 +445,27 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         iD = _inv_denom(attr_full[dst], F, attr_full, st)
         return gs_c * prod_full[src] * attr_full[dst] * F * iD[src]
 
+    legs = {}   # populated for return_legs=True (the individual producer→attractor legs)
+
     # res: single leg covers both directions (pop↔pop, symmetric).  Held singly-constrained.
     t_res = _leg(w_pop, gs_res, w_pop, F_res, st_res, "res", "res")
+    legs["res"] = t_res
 
     # commute: symmetric producer↔attractor round-trip.  Out leg home→work (producer =
     # resident commuters, attractor = jobs); return leg work→home (producer = jobs,
     # attractor = resident commuters — returning commuters land where commuters live).
-    t_commute = (_leg(w_commute_prod, gs_com_out, w_workplace,     F_com, st_com, "commute", "commute_out")
-                 + _leg(w_workplace,   gs_com_ret, w_commute_prod, F_com, st_com, "commute", "commute_ret"))
+    _com_out = _leg(w_commute_prod, gs_com_out, w_workplace,     F_com, st_com, "commute", "commute_out")
+    _com_ret = _leg(w_workplace,    gs_com_ret, w_commute_prod, F_com, st_com, "commute", "commute_ret")
+    t_commute = _com_out + _com_ret
+    legs["commute_out"] = _com_out
+    legs["commute_ret"] = _com_ret
 
     # retail: symmetric pop↔retail round-trip (out home→shop, return shop→home).
-    t_retail = (_leg(w_pop,    gs_ret_out, w_retail, F_ret, st_ret, "retail", "retail_out")
-                + _leg(w_retail, gs_ret_ret, w_pop,    F_ret, st_ret, "retail", "retail_ret"))
+    _ret_out = _leg(w_pop,    gs_ret_out, w_retail, F_ret, st_ret, "retail", "retail_out")
+    _ret_ret = _leg(w_retail, gs_ret_ret, w_pop,    F_ret, st_ret, "retail", "retail_ret")
+    t_retail = _ret_out + _ret_ret
+    legs["retail_out"] = _ret_out
+    legs["retail_ret"] = _ret_ret
 
     # School: three INDEPENDENT components (primary / post-primary / tertiary), each a symmetric
     # two-leg producer↔attractor round-trip with its OWN producer, attractor, generation scale, K,
@@ -469,9 +487,14 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
             prod = w_school_prod_levels[lvl]                           # resident students of this level
             gs_out = gs.get(f"sch_{lvl}_out", 1.0)
             gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
-            t_sch_by_level[lvl] = (_leg(prod,  gs_out, w_sch, F_sch, st_sch, comp, f"{comp}_out")     # students i → school j
-                                   + _leg(w_sch, gs_ret, prod,  F_sch, st_sch, comp, f"{comp}_ret"))  # school i → home j
+            _sch_out = _leg(prod,  gs_out, w_sch, F_sch, st_sch, comp, f"{comp}_out")   # students i → school j
+            _sch_ret = _leg(w_sch, gs_ret, prod,  F_sch, st_sch, comp, f"{comp}_ret")   # school i → home j
+            t_sch_by_level[lvl] = _sch_out + _sch_ret
+            legs[f"{comp}_out"] = _sch_out
+            legs[f"{comp}_ret"] = _sch_ret
 
+    if return_legs:
+        return t_res, t_commute, t_retail, t_sch_by_level, legs
     return t_res, t_commute, t_retail, t_sch_by_level
 
 
