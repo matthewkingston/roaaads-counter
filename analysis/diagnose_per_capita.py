@@ -10,23 +10,31 @@ comparable to NI travel-survey headline rates (TSNI car-driver trips/person/day
 by purpose).  A per-capita far from survey values flags a generation/distribution
 problem before any spatial detail is examined.
 
-Home-anchored counting.  Each modelled trip is one directed leg.  Its "home end"
-is the producer for an outbound (home→activity) leg and the attractor for a
-return (activity→home) leg:
-  out  = outbound leg with ORIGIN in core (home produces the trip).  Pinned by the
-         production constraint ⇒ out ≈ ρ_c·K_c (× local producer-density ratio).
-  ret  = return leg with DESTINATION in core (home receives the trip).
-  total (core-resident journeys) = out + ret.
-For the two-leg components (commute, retail, school levels) out and ret are the
-separate model legs; for a doubly-constrained component out ≈ ret (production and
-attraction both pinned), so total ≈ ρ_c·K_c (each leg carries ρ/2).
+Home-anchored counting.  Each modelled trip is one directed leg with a "home end":
+the producer for an outbound (home→activity) leg, the attractor for a return
+(activity→home) leg.  Per component:
+  produced = trips whose home end is the ORIGIN and lies in core (production side)
+  received = trips whose home end is the DEST   and lies in core (attraction side)
 
-Residential is single-leg (symmetric pop↔pop, held singly-constrained), so it has
-no distinct return leg: `out` is everything a core home produces (origin in core,
-including internal round-trips) and ≈ ρ_res·K_res; `ret` is the legs ARRIVING at
-core homes from OUTSIDE (external→core), which is unconstrained (no attraction
-margin) — so out ≠ ret is expected and diagnostic.  Internal round-trips sit
-entirely in `out`; the total counts each trip once.
+Two-leg components (commute, retail, school levels) have DISTINCT out/ret legs, so a
+core resident's journeys = produced (out leg, origin in core) + received (ret leg,
+dest in core) — both legs, no overlap.  They are doubly-constrained, so attraction is
+pinned ⇒ produced ≈ received and total ≈ ρ_c·K_c (each leg carries ρ/2).
+
+Residential is a single symmetric pop↔pop field, singly-constrained, with NO
+home/activity distinction — `produced` (origin in core) and `received` (dest in core)
+are the same field seen two ways, so summing them double-counts the internal↔internal
+interaction.  The honest resident rate is
+  total_res = (produced + received)/2 = CC + (CE+EC)/2
+(full weight internal↔internal CC, half weight cross-boundary CE/EC — each cross-
+boundary trip is half a core resident's).  `produced` is pinned by the production
+constraint (= ρ_res·K_res); `received` (attraction) is FREE, so received/produced ≠ 1
+is the single-constraint effect the metric surfaces (res_out alone is trivially ρ·K
+and carries no information).
+
+Per component the per-OD-pair DAILY trips are  τ = K_c · W_c · t  (t = pre-K leg
+flow from model.constrained_od_flows, K_c the tuned scale, W_c the daily AADT
+weight — the same "true daily trips" basis build_assignment.py uses).
 
 Per component the per-OD-pair DAILY trips are  τ = K_c · W_c · t  (t = pre-K leg
 flow from model.constrained_od_flows, K_c the tuned scale, W_c the daily AADT
@@ -176,25 +184,33 @@ def _pc(arr, mask, K_c, W_c):
     return float((arr[mask]).sum()) * K_c * W_c / pop_core
 
 
-# Each component: (label, K_c, W_c, rho_key, out_arr, out_mask, ret_arr, ret_mask).
-# out = outbound/home-produced leg with origin in core; ret = return leg (home = dest)
-# with destination in core.  Residential is single-leg: `out` = origin-in-core
-# (production, incl. internal); `ret` = external→core arrivals (dst in core AND origin
-# not), so out+ret counts each residential trip once.
-_ret_only = dst_core & ~src_core
+# Each component contributes two home-anchored per-capita numbers:
+#   produced = trips whose home end is the ORIGIN and lies in core (production side)
+#   received = trips whose home end is the DEST   and lies in core (attraction side)
+# Two-leg components (commute/retail/school) have DISTINCT out/ret legs, so a core
+# resident's journeys = produced (out leg, origin in core) + received (ret leg, dest in
+# core) — both legs, no overlap.
+# Residential is a single symmetric pop↔pop field with no home/activity distinction, so
+# `produced` (origin in core) and `received` (dest in core) are the SAME field seen two
+# ways; summing them double-counts the internal↔internal interaction.  The honest resident
+# rate is (produced + received)/2 = CC + (CE+EC)/2 (full weight internal↔internal, half
+# weight cross-boundary — each cross-boundary trip is half a core resident's).  Because
+# residential is SINGLY-constrained, `received` (attraction) is FREE, and its gap from the
+# pinned `produced` (= ρ·K) is the single-constraint signal (A/P ≠ 1).
 _components = [
-    ("residential",  K_res, W_res, "res",
-     t_res, src_core, t_res, _ret_only),
-    ("commute",      K_commute, W_commute, "commute",
-     legs["commute_out"], src_core, legs["commute_ret"], dst_core),
-    ("retail",       K_retail, W_retail, "retail",
-     legs["retail_out"], src_core, legs["retail_ret"], dst_core),
+    # (label, K_c, W_c, rho_key, prod_arr, prod_mask, recv_arr, recv_mask, single)
+    ("residential", K_res, W_res, "res",
+     t_res, src_core, t_res, dst_core, True),
+    ("commute",     K_commute, W_commute, "commute",
+     legs["commute_out"], src_core, legs["commute_ret"], dst_core, False),
+    ("retail",      K_retail, W_retail, "retail",
+     legs["retail_out"], src_core, legs["retail_ret"], dst_core, False),
 ]
 for lvl in SCHOOL_LEVELS:
     comp = f"school_{lvl}"
     if f"{comp}_out" in legs:   # active levels only (inactive levels emit no legs)
         _components.append((comp, K_school[lvl], W_school[lvl], comp,
-                            legs[f"{comp}_out"], src_core, legs[f"{comp}_ret"], dst_core))
+                            legs[f"{comp}_out"], src_core, legs[f"{comp}_ret"], dst_core, False))
 
 # ── Report ────────────────────────────────────────────────────────────────────
 
@@ -202,32 +218,36 @@ print()
 print("Core-resident trips-per-capita diagnostic")
 print(f"  core nodes: {n_core_nodes:,}   core population: {pop_core:,.0f}"
       f"   doubly_constrained: {sorted(_DBLC) if _DBLC else '[]'}")
-print("  per-capita = daily car-driver trips with HOME end in core / core population")
-print("  out = outbound leg, home(origin) in core;  ret = return leg, home(dest) in core")
+print("  per-capita = daily car-driver trips anchored to a core home / core population")
+print("  produced = home is trip ORIGIN (production);  received = home is DEST (attraction)")
+print("  total: two-leg = produced + received (two legs);  residential = (produced + received)/2")
 print()
-hdr = (f"  {'Component':<20s}  {'out':>8s}  {'ret':>8s}  {'total':>8s}"
+hdr = (f"  {'Component':<20s}  {'produced':>9s}  {'received':>9s}  {'total':>8s}"
        f"  {'ρ·K':>8s}  {'ρ (in)':>8s}  {'K_c':>7s}")
 print(hdr)
 print("  " + "-" * (len(hdr) - 2))
 
-tot_out = tot_ret = tot_tot = tot_rhoK = 0.0
-for label, K_c, W_c, rho_key, out_arr, out_mask, ret_arr, ret_mask in _components:
-    pc_out = _pc(out_arr, out_mask, K_c, W_c)
-    pc_ret = _pc(ret_arr, ret_mask, K_c, W_c)
-    pc_tot = pc_out + pc_ret
+tot_tot = tot_rhoK = 0.0
+for label, K_c, W_c, rho_key, p_arr, p_mask, r_arr, r_mask, single in _components:
+    pc_prod = _pc(p_arr, p_mask, K_c, W_c)
+    pc_recv = _pc(r_arr, r_mask, K_c, W_c)
+    pc_tot  = (pc_prod + pc_recv) / 2.0 if single else (pc_prod + pc_recv)
     rho = _rho.get(rho_key)
     rhoK = (rho * K_c) if rho is not None else None
-    tot_out += pc_out; tot_ret += pc_ret; tot_tot += pc_tot
+    tot_tot += pc_tot
     if rhoK is not None:
         tot_rhoK += rhoK
     rhoK_s = f"{rhoK:>8.4f}" if rhoK is not None else f"{'—':>8s}"
     rho_s  = f"{rho:>8.4f}"  if rho  is not None else f"{'—':>8s}"
-    print(f"  {label:<20s}  {pc_out:>8.4f}  {pc_ret:>8.4f}  {pc_tot:>8.4f}  {rhoK_s}  {rho_s}  {K_c:>7.3f}")
+    flag = " *" if single else ""
+    print(f"  {label:<20s}  {pc_prod:>9.4f}  {pc_recv:>9.4f}  {pc_tot:>8.4f}  {rhoK_s}  {rho_s}  {K_c:>7.3f}{flag}")
 
 print("  " + "-" * (len(hdr) - 2))
-print(f"  {'OVERALL':<20s}  {tot_out:>8.4f}  {tot_ret:>8.4f}  {tot_tot:>8.4f}  {tot_rhoK:>8.4f}  {'':>8s}  {'':>7s}")
+print(f"  {'OVERALL':<20s}  {'':>9s}  {'':>9s}  {tot_tot:>8.4f}  {tot_rhoK:>8.4f}  {'':>8s}  {'':>7s}")
 print()
 print("  ρ (in) = generation_rates.json per-capita car-driver trips/person/day (island-wide);")
-print("  ρ·K = the generation-anchored expectation.  Two-leg components: total ≈ ρ·K (out ≈ ret).")
-print("  Residential: out ≈ ρ·K (single leg); ret is the unconstrained external→core inflow.")
-print("  Compare `total` to TSNI car-driver trips/person/day by purpose.")
+print("  ρ·K = generation-anchored expectation.  Two-leg (doubly-constrained): total ≈ ρ·K,")
+print("        produced ≈ received (attraction pinned).")
+print("  * residential (singly-constrained): total = (produced+received)/2; produced = ρ·K")
+print("    (pinned), received is FREE — received/produced ≠ 1 is the single-constraint effect.")
+print("  Compare `total` to TSNI car/van-driver trips/person/day by purpose.")
