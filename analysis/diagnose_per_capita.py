@@ -45,7 +45,15 @@ from the per-centre artifacts (no hardcoded node IDs, no Newtownards assumptions
 so a moved CENTRE or altered radius flows through unchanged once the pipeline is
 re-run.
 
-Read-only — writes nothing.  Run from the repo root:
+It also reports the trip-LENGTH distribution (TLD) of that same home-anchored trip
+set, per category and pooled, in equivalent miles (equiv_miles(od_dist)) — for
+comparison to the project's TLDs (trip_length_dist.py / fit_kernel.py) and TSNI
+journey lengths — and writes a per-category TLD plot to reports/diagnose_tld.png.
+Residential uses the same M-normalisation in the TLD (full weight internal↔internal,
+half weight cross-boundary), so each category's TLD trips ÷ core population equals
+its per-capita `total`.
+
+Writes only reports/diagnose_tld.png (no model artifacts).  Run from the repo root:
     python3 analysis/diagnose_per_capita.py
 """
 
@@ -55,6 +63,7 @@ import sys
 
 import numpy as np
 
+sys.path.insert(0, "analysis")
 sys.path.insert(0, "simulation")
 from model import (  # noqa: E402
     PATHS_CACHE, WEIGHTS_FILE, TUNED_PARAMS, SCHOOL_LEVELS,
@@ -62,6 +71,7 @@ from model import (  # noqa: E402
     load_self_terms, load_generation_rates, compute_generation_scales,
     assert_paths_cache_fresh, willingness_keys, willingness_from_flat,
 )
+from equiv_miles import equiv_miles  # noqa: E402  (od_dist seconds → equivalent miles)
 
 # ── Load node weights (mirrors build_assignment.py) ───────────────────────────
 
@@ -251,3 +261,112 @@ print("        produced ≈ received (attraction pinned).")
 print("  * residential (singly-constrained): total = (produced+received)/2; produced = ρ·K")
 print("    (pinned), received is FREE — received/produced ≠ 1 is the single-constraint effect.")
 print("  Compare `total` to TSNI car/van-driver trips/person/day by purpose.")
+
+# ── Trip-length distribution (same core-tied trip set) ────────────────────────
+# Each core-resident trip is one OD pair, binned at its length equiv_miles(od_dist).
+# Weight per leg = K·W·(0.5 if residential else 1.0): the 0.5 gives residential the
+# M-normalisation (full weight internal↔internal, half weight cross-boundary), so a
+# category's TLD trips ÷ pop_core reproduce its per-capita `total`.
+miles = equiv_miles(od_dist)          # equivalent miles per OD pair
+mins  = od_dist / 60.0                # journey time (minutes) per OD pair
+_BANDS = [(0.0, 1.0), (1.0, 3.0), (3.0, 5.0), (5.0, 10.0), (10.0, 20.0), (20.0, np.inf)]
+
+
+def _cat_samples(p_arr, p_mask, r_arr, r_mask, K_c, W_c, single):
+    """Concatenated (miles, minutes, weight) over a category's home-anchored trips."""
+    f = K_c * W_c * (0.5 if single else 1.0)
+    L  = np.concatenate([miles[p_mask], miles[r_mask]])
+    Lm = np.concatenate([mins[p_mask],  mins[r_mask]])
+    Wt = np.concatenate([p_arr[p_mask] * f, r_arr[r_mask] * f])
+    return L, Lm, Wt
+
+
+def _tld_stats(L, Lm, Wt):
+    tot = float(Wt.sum())
+    if tot <= 0:
+        return tot, float("nan"), float("nan"), float("nan"), [float("nan")] * len(_BANDS)
+    mean_mi  = float((L * Wt).sum() / tot)
+    mean_min = float((Lm * Wt).sum() / tot)
+    o = np.argsort(L); cw = np.cumsum(Wt[o])
+    med_mi = float(L[o][np.searchsorted(cw, 0.5 * tot)])
+    shares = [float(Wt[(L >= a) & (L < b)].sum() / tot * 100.0) for a, b in _BANDS]
+    return tot, mean_mi, med_mi, mean_min, shares
+
+
+_cat_LW = {}   # label -> (L, Lm, Wt) for the plot
+print()
+print("Core-resident trip-length distribution (same trip set; equivalent miles)")
+band_lbls = [f"{a:g}-{b:g}" if np.isfinite(b) else f"{a:g}+" for a, b in _BANDS]
+thdr = (f"  {'Component':<20s}  {'trips/day':>10s}  {'/capita':>8s}  {'mean_mi':>7s}"
+        f"  {'med_mi':>6s}  {'mean_min':>8s}  " + "".join(f"{bl:>7s}" for bl in band_lbls))
+print(thdr)
+print("  " + "-" * (len(thdr) - 2))
+_allL, _allLm, _allWt = [], [], []
+for label, K_c, W_c, rho_key, p_arr, p_mask, r_arr, r_mask, single in _components:
+    L, Lm, Wt = _cat_samples(p_arr, p_mask, r_arr, r_mask, K_c, W_c, single)
+    _cat_LW[label] = (L, Lm, Wt)
+    _allL.append(L); _allLm.append(Lm); _allWt.append(Wt)
+    tot, mean_mi, med_mi, mean_min, shares = _tld_stats(L, Lm, Wt)
+    print(f"  {label:<20s}  {tot:>10,.0f}  {tot/pop_core:>8.3f}  {mean_mi:>7.2f}"
+          f"  {med_mi:>6.2f}  {mean_min:>8.1f}  " + "".join(f"{s:>7.1f}" for s in shares))
+_pL = np.concatenate(_allL); _pLm = np.concatenate(_allLm); _pWt = np.concatenate(_allWt)
+tot, mean_mi, med_mi, mean_min, shares = _tld_stats(_pL, _pLm, _pWt)
+print("  " + "-" * (len(thdr) - 2))
+print(f"  {'OVERALL (pooled)':<20s}  {tot:>10,.0f}  {tot/pop_core:>8.3f}  {mean_mi:>7.2f}"
+      f"  {med_mi:>6.2f}  {mean_min:>8.1f}  " + "".join(f"{s:>7.1f}" for s in shares))
+print()
+print("  band cells = % of that category's trips in each equivalent-mile band; residential")
+print("  M-normalised (CC full + CE/EC half).  equiv_miles is the placeholder speed bridge.")
+
+# ── TLD plot → reports/diagnose_tld.png ───────────────────────────────────────
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except ImportError:
+    print("\n  [plot skipped: matplotlib not available]")
+else:
+    # Okabe–Ito CVD-safe categorical palette (fixed order); pooled = bold black.
+    _COL = {
+        "residential":        "#0072B2",  # blue
+        "commute":            "#E69F00",  # orange
+        "retail":             "#009E73",  # bluish green
+        "school_primary":     "#CC79A7",  # reddish purple
+        "school_postprimary": "#56B4E9",  # sky blue
+        "school_tertiary":    "#D55E00",  # vermillion
+    }
+    CAP = 25.0                                   # plot x-range (mi); overflow clipped into last bin
+    edges = np.arange(0.0, CAP + 0.5, 0.5)
+    centres = edges[:-1] + 0.25
+
+    def _share_curve(L, Wt):
+        h, _ = np.histogram(np.clip(L, 0.0, CAP - 1e-9), bins=edges, weights=Wt)
+        s = h.sum()
+        return h / s if s > 0 else h
+
+    fig, ax = plt.subplots(figsize=(9, 5.2), dpi=130)
+    for label, _K, _W, _rk, *_ in _components:
+        L, _Lm, Wt = _cat_LW[label]
+        if Wt.sum() <= 0:
+            continue
+        ax.plot(centres, _share_curve(L, Wt), color=_COL.get(label, "#888888"),
+                lw=1.8, label=label)
+    ax.plot(centres, _share_curve(_pL, _pWt), color="#000000", lw=2.6,
+            label="overall (pooled)")
+
+    ax.set_xlim(0, CAP)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("trip length  (equivalent miles)")
+    ax.set_ylabel("share of trips  (per 0.5-mi bin)")
+    ax.set_title("Core-resident trip-length distribution")
+    ax.grid(True, color="#e6e6e6", lw=0.6)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.legend(frameon=False, fontsize=9)
+    fig.tight_layout()
+
+    os.makedirs("reports", exist_ok=True)
+    _png = "reports/diagnose_tld.png"
+    fig.savefig(_png)
+    plt.close(fig)
+    print(f"\n  TLD plot → {_png}  (overflow > {CAP:g} mi clipped into the last bin)")
