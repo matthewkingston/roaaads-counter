@@ -9,13 +9,10 @@
     "school_tertiary"
   ],
   "furness_max_sweeps": 12,
-  "K_prior_std": {
-    "res": 0.5,
-    "commute": 0.5,
-    "retail": 0.5,
-    "school_primary": 0.5,
-    "school_postprimary": 0.5,
-    "school_tertiary": 0.5
+  "K_anchor_floor": {
+    "split_sigma": 0.1,
+    "mob_sigma": 0.0,
+    "mob_default": 0.5
   },
   "gravity_ref": {
     "res_taus": 374.7724,

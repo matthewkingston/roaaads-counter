@@ -61,6 +61,7 @@ LINK_AADT       = "data/link_aadt.json"
 OFFICIAL_HOURLY = "data/official_hourly.json"
 INTRA_TIMES     = "data/external_intra_times.json"
 GENERATION_RATES = "analysis/generation_rates.json"
+MOBILISATION_FILE = "analysis/mobilisation.json"
 
 _DOW_TO_TYPE = {d: (0 if d < 5 else (1 if d == 5 else 2)) for d in range(7)}
 
@@ -498,17 +499,33 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     return t_res, t_commute, t_retail, t_sch_by_level
 
 
-def load_generation_rates(path=GENERATION_RATES):
+def load_generation_rates(path=GENERATION_RATES, mobilisation_path=MOBILISATION_FILE):
     """Per-component vehicle-driver trips/person/day from analysis/generation_rates.json
     (written by analysis/derive_generation_rates.py).  Returns {commute, retail, res,
     school_primary, school_postprimary, school_tertiary} or None if the file is absent
-    (⇒ caller skips generation pinning, K_c unpinned)."""
+    (⇒ caller skips generation pinning, K_c unpinned).
+
+    The England-NTS rates are rescaled to the ISLAND car-driver mobilisation level by a
+    single global multiplier m_island (analysis/mobilisation.json, from
+    analysis/derive_mobilisation.py), preserving the NTS purpose split, so each K_c
+    anchors cleanly at 1 against island-level generation rather than England's.  This is
+    the common-mode (level) half of the properly-derived K normalisation; the split and
+    spatial-dispersion widths live in the K-prior (analysis/tune_assignment.py).  If
+    mobilisation.json is absent, m_island=1 (rates left at the England level) with a note."""
     if not os.path.exists(path):
         print(f"  [gen-rates] {path} not found — generation NOT pinned (run "
               f"analysis/derive_generation_rates.py)")
         return None
     with open(path) as f:
-        return json.load(f)["rates"]
+        rates = json.load(f)["rates"]
+    m_island = 1.0
+    if os.path.exists(mobilisation_path):
+        with open(mobilisation_path) as f:
+            m_island = float(json.load(f).get("m_island", 1.0))
+    else:
+        print(f"  [gen-rates] {mobilisation_path} not found — m_island=1 (rates NOT "
+              f"rescaled to island level; run analysis/derive_mobilisation.py)")
+    return {c: v * m_island for c, v in rates.items()}
 
 
 def compute_generation_scales(node_weights, rates, verbose=False):

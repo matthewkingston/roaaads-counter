@@ -49,6 +49,7 @@ import scipy.optimize
 sys.path.insert(0, "simulation")
 from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, SCHOOL_LEVELS,
+                   GENERATION_RATES, MOBILISATION_FILE,
                    constrained_od_flows, scatter_od_to_links, load_self_terms,
                    load_generation_rates, compute_generation_scales,
                    print_chi2_table, assert_paths_cache_fresh,
@@ -306,23 +307,57 @@ with open(TUNER_CONFIG) as f:
 lam                  = config["lambda"]
 gamma_coupling_scale = config.get("gamma_coupling_scale",
                                    config.get("gamma_coupling", 1.0))
-# Generation-anchored K-prior (degeneracy break inside solve_scales): every
-# component scale is softly pulled toward K_PRIOR_ANCHOR = 1.0 — the value
-# generation pinning predicts (producer weights are in vehicle-driver trips/day,
-# so a nationally-average town gives K_c ≈ 1).  This does double duty — it both
-# anchors magnitude to generation and pins the otherwise-flat commute↔retail
-# direction the old φ-share prior guarded, so no separate share prior is needed.
-# The anchor is fixed at 1 by construction (NOT a config knob, so it can't drift
-# into placeholder rot); only the per-component width σ_c — the belief in how far
-# local car-mobilisation departs from the national average — is configurable
-# (tuner_config "K_prior_std", default 0.5).  Replaces the old φ-share prior.
-K_PRIOR_ANCHOR      = 1.0
-_k_prior_std        = config.get("K_prior_std", {})
-k_prior_std_res     = _k_prior_std.get("res",     0.5)
-k_prior_std_commute = _k_prior_std.get("commute", 0.5)
-k_prior_std_retail  = _k_prior_std.get("retail",  0.5)
-# Per-level school K-priors (each independently adjustable; default 0.5).
-k_prior_std_school = {lvl: _k_prior_std.get(f"school_{lvl}", 0.5) for lvl in SCHOOL_LEVELS}
+# ── K-normalisation prior: Λ_K = pinv(Cov_K), anchor 1 (PROPERLY-DERIVED) ─────────────
+# Generation pinning + the island m_island rescale (model.load_generation_rates) put every
+# producer weight in island-level vehicle-driver trips/day, so K_c ≈ 1 is the value the data
+# predict.  The prior around anchor 1 is NOT the old flat diag(1/K_prior_std²); it is a
+# Mahalanobis form (K−1)ᵀΛ_K(K−1) whose SHAPE is derived, separating the two epistemically
+# distinct directions and using each data source only for what it measures well:
+#     Cov_K = P⊥·Cov_boot·P⊥      SPLIT  — NTS cluster-bootstrap sampling cov (generation_rates
+#                                          _meta.stat_cov), common mode PROJECTED OUT.
+#           + σ_mob²·u·uᵀ         LEVEL  — island mobilisation spatial dispersion
+#                                          (mobilisation.json sigma_mob); loose leash the counts
+#                                          refine (K departing 1 ⇒ local-vs-island mobilisation).
+#           + split_σ²·P⊥         FLOOR  — differential England→Ireland transfer uncertainty on
+#                                          the split (the bootstrap CV is ~1.6%, far too confident
+#                                          to transfer the purpose MIX at; this floors it) + PSD
+#                                          backstop.  (+ optional mob_σ on the common mode.)
+# u = 1/√n·1 (common mode), P⊥ = I−uuᵀ (differential subspace).  Everything is in LOG/relative
+# space (Var(K_c)≈Var(log ρ̂_c)) but applied as a linear-K cov about anchor 1 — first-order
+# identical, keeps the convex linear-K Newton solve.  Components follow solve_scales' comp_keys
+# EXACTLY: res, commute, retail, then the ACTIVE school levels — so Λ_K drops straight in.
+K_PRIOR_ANCHOR = 1.0
+_kcomps = ["res", "commute", "retail"] + [f"school_{lvl}" for lvl in _active_school]
+_gen_meta = json.load(open(GENERATION_RATES)).get("_meta", {}) if os.path.exists(GENERATION_RATES) else {}
+_stat_cov_k = _gen_meta.get("stat_cov")
+_mob = json.load(open(MOBILISATION_FILE)) if os.path.exists(MOBILISATION_FILE) else {}
+_k_floor = config.get("K_anchor_floor", {})
+_split_sigma = float(_k_floor.get("split_sigma", 0.10))     # differential-transfer floor (relative)
+_mob_floor   = float(_k_floor.get("mob_sigma", 0.0))        # extra common-mode floor (σ_mob usually owns it)
+_sigma_mob = math.hypot(float(_mob.get("sigma_mob", 0.0)), _mob_floor)
+if _sigma_mob < 1e-6:                                        # no mobilisation.json ⇒ level unknown, keep loose
+    _sigma_mob = float(_k_floor.get("mob_default", 0.5))
+    print(f"  [K-prior] no sigma_mob (run derive_mobilisation.py) — common mode loose at {_sigma_mob}")
+
+def _build_lambda_k(kcomps, stat_cov_meta, sigma_mob, split_sigma):
+    n = len(kcomps)
+    Cb = np.zeros((n, n))                                    # bootstrap sampling cov, subselected
+    if stat_cov_meta:
+        order = stat_cov_meta["components"]
+        full = np.asarray(stat_cov_meta["cov"], float)
+        ix = [order.index(c) for c in kcomps]
+        Cb = full[np.ix_(ix, ix)]
+    u = np.ones(n) / math.sqrt(n)
+    P = np.eye(n) - np.outer(u, u)                           # differential-subspace projector
+    Cov = (P @ Cb @ P) + (sigma_mob ** 2) * np.outer(u, u) + (split_sigma ** 2) * P
+    L = np.linalg.pinv(Cov)
+    return 0.5 * (L + L.T)                                   # symmetrize (numerical)
+
+Lambda_K = _build_lambda_k(_kcomps, _stat_cov_k, _sigma_mob, _split_sigma)
+print(f"  K-prior: {_kcomps} | σ_mob={_sigma_mob:.3f} split_floor={_split_sigma:.3f}"
+      f" | eff K-prior λ=diag={np.round(np.diag(Lambda_K), 1).tolist()}"
+      + ("" if _stat_cov_k else "  [WARNING: no stat_cov in generation_rates.json → split = floor only;"
+                                " run derive_generation_rates.py]"))
 
 grav_ref = config.get("gravity_ref", {})
 # Gravity params: a fully-tunable DOUBLE-EXP willingness per component for the mode-substitution
@@ -783,11 +818,9 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
     # temporal f and K-prior) — so this is a 3..6-component solve with no dead/masked columns.
     cols       = [m_res * obs_Th * _obs_f_r, m_commute * obs_Th * _obs_f_c, m_retail * obs_Th * _obs_f_t]
     comp_keys  = ["res", "commute", "retail"]
-    prior_stds = [k_prior_std_res, k_prior_std_commute, k_prior_std_retail]
     for lvl in _active_school:
         cols.append(m_school[lvl] * obs_Th * _obs_f_s[lvl])
         comp_keys.append(f"school_{lvl}")
-        prior_stds.append(k_prior_std_school[lvl])
 
     C  = np.column_stack(cols)               # (n_obs, n_comp): pred = C @ K
     n_comp = C.shape[1]
@@ -798,9 +831,12 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
     nw = _walk_sl_n
     nw_pos = np.maximum(nw, 1e-300)
 
-    # Generation-anchored K-prior: (component index, inv_var); anchor = 1 for every component
-    # (res included) — pulls each K toward the generation value and pins otherwise-flat directions.
-    priors = [(j, 1.0 / (s ** 2)) for j, s in enumerate(prior_stds)]
+    # Properly-derived K-prior (anchor = 1): penalty = (K−1)ᵀ Λ_K (K−1), where Λ_K (built at
+    # setup over these exact comp_keys) is loose along the common mode (mobilisation, σ_mob),
+    # tight on the split (bootstrap sampling cov + transfer floor).  Replaces the old diagonal
+    # Σ_c (K_c−1)²/σ_c².  Λ_K is PSD ⇒ the inner objective stays convex.
+    LK = Lambda_K
+    anchor = K_PRIOR_ANCHOR
 
     def objval(K):
         pred = C @ K
@@ -809,9 +845,8 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
         pw = np.maximum(pred[wm], 1e-30)
         Lp = float(np.sum(2.0 * np.where(
             nw > 0, nw * np.log(nw_pos / pw) + (pw - nw), pw)))
-        Lpr = 0.0
-        for j, iv in priors:
-            Lpr += iv * (K[j] - K_PRIOR_ANCHOR) ** 2
+        dK = K - anchor
+        Lpr = float(dK @ LK @ dK)
         return Lg + Lp + Lpr
 
     def grad_hess(K):
@@ -823,11 +858,10 @@ def solve_scales(m_res, m_commute, m_retail, m_school):
         pw = np.maximum(pred[wm], 1e-30)
         g += Cw.T @ (2.0 * (1.0 - nw / pw))
         H += (Cw.T * (2.0 * nw / (pw * pw))) @ Cw
-        # Generation-anchored K-prior: L = Σ iv·(K_j − anchor)² ⇒
-        # g_j += 2·iv·(K_j − anchor), H_jj += 2·iv (diagonal, PSD).
-        for j, iv in priors:
-            g[j] += 2.0 * iv * (K[j] - K_PRIOR_ANCHOR)
-            H[j, j] += 2.0 * iv
+        # K-prior L = (K−anchor)ᵀ Λ_K (K−anchor) ⇒ g += 2·Λ_K·(K−anchor), H += 2·Λ_K
+        # (full quadratic form; Λ_K PSD keeps H PSD).
+        g += 2.0 * (LK @ (K - anchor))
+        H += 2.0 * LK
         return g, H
 
     # ── Init: single global scale from a moment fit, applied uniformly to every
@@ -1355,14 +1389,16 @@ history_entry = {
     "chi2_per_n": round(chi2_per_n, 4),
     "params":    params,
     "tuner_hyperparams": {
-        # Generation-anchored K-prior (anchor 1) regularises solve_scales — per-
-        # component widths σ_c (degeneracy break + magnitude anchor).
-        # gamma_coupling_scale is no longer used (f is pinned, no per-slot coupling).
+        # Properly-derived K-prior (anchor 1) regularises solve_scales: Λ_K = pinv(
+        # P⊥·Cov_boot·P⊥ + σ_mob²·uuᵀ + split_σ²·P⊥) — loose common mode (mobilisation),
+        # tight derived split.  gamma_coupling_scale is no longer used (f is pinned).
         "K_prior_anchor":       K_PRIOR_ANCHOR,
-        "K_prior_std_res":      k_prior_std_res,
-        "K_prior_std_commute":  k_prior_std_commute,
-        "K_prior_std_retail":   k_prior_std_retail,
-        **{f"K_prior_std_school_{lvl}": k_prior_std_school[lvl] for lvl in SCHOOL_LEVELS},
+        "K_prior_components":   _kcomps,
+        "K_prior_sigma_mob":    _sigma_mob,
+        "K_prior_split_sigma":  _split_sigma,
+        "K_prior_m_island":     float(_mob.get("m_island", 1.0)),
+        "K_prior_stat_cov_seed": (_stat_cov_k or {}).get("seed"),
+        "K_prior_eff_lambda":   dict(zip(_kcomps, np.round(np.diag(Lambda_K), 4).tolist())),
         # Anchor prior: the two floor knobs + the effective per-key λ (diag of the block precision).
         "anchor_floor":         _floor,
         "gravity_eff_lambda":   dict(zip(_grav_param_names, np.round(np.diag(Lambda_full), 4).tolist())),

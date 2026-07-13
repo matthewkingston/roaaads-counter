@@ -50,15 +50,25 @@ Usage
 Re-run whenever the microdata (data/NTS), the purpose mapping, or the school rates change.
 """
 
+import argparse
 import json
+import math
 import os
 import sys
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from purpose_mapping import B01_COMPONENT, B01_EXCLUDE
 import nts_microdata as nts
 
 OUT_FILE = "analysis/generation_rates.json"
+# Canonical 6-component order for the bootstrap stat_cov (matches SCHOOL_LEVELS + the
+# non-school components; the K-prior in tune_assignment.py keys off these names).
+SCHOOL_LEVELS = ("primary", "postprimary", "tertiary")
+COMP_ORDER = ("res", "commute", "retail",
+              "school_primary", "school_postprimary", "school_tertiary")
+BOOT_SEED = 20260713          # fixed so the derived stat_cov is reproducible
 # Per-student school rates (escort + self-drive) + the pre-school escort magnitude
 # routed to retail, from analysis/derive_school_generation.py.
 SCHOOL_RATES_FILE = "analysis/school_generation_rates.json"
@@ -70,17 +80,32 @@ YEARS = [2023, 2024]
 VEHICLE_MODE_CODES = [3, 5, 12]
 
 
-def _rates():
-    """Per-component veh-driver trips/person/day (the 23-cat B01 mapping)."""
+def _load_gen_frames():
+    """Load the trip + person frames once (individual pre-merged with its household W2),
+    so a cluster bootstrap can recompute rates without re-reading the microdata."""
     tr = nts.load("trip", columns=["SurveyYear", "MainMode_B04ID", "TripPurpose_B01ID",
-                                    "W5", "JJXSC"], years=YEARS)
-    veh = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)].copy()
-    veh["w"] = veh.JJXSC * veh.W5                       # NTS trip count × trip weight
-
-    # Persons (diary sample): each individual weighted by their household's W2.
+                                    "HouseholdID", "W5", "JJXSC"], years=YEARS)
     ind = nts.load("individual", columns=["SurveyYear", "HouseholdID"], years=YEARS)
     hh = nts.load("household", columns=["SurveyYear", "HouseholdID", "W2"], years=YEARS)
-    persons = ind.merge(hh[["HouseholdID", "W2"]], on="HouseholdID", how="left")["W2"].sum()
+    ind = ind.merge(hh[["HouseholdID", "W2"]], on="HouseholdID", how="left")
+    return tr, ind
+
+
+def _rates_from(frames, hh_mult=None):
+    """Per-component veh-driver trips/person/day (23-cat B01 mapping) from preloaded
+    frames, optionally under a household-resample multiplicity (dict HouseholdID→count).
+    hh_mult=None ⇒ the point estimate (all weights ×1) — bit-identical to the un-refactored
+    path.  A resample scales every trip weight and every person weight by the household's
+    multiplicity (numerator and denominator alike), i.e. the household counted that often."""
+    tr, ind = frames
+    veh = tr[tr.MainMode_B04ID.isin(VEHICLE_MODE_CODES)].copy()
+    w = veh.JJXSC * veh.W5                             # NTS trip count × trip weight
+    person_w = ind["W2"]                               # each individual ← household W2
+    if hh_mult is not None:
+        w = w * veh["HouseholdID"].map(hh_mult).fillna(0.0)
+        person_w = person_w * ind["HouseholdID"].map(hh_mult).fillna(0.0)
+    veh["w"] = w
+    persons = float(person_w.sum())
 
     # Component rates via the 23-cat B01 mapping.  Any code neither mapped nor in the
     # intentional-exclude set (17 just-walk, sentinels) is a loud error.
@@ -89,11 +114,77 @@ def _rates():
     if len(stray):
         bad = sorted(stray.TripPurpose_B01ID.unique())
         sys.exit(f"ERROR: unmapped TripPurpose_B01ID codes {bad} — update B01_COMPONENT")
-    comp = veh.dropna(subset=["component"]).groupby("component")["w"].sum() / persons / 7.0
-    return comp
+    return veh.dropna(subset=["component"]).groupby("component")["w"].sum() / persons / 7.0
 
 
-def main():
+def _rates():
+    """Point-estimate per-component rates (the B01 mapping)."""
+    return _rates_from(_load_gen_frames())
+
+
+def _students_pop():
+    """Per-level island students/population ratio (census, held FIXED in the bootstrap —
+    it is not survey-sampled)."""
+    nw = json.load(open(NODE_WEIGHTS_FILE))
+    pop = sum(nw.get("node_population", {}).values())
+    return {lvl: sum(nw.get(f"node_school_producers_{lvl}", {}).values()) / pop
+            for lvl in SCHOOL_LEVELS}
+
+
+def _six_vector(comp, srates, pre_pc, students_pop):
+    """Assemble the six per-capita component rates from the two derivations, exactly as
+    main() builds generation_rates.json (retail absorbs the pre-school escort fudge;
+    school per-capita = per-student × island students/pop)."""
+    v = {
+        "res":     float(comp.get("res", 0.0)),
+        "commute": float(comp.get("commute", 0.0)),
+        "retail":  float(comp.get("retail", 0.0)) + float(pre_pc),
+    }
+    for lvl in SCHOOL_LEVELS:
+        v[f"school_{lvl}"] = float(srates[lvl]) * students_pop[lvl]
+    return v
+
+
+def bootstrap_stat_cov(n_boot, seed=BOOT_SEED):
+    """PSU-cluster bootstrap → the 6×6 covariance of the log generation rates.
+
+    Resamples PSUs with replacement *within SurveyYear* (region is degenerate in the
+    2023/24 NTS subset), giving a household multiplicity that is threaded through BOTH
+    the non-school B01 rates (_rates_from) AND the school escort+self-drive derivation
+    (derive_school_generation._compute), so the six rates carry survey sampling variance
+    and their true cross-correlations (shared resampled households).  Reported in
+    LOG/relative space because K_c is a multiplier on ρ_c (Var(K_c) ≈ Var(log ρ̂_c)); the
+    school students/pop ratio is held fixed (census).
+
+    Returns (list(COMP_ORDER), cov 6×6 ndarray).  Needs the DfE participation CSV
+    (school _prepare) + node weights, same as the full derivation."""
+    import derive_school_generation as dsg
+    gen_frames = _load_gen_frames()
+    school_prepared = dsg._prepare()
+    students_pop = _students_pop()
+
+    meta = nts.load("household", columns=["SurveyYear", "HouseholdID", "PSUID"], years=YEARS)
+    hids = meta["HouseholdID"].to_numpy()
+    years = meta["SurveyYear"].to_numpy()
+    _, hid_psu_idx = np.unique(meta["PSUID"].to_numpy(), return_inverse=True)
+    n_psu = int(hid_psu_idx.max()) + 1
+    year_psu_idx = {yr: np.unique(hid_psu_idx[years == yr]) for yr in np.unique(years)}
+
+    rng = np.random.default_rng(seed)
+    logs = np.empty((n_boot, len(COMP_ORDER)))
+    for b in range(n_boot):
+        counts = np.zeros(n_psu)
+        for pidx in year_psu_idx.values():                       # stratify by SurveyYear
+            np.add.at(counts, rng.choice(pidx, size=len(pidx), replace=True), 1.0)
+        hh_mult = dict(zip(hids, counts[hid_psu_idx]))           # per-household multiplicity
+        comp = _rates_from(gen_frames, hh_mult)
+        srates, _, _, pre_pc = dsg._compute(school_prepared, hh_mult)
+        vec = _six_vector(comp, srates, pre_pc, students_pop)
+        logs[b] = [math.log(max(vec[c], 1e-30)) for c in COMP_ORDER]
+    return list(COMP_ORDER), np.cov(logs, rowvar=False)
+
+
+def main(n_boot=500, seed=BOOT_SEED):
     print("Deriving generation rates from the NTS microdata (data/NTS) …")
     comp = _rates()
     # commute / res are per-capita from the B01 mapping.  (comp["school"] — the per-capita
@@ -148,6 +239,24 @@ def main():
         },
         "rates": rates,
     }
+
+    # Cluster-bootstrap sampling covariance of the six log-rates (the DERIVED width for the
+    # K-normalisation prior's differential/split directions; see analysis/tune_assignment.py).
+    if n_boot and n_boot > 0:
+        print(f"  bootstrap: PSU-cluster resample × {n_boot} (seed {seed}) …")
+        comps, cov = bootstrap_stat_cov(n_boot, seed)
+        out["_meta"]["stat_cov"] = {
+            "components": comps,
+            "space": "log-rate (relative; Var(K_c)≈Var(log ρ̂_c))",
+            "cluster": "PSU within SurveyYear (region degenerate in 2023/24)",
+            "n_boot": n_boot,
+            "seed": seed,
+            "cov": cov.tolist(),
+        }
+        sd = np.sqrt(np.diag(cov))
+        print("  per-component sampling CV (√diag of log-cov): "
+              + ", ".join(f"{c}={s:.3f}" for c, s in zip(comps, sd)))
+
     with open(OUT_FILE, "w") as f:
         json.dump(out, f, indent=2)
 
@@ -161,4 +270,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description="Derive per-component generation rates "
+                                             "(+ bootstrap stat_cov for the K-prior).")
+    ap.add_argument("--boot", type=int, default=500,
+                    help="bootstrap replicates for stat_cov (0 to skip; default 500)")
+    ap.add_argument("--seed", type=int, default=BOOT_SEED, help="bootstrap RNG seed")
+    args = ap.parse_args()
+    main(n_boot=args.boot, seed=args.seed)

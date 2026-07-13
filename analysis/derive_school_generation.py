@@ -149,7 +149,9 @@ def _level_shares(sec_share, code, educn):
     return (0.0, 0.0, 0.0)
 
 
-def derive():
+def _prepare():
+    """Load + augment the microdata once — the expensive per-individual level-share
+    apply — so a cluster bootstrap can recompute the rates cheaply per resample."""
     sec_share = _england_secondary_share()
     ind = nts.load("individual", columns=["SurveyYear", "IndividualID", "Age_B01ID",
                                            "EducN_B01ID", "HouseholdID"], years=YEARS)
@@ -163,38 +165,65 @@ def derive():
 
     tr = nts.load("trip", columns=["SurveyYear", "TripPurpose_B01ID", "MainMode_B04ID",
                                    "IndividualID", "HouseholdID", "W5", "JJXSC"], years=YEARS)
-
-    # ── ESCORT: household regression of escort-vehicle trips on level-student counts ──
     esc = tr[(tr.TripPurpose_B01ID == P_ESCORT_EDU) & (tr.MainMode_B04ID.isin(VEH))]
-    hk = (ind.groupby("HouseholdID")[["pre", "prim", "sec", "ter"]].sum()
-          .join(hh.set_index("HouseholdID")["W2"]))
-    hk["y"] = esc.groupby("HouseholdID")["JJXSC"].sum().reindex(hk.index).fillna(0.0)
-    D = hk[hk[["pre", "prim", "sec", "ter"]].sum(axis=1) > 0]
-    X = D[["pre", "prim", "sec", "ter"]].values
-    sw = np.sqrt(D["W2"].values)
-    beta, *_ = np.linalg.lstsq(X * sw[:, None], D["y"].values * sw, rcond=None)
-    esc_pre, esc_prim, esc_sec, esc_ter = beta / 7.0            # per student per day
-
-    # ── SELF-DRIVE: per-age own-vehicle education rate, combined per level ──
     sd = tr[(tr.TripPurpose_B01ID == P_EDUCATION) & (tr.MainMode_B04ID.isin(VEH))].copy()
     sd["w"] = sd.JJXSC * sd.W5
     ind["sd"] = ind.IndividualID.map(sd.groupby("IndividualID")["w"].sum()).fillna(0.0)
 
+    # Per-household escort regression design (student counts by level + escort-trip count).
+    hk = (ind.groupby("HouseholdID")[["pre", "prim", "sec", "ter"]].sum()
+          .join(hh.set_index("HouseholdID")["W2"]))
+    hk["y"] = esc.groupby("HouseholdID")["JJXSC"].sum().reindex(hk.index).fillna(0.0)
+    return {"ind": ind, "hk": hk, "sec_share": sec_share}
+
+
+def _compute(prepared, hh_mult=None):
+    """Per-student escort+self-drive rates (+ pre-school→retail magnitude) from the
+    prepared frames, optionally under a household-resample multiplicity (dict
+    HouseholdID→count).  hh_mult=None ⇒ the point estimate (all weights ×1), which is
+    bit-identical to the pre-refactor path.  A cluster resample scales every W2 and
+    trip aggregate by the household's multiplicity — exactly the household counted that
+    many times — so the escort regression weight, the self-drive ratios, and the
+    pre-school fraction all carry the resample."""
+    ind = prepared["ind"]
+    hk = prepared["hk"]
+    sec_share = prepared["sec_share"]
+    if hh_mult is None:
+        m_ind = np.ones(len(ind))
+        m_hk = np.ones(len(hk))
+    else:
+        m_ind = ind["HouseholdID"].map(hh_mult).fillna(0.0).to_numpy()
+        m_hk = np.array([hh_mult.get(h, 0.0) for h in hk.index], dtype=float)
+
+    # ── ESCORT: W2-weighted household regression (resample = row weight × multiplicity) ──
+    Xall = hk[["pre", "prim", "sec", "ter"]].to_numpy()
+    keep = Xall.sum(axis=1) > 0
+    X = Xall[keep]
+    sw = np.sqrt(hk["W2"].to_numpy()[keep] * m_hk[keep])
+    beta, *_ = np.linalg.lstsq(X * sw[:, None], hk["y"].to_numpy()[keep] * sw, rcond=None)
+    esc_pre, esc_prim, esc_sec, esc_ter = beta / 7.0           # per student per day
+
+    # ── SELF-DRIVE: per-age own-vehicle education rate, combined per level ──
+    age = ind["Age_B01ID"].to_numpy()
+    educ = ind["EducN_B01ID"].to_numpy()
+    W2 = ind["W2"].to_numpy() * m_ind
+    sdv = ind["sd"].to_numpy() * m_ind
+
     def sd_rate(code):
-        g = ind[ind.Age_B01ID == code] if code <= 5 else \
-            ind[(ind.Age_B01ID == code) & (ind.EducN_B01ID == 1)]
-        if len(g) == 0 or g.W2.sum() == 0:
+        sel = (age == code) if code <= 5 else ((age == code) & (educ == 1))
+        den = W2[sel].sum()
+        if den == 0:
             return 0.0
-        return FIRM_AGE18 if code == 8 else g.sd.sum() / g.W2.sum() / 7.0
+        return FIRM_AGE18 if code == 8 else sdv[sel].sum() / den / 7.0
 
     def sd_level(idx):
         num = den = 0.0
         for code in range(4, 22):
-            g = ind[ind.Age_B01ID == code]
-            if len(g) == 0:
+            sel = age == code
+            if not sel.any():
                 continue
             share = _level_shares(sec_share, code, 1)[idx]
-            students = (g[g.EducN_B01ID.isin([1, 2])].W2.sum() if code >= 6 else g.W2.sum())
+            students = (W2[sel & np.isin(educ, [1, 2])].sum() if code >= 6 else W2[sel].sum())
             num += sd_rate(code) * students * share
             den += students * share
         return num / den if den else 0.0
@@ -202,7 +231,7 @@ def derive():
     sd_prim, sd_sec, sd_ter = sd_level(0), sd_level(1), sd_level(2)
 
     # ── pre-school escort → retail magnitude (England per-capita) ──
-    pre_percapita = ind[ind.Age_B01ID.isin([2, 3])].W2.sum() / ind.W2.sum()
+    pre_percapita = W2[np.isin(age, [2, 3])].sum() / W2.sum()
 
     rates = {
         "primary":     esc_prim + sd_prim,
@@ -213,8 +242,13 @@ def derive():
         "escort":     {"primary": esc_prim, "postprimary": esc_sec, "tertiary": esc_ter},
         "self_drive": {"primary": sd_prim, "postprimary": sd_sec, "tertiary": sd_ter},
     }
-    preschool_escort_percapita = esc_pre * pre_percapita
-    return rates, detail, esc_pre, preschool_escort_percapita
+    return rates, detail, esc_pre, esc_pre * pre_percapita
+
+
+def derive(prepared=None, hh_mult=None):
+    """Point-estimate wrapper (loads lazily) — signature preserved for callers; the
+    bootstrap passes a shared ``prepared`` bundle + a household multiplicity."""
+    return _compute(prepared if prepared is not None else _prepare(), hh_mult)
 
 
 def main():
