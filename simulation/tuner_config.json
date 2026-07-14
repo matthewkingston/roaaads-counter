@@ -17,52 +17,132 @@
     "school_postprimary": 0.5,
     "school_tertiary": 0.5
   },
-  "gravity_lambda": {
-    "res_taus": 0.2,
-    "res_taul": 0.2,
-    "res_w": 0.2,
-    "commute_taus": 0.2,
-    "commute_taul": 0.2,
-    "commute_w": 0.2,
-    "retail_taus": 0.2,
-    "retail_taul": 0.2,
-    "retail_w": 0.2,
-    "school_primary_taus": 0.2,
-    "school_primary_taul": 0.2,
-    "school_primary_w": 0.2,
-    "school_postprimary_taus": 0.2,
-    "school_postprimary_taul": 0.2,
-    "school_postprimary_w": 0.2,
-    "school_tertiary_taus": 0.2,
-    "school_tertiary_taul": 0.2,
-    "school_tertiary_w": 0.2
-  },
-   "gravity_fixed": [
-    "res_taul", "res_w",
-    "commute_taul", "commute_w",
-    "retail_taul", "retail_w",
-    "school_primary_taul", "school_primary_w",
-    "school_postprimary_taul", "school_postprimary_w",
-    "school_tertiary_taul", "school_tertiary_w"
-  ],
   "gravity_ref": {
-    "res_taus": 400.5338,
-    "res_taul": 3184.7061,
-    "res_w": 0.999359,
-    "commute_taus": 445.7341,
-    "commute_taul": 1964.3781,
-    "commute_w": 0.999424,
-    "retail_taus": 360.1793,
-    "retail_taul": 2810.2398,
-    "retail_w": 0.999584,
-    "school_primary_taus": 92.1007,
-    "school_primary_taul": 325.8146,
-    "school_primary_w": 0.999169,
-    "school_postprimary_taus": 100.8551,
-    "school_postprimary_taul": 527.584,
-    "school_postprimary_w": 0.999883,
-    "school_tertiary_taus": 475.2427,
-    "school_tertiary_taul": 1617.5681,
-    "school_tertiary_w": 0.998505
+    "res_taus": 374.7724,
+    "res_taul": 2968.5612,
+    "res_w": 0.999468,
+    "commute_taus": 579.038,
+    "commute_taul": 2685.6976,
+    "commute_w": 0.99796,
+    "retail_taus": 418.1112,
+    "retail_taul": 3178.6302,
+    "retail_w": 0.998153,
+    "school_primary_taus": 30.0029,
+    "school_primary_taul": 429.3871,
+    "school_primary_w": 0.999987,
+    "school_postprimary_taus": 144.7179,
+    "school_postprimary_taul": 425.8542,
+    "school_postprimary_w": 0.986246,
+    "school_tertiary_taus": 340.527,
+    "school_tertiary_taul": 1000.7845,
+    "school_tertiary_w": 0.982157
+  },
+  "gravity_stat_cov": {
+    "res": [
+      [
+        7.904611872995545e-05,
+        3.0226892422278936e-05,
+        -0.00014136218174935699
+      ],
+      [
+        3.0226892422359815e-05,
+        0.0005118893812119439,
+        0.0006031866605331135
+      ],
+      [
+        -0.00014136218174907805,
+        0.0006031866605334488,
+        0.010225555020547271
+      ]
+    ],
+    "commute": [
+      [
+        0.00044906146637211167,
+        0.0008046582894198641,
+        0.0019610509581334426
+      ],
+      [
+        0.0008046582894198,
+        0.006627294640678964,
+        0.019409775387656158
+      ],
+      [
+        0.001961050958133092,
+        0.01940977538765585,
+        0.06442771558755625
+      ]
+    ],
+    "retail": [
+      [
+        0.00020407267956720976,
+        0.00010332885744656047,
+        -0.00018512410104473234
+      ],
+      [
+        0.00010332885744671196,
+        0.0006938788590619872,
+        0.0016033836256182804
+      ],
+      [
+        -0.00018512410104428698,
+        0.0016033836256187897,
+        0.0058148702034975025
+      ]
+    ],
+    "school_primary": [
+      [
+        0.2996084151027702,
+        -0.0007670598299382189,
+        -2.506444207950669
+      ],
+      [
+        -0.0007670598312705179,
+        0.0004297342398678229,
+        0.006429793659260897
+      ],
+      [
+        -2.5064442079711,
+        0.006429793648143184,
+        21.547620211892383
+      ]
+    ],
+    "school_postprimary": [
+      [
+        0.011153959643437794,
+        0.008093295584913788,
+        0.009014266560005969
+      ],
+      [
+        0.008093295584914287,
+        0.014919065472284514,
+        0.05031157079264652
+      ],
+      [
+        0.00901426656000865,
+        0.050311570792648405,
+        0.24935684376279446
+      ]
+    ],
+    "school_tertiary": [
+      [
+        1.4206632525459337,
+        0.02887714099688317,
+        0.08310003311584903
+      ],
+      [
+        0.028877140996882485,
+        0.07822960694736844,
+        0.25038220145760365
+      ],
+      [
+        0.08310003311584646,
+        0.2503822014576024,
+        9.525834419422258
+      ]
+    ]
+  },
+  "anchor_floor": {
+    "head_sigma": 0.182,
+    "tail_sigma": 0.693
   }
 }
