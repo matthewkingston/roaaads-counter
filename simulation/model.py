@@ -227,6 +227,7 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
                          doubly_constrained=None,
                          furness_max_sweeps=None,
                          furness_state=None,
+                         mu=None,
                          return_legs=False):
     """Per-OD-pair, pre-K production-constrained component flows.
 
@@ -446,10 +447,21 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
         iD = _inv_denom(attr_full[dst], F, attr_full, st)
         return gs_c * prod_full[src] * attr_full[dst] * F * iD[src]
 
+    def _muprod(key, prod):
+        """Per-area car-ownership multiplier on a producer array (home-end legs only).
+        `mu` is {component: per-node array} normalised (by the caller) to producer-weighted
+        mean 1, so it redistributes production spatially without moving the component total.
+        `mu=None` (or a missing key) ⇒ prod unchanged ⇒ bit-identical to the pre-μ path."""
+        if mu is None:
+            return prod
+        m = mu.get(key)
+        return prod if m is None else m * prod
+
     legs = {}   # populated for return_legs=True (the individual producer→attractor legs)
 
     # res: single leg covers both directions (pop↔pop, symmetric).  Held singly-constrained.
-    t_res = _leg(w_pop, gs_res, w_pop, F_res, st_res, "res", "res")
+    # Producer (home end) carries the car-ownership multiplier; the pop attractor does not.
+    t_res = _leg(_muprod("res", w_pop), gs_res, w_pop, F_res, st_res, "res", "res")
     legs["res"] = t_res
 
     # commute: symmetric producer↔attractor round-trip.  Out leg home→work (producer =
@@ -462,7 +474,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
     legs["commute_ret"] = _com_ret
 
     # retail: symmetric pop↔retail round-trip (out home→shop, return shop→home).
-    _ret_out = _leg(w_pop,    gs_ret_out, w_retail, F_ret, st_ret, "retail", "retail_out")
+    # Only the outbound (home-end) producer carries μ; the return producer is the shop.
+    _ret_out = _leg(_muprod("retail", w_pop), gs_ret_out, w_retail, F_ret, st_ret, "retail", "retail_out")
     _ret_ret = _leg(w_retail, gs_ret_ret, w_pop,    F_ret, st_ret, "retail", "retail_ret")
     t_retail = _ret_out + _ret_ret
     legs["retail_out"] = _ret_out
@@ -488,7 +501,8 @@ def constrained_od_flows(od_src, od_dst, od_dist, N_nodes,
             prod = w_school_prod_levels[lvl]                           # resident students of this level
             gs_out = gs.get(f"sch_{lvl}_out", 1.0)
             gs_ret = gs.get(f"sch_{lvl}_ret", 1.0)
-            _sch_out = _leg(prod,  gs_out, w_sch, F_sch, st_sch, comp, f"{comp}_out")   # students i → school j
+            # Only the outbound (home-end, students) producer carries μ; the school does not.
+            _sch_out = _leg(_muprod(comp, prod), gs_out, w_sch, F_sch, st_sch, comp, f"{comp}_out")   # students i → school j
             _sch_ret = _leg(w_sch, gs_ret, prod,  F_sch, st_sch, comp, f"{comp}_ret")   # school i → home j
             t_sch_by_level[lvl] = _sch_out + _sch_ret
             legs[f"{comp}_out"] = _sch_out
@@ -589,6 +603,35 @@ def compute_generation_scales(node_weights, rates, verbose=False):
         print("  [gen-scale] producer rates (trips/day per producer): "
               + ", ".join(f"{k}={v:.4g}" for k, v in gen_scale.items()))
     return gen_scale
+
+
+def build_mu_arrays(weights, node_ids, w_pop, w_school_prod_levels, verbose=False):
+    """Per-node car-ownership multiplier arrays for constrained_od_flows(mu=…) (M3).
+
+    Reads the raw `node_mu_<component>` layers (written by build_demographics /
+    reduce_deadends) and normalises each to **producer-weighted mean 1** over the model's
+    node set — res/retail by population (`w_pop`), each school level by that level's students
+    (`w_school_prod_levels[lvl]`).  That is the exact level-preserving condition
+    (Σ μ_c·prod_c = Σ prod_c), so μ redistributes production spatially without moving any
+    component's total.  Returns `None` when no `node_mu_*` layers are present (⇒ μ off,
+    pre-M3 behaviour, and constrained_od_flows(mu=None) is the identical old path)."""
+    if not any(str(k).startswith("node_mu_") for k in weights):
+        return None
+    _pnid = lambda k: (int(k) if str(k).lstrip("-").isdigit() else k)
+    def _load(layer):
+        d = {_pnid(k): v for k, v in weights.get(layer, {}).items()}
+        return np.array([d.get(nid, 1.0) for nid in node_ids], dtype=np.float64)  # 1.0 = neutral
+    def _norm(arr, wt):
+        m = float((arr * wt).sum())
+        return arr * (float(wt.sum()) / m) if m > 0 else arr
+    mu = {"res":    _norm(_load("node_mu_res"),    w_pop),
+          "retail": _norm(_load("node_mu_retail"), w_pop)}
+    for lvl in SCHOOL_LEVELS:
+        mu[f"school_{lvl}"] = _norm(_load(f"node_mu_school_{lvl}"), w_school_prod_levels[lvl])
+    if verbose:
+        print("  [μ] car-ownership multiplier active (producer-weighted mean 1): "
+              + ", ".join(f"{k}∈[{a.min():.2f},{a.max():.2f}]" for k, a in mu.items()))
+    return mu
 
 
 def scatter_od_to_links(t_pair, pair_idx, link_idx, link_weight, N_links):

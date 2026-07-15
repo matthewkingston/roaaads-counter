@@ -19,7 +19,7 @@ from model import (COUNT_SITES, EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, OFFICIAL_HOURLY, SCHOOL_LEVELS,
                    constrained_od_flows, scatter_od_to_links,
                    load_self_terms, aadt_weights,
-                   load_generation_rates, compute_generation_scales,
+                   load_generation_rates, compute_generation_scales, build_mu_arrays,
                    site_flow, compute_chi2, print_chi2_table,
                    assert_paths_cache_fresh,
                    willingness_keys, willingness_from_flat)
@@ -149,6 +149,8 @@ print(f"  {len(node_ids_arr)} nodes  pop {w_pop.sum():,.0f}  workplace {w_workpl
 _gen_rates = load_generation_rates()
 _GEN_SCALE = (compute_generation_scales(weights, _gen_rates, verbose=True)
               if _gen_rates is not None else None)
+# Per-area car-ownership multiplier μ (M3); None when no node_mu_* layers ⇒ pre-μ behaviour.
+_MU = build_mu_arrays(weights, node_ids_arr, w_pop, w_school_prod_levels, verbose=True)
 
 N_links  = len(link_u)
 N_nodes  = len(node_ids_arr)
@@ -176,6 +178,7 @@ t_res, t_commute, t_retail, t_sch_by_level = constrained_od_flows(
     self_terms=self_terms,
     w_commute_prod=w_commute_prod,
     gen_scale=_GEN_SCALE,
+    mu=_MU,
     doubly_constrained=_DBLC)
 raw_res     = scatter_od_to_links(t_res,     pair_idx, link_idx, link_weight, N_links)
 raw_commute = scatter_od_to_links(t_commute, pair_idx, link_idx, link_weight, N_links)

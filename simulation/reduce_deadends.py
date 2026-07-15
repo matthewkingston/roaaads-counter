@@ -240,6 +240,9 @@ def main():
     # Per-level school attractor + producer dicts (each re-bucketed onto super-nodes).
     sch_o_levels   = {lvl: nw_out.setdefault(f"node_school_demand_{lvl}", {})    for lvl in model.SCHOOL_LEVELS}
     sprod_o_levels = {lvl: nw_out.setdefault(f"node_school_producers_{lvl}", {}) for lvl in model.SCHOOL_LEVELS}
+    # Car-ownership μ layers (M3) are INTENSIVE (per-capita multipliers) — a super-node takes
+    # the population-weighted MEAN of its absorbed nodes' μ (not the sum); default 1.0.
+    mu_o_layers = {k: nw_out[k] for k in list(nw_out) if k.startswith("node_mu_")}
     internal = set(int(x) for x in nw_out.get("internal_node_ids", []))
 
     deadend_map = {}
@@ -266,6 +269,8 @@ def main():
         rcattr_sum = rcprod_sum = 0.0
         rsch_lvl   = {lvl: 0.0 for lvl in model.SCHOOL_LEVELS}
         rsprod_lvl = {lvl: 0.0 for lvl in model.SCHOOL_LEVELS}
+        rmu   = {k: 0.0 for k in mu_o_layers}   # Σ μ·pop (pop-weighted μ accumulator)
+        rmu_u = {k: 0.0 for k in mu_o_layers}   # Σ μ     (unweighted fallback if pop=0)
         for n in region_nodes:
             o = G.nodes[n].get("osmid_original", str(n))
             absorbed_orig.append(str(o))
@@ -275,7 +280,13 @@ def main():
             for lvl in model.SCHOOL_LEVELS:
                 rsch_lvl[lvl]   += w(sch_o_levels[lvl], n)
                 rsprod_lvl[lvl] += w(sprod_o_levels[lvl], n)
+            _pw = w(pop, n)
+            for k, d in mu_o_layers.items():
+                _mv = float(d.get(str(n), 1.0))     # μ default is 1.0 (neutral), not 0.0
+                rmu[k] += _mv * _pw; rmu_u[k] += _mv
             for d in (pop_o, work_o, park_o, cattr_o, cprod_o):
+                d.pop(str(n), None)
+            for d in mu_o_layers.values():
                 d.pop(str(n), None)
             for lvl in model.SCHOOL_LEVELS:
                 sch_o_levels[lvl].pop(str(n), None); sprod_o_levels[lvl].pop(str(n), None)
@@ -295,6 +306,9 @@ def main():
         for lvl in model.SCHOOL_LEVELS:
             sch_o_levels[lvl][str(S)]   = rsch_lvl[lvl]
             sprod_o_levels[lvl][str(S)] = rsprod_lvl[lvl]
+        for k in mu_o_layers:                       # intensive: pop-weighted mean μ (1.0 fallback)
+            mu_o_layers[k][str(S)] = (rmu[k] / rpop_sum) if rpop_sum > 0 else (
+                rmu_u[k] / len(region_nodes))
 
         # synthetic directed links E<->S reproducing t_fwd / t_rev after osmnx re-augment
         def synth_len(t):

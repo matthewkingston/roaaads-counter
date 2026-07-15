@@ -51,7 +51,7 @@ from model import (EXCLUDE_LINKS, PATHS_CACHE, WEIGHTS_FILE,
                    TUNER_CONFIG, LINK_AADT, TUNED_PARAMS, SCHOOL_LEVELS,
                    GENERATION_RATES, MOBILISATION_FILE,
                    constrained_od_flows, scatter_od_to_links, load_self_terms,
-                   load_generation_rates, compute_generation_scales,
+                   load_generation_rates, compute_generation_scales, build_mu_arrays,
                    print_chi2_table, assert_paths_cache_fresh,
                    format_slot_time, nice_official, willingness_from_flat)
 
@@ -230,6 +230,8 @@ if not _has_school:
 _gen_rates = load_generation_rates()
 _GEN_SCALE = (compute_generation_scales(wdata, _gen_rates, verbose=True)
               if _gen_rates is not None else None)
+# Per-area car-ownership multiplier μ (M3); None when no node_mu_* layers ⇒ pre-μ behaviour.
+_MU = build_mu_arrays(wdata, node_ids, base_w_pop, base_w_school_prod_levels, verbose=True)
 
 # Doubly-constrained (Furness) components: read from tuned_params.json if present.  The listed
 # components' legs are ALSO attraction-constrained (Σ_i T_ij ∝ attractor_j; see
@@ -751,6 +753,7 @@ def run_assignment(willingness):
         self_terms=_self_terms,
         w_commute_prod=base_w_commute_prod,
         gen_scale=_GEN_SCALE,
+        mu=_MU,
         doubly_constrained=_DBLC,
         furness_max_sweeps=_FURNESS_SWEEPS,
         furness_state=_FURNESS_STATE)

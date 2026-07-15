@@ -30,7 +30,7 @@ Output: data/census_zones.json  (same schema as before; external_nodes now inclu
 RoI LEA/ED/SA entries alongside NI DEA/SDZ/DZ entries)
 """
 
-import json, math, os
+import json, math, os, sys
 import geopandas as gpd
 import pandas as pd
 import numpy as np
@@ -48,6 +48,8 @@ import census_school_producers
 import census_attractor
 from ingest_ni_census import load_ni_census
 from ingest_roi_census import load_roi_census
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis"))
+import car_ownership_mu as _com   # M1×M2 per-area car-ownership multiplier μ (M3)
 
 OUTPUT_FILE = "data/census_zones.json"
 
@@ -81,6 +83,35 @@ dz["commute_producers"] = dz["area_code"].map(lambda c: _supply.get(c, {}).get("
 _school_prod = census_school_producers.load_school_producers()
 for _lvl in ("primary", "postprimary", "tertiary"):
     dz["school_prod_" + _lvl] = dz["area_code"].map(lambda c, _l=_lvl: _school_prod.get(c, {}).get(_l, 0.0))
+
+# Per-small-area car-ownership mobilisation multipliers μ_c (M3): M1 band shapes × M2 field,
+# for the home-end producer legs res / retail / the three school levels.  Aggregated to each
+# external zone below (producer-weighted mean); the internal core reads the per-DZ values.
+_mu_relrate = _com.load_relrate()
+_mu_field   = _com.load_field()
+def _sa_mu(code, comp):
+    s = str(code)
+    a = _mu_field.get(s) or _mu_field.get(s.lstrip("0"))   # tolerate RoI zero-pad differences
+    return _com.mu_of_share(a["share"], _mu_relrate[comp]) if a else 1.0
+for _c in _com.MU_COMPONENTS:
+    dz["mu_" + _c] = dz["area_code"].map(lambda code, k=_c: _sa_mu(code, k))
+_mu_matched = int(dz["area_code"].map(
+    lambda c: (str(c) in _mu_field) or (str(c).lstrip("0") in _mu_field)).sum())
+print(f"Car-ownership μ: matched {_mu_matched}/{len(dz)} small areas to the field "
+      f"(unmatched → μ=1.0)")
+
+# Producer-weighted-mean μ over a zone's child small areas (res/retail weighted by population,
+# school levels by that level's student producers); neutral 1.0 where the weight sums to zero.
+_MU_WEIGHT = {"res": "population", "retail": "population",
+              "school_primary": "school_prod_primary",
+              "school_postprimary": "school_prod_postprimary",
+              "school_tertiary": "school_prod_tertiary"}
+def _zone_mu(csa):
+    out = {}
+    for comp, wcol in _MU_WEIGHT.items():
+        w = csa[wcol]; denom = float(w.sum())
+        out["mu_" + comp] = round(float((csa["mu_" + comp] * w).sum() / denom) if denom > 0 else 1.0, 6)
+    return out
 _n_missing = int((~dz["area_code"].isin(_supply)).sum())
 print(f"Producers: matched {len(dz) - _n_missing}/{len(dz)} small areas to census_supply"
       + (f" — {_n_missing} unmatched (treated as 0)" if _n_missing else ""))
@@ -188,6 +219,7 @@ for _, row in sdz_external.iterrows():
         "school_producers_primary":     int(round(child_sa["school_prod_primary"].sum())),
         "school_producers_postprimary": int(round(child_sa["school_prod_postprimary"].sum())),
         "school_producers_tertiary":    int(round(child_sa["school_prod_tertiary"].sum())),
+        **_zone_mu(child_sa),
     })
 print(f"  {len(external_nodes)} intermediate external nodes (SDZ/ED)")
 
@@ -219,6 +251,7 @@ for _, row in orphan_sa.iterrows():
         "school_producers_primary":     int(round(row["school_prod_primary"])),
         "school_producers_postprimary": int(round(row["school_prod_postprimary"])),
         "school_producers_tertiary":    int(round(row["school_prod_tertiary"])),
+        **_zone_mu(dz[dz["area_code"] == row["area_code"]]),
     })
 print(f"  {len(external_nodes) - n_int_start} orphan small-area external nodes (DZ/SA)")
 
@@ -262,6 +295,7 @@ for _, row in dea_external.iterrows():
         "school_producers_primary":     int(round(sprod_p)),
         "school_producers_postprimary": int(round(sprod_pp)),
         "school_producers_tertiary":    int(round(sprod_t)),
+        **_zone_mu(child_sa),
     })
 print(f"  {len(external_nodes) - n_outer_start} outer external nodes (DEA/LEA)")
 print(f"  {len(external_nodes)} external nodes total")

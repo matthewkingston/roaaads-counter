@@ -45,6 +45,12 @@ SCHOOL_LEVELS = ("primary", "postprimary", "tertiary")
 SCHOOL_LEVEL_LAYERS    = ["node_school_demand_"    + l for l in SCHOOL_LEVELS]  # attractor (aligned w/ LEVEL_ENROL_COLS)
 SCHOOL_PRODUCER_LAYERS = ["node_school_producers_" + l for l in SCHOOL_LEVELS]  # producer
 
+# Per-area car-ownership mobilisation multipliers μ (M3), producer-side home-end legs.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analysis"))
+import car_ownership_mu as _com
+MU_COMPONENTS = _com.MU_COMPONENTS   # res, retail, school_primary/postprimary/tertiary
+MU_LAYERS     = ["node_mu_" + c for c in MU_COMPONENTS]   # raw (un-normalised) per-node μ layers
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -104,6 +110,8 @@ if args.zones_only:
         w.setdefault("node_commute_producers", {})[str(nid)] = float(ext.get("commute_producers", 0.0))
         for _lyr in SCHOOL_PRODUCER_LAYERS:
             w.setdefault(_lyr, {})[str(nid)] = float(ext.get("school_producers_" + _lyr.split("_")[-1], 0.0))
+        for c in MU_COMPONENTS:                      # per-zone car-ownership μ (M3)
+            w.setdefault("node_mu_" + c, {})[str(nid)] = float(ext.get("mu_" + c, 1.0))
         _sch_tot = sum(float(ext.get("school_demand_" + l, 0.0)) for l in SCHOOL_LEVELS)
         print(f"  {nid}  {ext['level']}  "
               f"pop={ext['population']:>8,}  wp={ext['workplace_pop']:>8,}  "
@@ -538,17 +546,33 @@ else:
     _school_prod = census_school_producers.load_school_producers()   # per-level school producers
     node_commute_producers = {}
     node_school_prod_levels = {lyr: {} for lyr in SCHOOL_PRODUCER_LAYERS}
+    # Car-ownership μ (M3): per-DZ multiplier (intensive — same for every node in the DZ),
+    # from the M2 field × M1 shapes.  Written raw; the model callers normalise to
+    # producer-weighted mean 1.  External nodes take μ from census_zones.json (below).
+    _mu_relrate = _com.load_relrate()
+    _mu_field   = _com.load_field()
+    def _area_mu(code):
+        s = str(code); a = _mu_field.get(s) or _mu_field.get(s.lstrip("0"))
+        return ({c: _com.mu_of_share(a["share"], _mu_relrate[c]) for c in MU_COMPONENTS}
+                if a else {c: 1.0 for c in MU_COMPONENTS})
+    node_mu_layers = {c: {} for c in MU_COMPONENTS}
+    _mu_dz_hit = 0
     for dz_code, nodes_in_dz in dz_to_nodes.items():
-        _com = float(_supply.get(dz_code, {}).get("commute", 0.0))
+        _com_p = float(_supply.get(dz_code, {}).get("commute", 0.0))
         _sp = _school_prod.get(dz_code, {})
         _lvl_vals = [float(_sp.get(l, 0.0)) for l in SCHOOL_LEVELS]  # aligned w/ SCHOOL_PRODUCER_LAYERS
+        _dzmu = _area_mu(dz_code)
+        _mu_dz_hit += int(str(dz_code) in _mu_field or str(dz_code).lstrip("0") in _mu_field)
         pops = {n: node_population.get(n, 0.0) for n in nodes_in_dz}
         tot = sum(pops.values())
         for n in nodes_in_dz:
             frac = (pops[n] / tot) if tot > 0 else (1.0 / len(nodes_in_dz))
-            node_commute_producers[n] = node_commute_producers.get(n, 0.0) + _com * frac
+            node_commute_producers[n] = node_commute_producers.get(n, 0.0) + _com_p * frac
             for _lyr, _v in zip(SCHOOL_PRODUCER_LAYERS, _lvl_vals):
                 node_school_prod_levels[_lyr][n] = node_school_prod_levels[_lyr].get(n, 0.0) + _v * frac
+            for c in MU_COMPONENTS:
+                node_mu_layers[c][n] = _dzmu[c]
+    print(f"  car-ownership μ: matched {_mu_dz_hit}/{len(dz_to_nodes)} core DZs to the field")
     _sch_prod_tot = sum(sum(d.values()) for d in node_school_prod_levels.values())
     print(f"  internal producers: commute {sum(node_commute_producers.values()):.0f}, "
           f"school {_sch_prod_tot:.0f} "
@@ -717,6 +741,8 @@ else:
             node_commute_producers[nid] = float(ext.get("commute_producers", 0.0))
             for _lyr in SCHOOL_PRODUCER_LAYERS:        # school_producers_<lvl> → node_school_producers_<lvl>
                 node_school_prod_levels[_lyr][nid] = float(ext.get("school_producers_" + _lyr.split("_")[-1], 0.0))
+            for c in MU_COMPONENTS:                     # per-zone car-ownership μ from census_zones.json
+                node_mu_layers[c][nid] = float(ext.get("mu_" + c, 1.0))
         if _missing_retail:
             print(f"  WARNING: {_missing_retail}/{len(ext_nodes)} external nodes lack "
                   f"'retail_spaces' — re-run build_parking.py then build_census_zones.py. "
@@ -735,6 +761,7 @@ else:
             "node_retail_spaces":   {str(k): v for k, v in node_retail_spaces.items()},
             "node_commute_producers": {str(k): v for k, v in node_commute_producers.items()},
             **{lyr: {str(k): v for k, v in node_school_prod_levels[lyr].items()} for lyr in SCHOOL_PRODUCER_LAYERS},
+            **{"node_mu_" + c: {str(k): v for k, v in node_mu_layers[c].items()} for c in MU_COMPONENTS},
             "boundary_node_ids":      sorted(_boundary_ids),
             "boundary_node_ids_cons": sorted(_boundary_ids_cons),
             "internal_node_ids":      sorted(_internal_ids),
