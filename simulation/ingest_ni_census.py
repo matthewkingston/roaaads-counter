@@ -106,16 +106,25 @@ def load_ni_census():
     dz_sdz_col   = _find_col(dz,  ["SDZ2021_cd", "SDZ_cd", "SDZ2021", "SDZCODE"])
     sdz_code_col = _find_col(sdz, ["SDZ2021_cd", "SDZ_cd", "SDZ2021", "SDZCODE"])
     sdz_dea_col  = _find_col(sdz, ["DEA2021_cd", "DEA_cd", "DEA2021", "DEACODE"])
-    dea_code_col = _find_col(dea, ["DEA2021_cd", "DEA_cd", "DEA2021", "DEACODE"])
+    # 'FinalR_DEA' is the DEA *name* (e.g. 'Airport'), the only per-DEA identifier the DEA2021
+    # geojson carries (no standard DEA2021_cd); unique across the 80 DEAs, so it serves as area_code.
+    dea_code_col = _find_col(dea, ["DEA2021_cd", "DEA_cd", "DEA2021", "DEACODE", "FinalR_DEA"])
 
+    # Fail loud rather than silently grabbing the first column (which could pick a meaningless
+    # field like OBJECTID if the boundary schema ever changes) — add the real column to the
+    # _find_col candidate lists above if a new NISRA vintage renames it.
     if sdz_code_col is None:
-        cands = [c for c in sdz.columns if "code" in c.lower() or "cd" in c.lower()]
-        sdz_code_col = cands[0] if cands else sdz.columns[0]
-        print(f"  SDZ code column inferred: '{sdz_code_col}'")
+        raise SystemExit(
+            f"ingest_ni_census: no recognised SDZ code column in {SDZ_BOUNDARY_FILE}\n"
+            f"  columns present: {list(sdz.columns)}\n"
+            f"  expected one of SDZ2021_cd / SDZ_cd / SDZ2021 / SDZCODE — add the actual "
+            f"column name to _find_col's candidates.")
     if dea_code_col is None:
-        cands = [c for c in dea.columns if "code" in c.lower() or "cd" in c.lower()]
-        dea_code_col = cands[0] if cands else dea.columns[0]
-        print(f"  DEA code column inferred: '{dea_code_col}'")
+        raise SystemExit(
+            f"ingest_ni_census: no recognised DEA code column in {DEA_BOUNDARY_FILE}\n"
+            f"  columns present: {list(dea.columns)}\n"
+            f"  expected one of DEA2021_cd / DEA_cd / DEA2021 / DEACODE / FinalR_DEA — add the "
+            f"actual column name to _find_col's candidates.")
 
     # ── DZ → SDZ parent lookup ───────────────────────────────────────────────
     if dz_sdz_col:
