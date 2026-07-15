@@ -71,7 +71,6 @@ GEN_RATES_FILE = "analysis/generation_rates.json"
 NI_JOURNEYS_PER_YEAR = 434 + 2 + 13 + 6      # Car Driver + Motorcycle + Other private + Taxi
 NI_LEVEL_MODES = "Car Driver + Motorcycle + Other private (van/lorry) + Taxi (TSNI Table_3_2, 2023)"
 NISRA_POP_CACHE = "data/cache_nisra_population.csv"
-NI_CAR_GLOB = "data/ni_census/*hh_car_van_tc5_pers*.csv"
 
 # ── RoI level (CSO NTA, 2019) ────────────────────────────────────────────────
 NTA04_GLOB = "data/ireland_nts/NTA04*.csv"
@@ -144,41 +143,12 @@ def ni_level():
     return level, ni_pop, {"journeys_per_year": NI_JOURNEYS_PER_YEAR, "modes": NI_LEVEL_MODES}
 
 
-def _roi_ownership_cv():
-    """Pop-weighted CV of RoI cars/household (SAPS T15_1_*) across Small Areas."""
-    vals, wts = [], []
-    for row in pd.read_csv(SAPS_CSV).to_dict("records"):
-        if float(row["T1_1AGETT"]) > STATE_ROW_POP:
-            continue
-        denom = float(row["T15_1_TC"]) - float(row["T15_1_NSC"])      # exclude not-stated
-        if denom <= 0:
-            continue
-        cars = (1 * float(row["T15_1_1C"]) + 2 * float(row["T15_1_2C"])
-                + 3 * float(row["T15_1_3C"]) + 4 * float(row["T15_1_GE4C"]))  # GE4 counted as 4
-        vals.append(cars / denom)
-        wts.append(float(row["T1_1AGETT"]))
-    return _wmean_sd(vals, wts)
-
-
-def _ni_ownership_cv():
-    """Pop-weighted CV of NI mean cars per person's household across Data Zones.
-    NOTE person-weighted (the NISRA file is *_pers), so not unit-identical to RoI's
-    household-weighted metric — an approximation, see module docstring."""
-    band = {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
-    dz = {}
-    for r in pd.read_csv(_one(NI_CAR_GLOB)).itertuples(index=False):
-        code = str(r[2])
-        if code == "-8":
-            continue
-        dz.setdefault(r[0], {})[code] = float(r[4])
-    vals, wts = [], []
-    for _, b in dz.items():
-        tot = sum(b.values())
-        if tot <= 0:
-            continue
-        vals.append(sum(band[k] * v for k, v in b.items()) / tot)
-        wts.append(tot)
-    return _wmean_sd(vals, wts)
+# NOTE (M4, 2026-07): the raw within-region car-ownership CV (formerly `_roi_ownership_cv` /
+# `_ni_ownership_cv`, RoI SAPS T15_1 + NI *_pers) is SUPERSEDED and removed.  The ownership-driven
+# within-region mobilisation dispersion is now carried explicitly by the per-area producer
+# multiplier μ (M3, analysis/car_ownership_mu.py); keeping the raw ownership CV here would
+# double-count it.  σ_mob's within-region term is now the RESIDUAL mobilisation ⊥ ownership
+# (see main()).  See memory project_sigma_mob_car_ownership + the M2 flat-ownership finding.
 
 
 def main():
@@ -190,13 +160,17 @@ def main():
     sigma_nts = sum(json.load(open(GEN_RATES_FILE))["rates"].values())
     m_island = island_level / sigma_nts
 
-    # sigma_mob components
+    # sigma_mob = K-prior common-mode/level width.  Between-region term = the NI-vs-RoI
+    # mobilisation LEVEL gap (non-ownership: M2 showed car ownership is ~flat across the border).
+    # Within-region term = the RESIDUAL spatial mobilisation ⊥ ownership — the ownership-driven
+    # within-region dispersion is now carried by the producer multiplier μ (M3), so the old raw
+    # car-ownership CV was removed to avoid double-counting.  The residual is not directly
+    # observable (no per-area trip counts), so it is anchored to the between-region non-ownership
+    # scale (data-grounded: ownership-flat ⇒ the NI/RoI gap is a measured non-ownership scale).
     _, between_sd, _ = _wmean_sd([ni_l, roi_l], [ni_pop, roi_pop])
     between_cv = between_sd / island_level
-    roi_mean, _, roi_cv = _roi_ownership_cv()
-    ni_mean, _, ni_cv = _ni_ownership_cv()
-    within_cv = math.sqrt((roi_pop * roi_cv ** 2 + ni_pop * ni_cv ** 2) / (roi_pop + ni_pop))
-    sigma_mob = math.hypot(between_cv, within_cv)   # default recipe; components stored for revision
+    within_residual_cv = between_cv
+    sigma_mob = math.hypot(between_cv, within_residual_cv)
 
     out = {
         "_meta": {
@@ -207,9 +181,11 @@ def main():
             "roi_population": roi_pop,
             "sigma_nts": sigma_nts,
             "vintage_note": "NI TSNI 2023, RoI CSO 2019 — deliberate best-available-per-jurisdiction",
-            "sigma_mob_recipe": "hypot(between_region_cv, within_region_ownership_cv); "
-                                "within uses car-ownership CV as a proxy for use-dispersion "
-                                "(RoI household-weighted, NI person-weighted — approximate)",
+            "sigma_mob_recipe": "hypot(between_region_cv, within_region_residual_cv); the "
+                                "ownership-driven within-region dispersion is now carried by the "
+                                "producer multiplier μ (M3), so the within term is the residual ⊥ "
+                                "ownership, anchored to the between-region non-ownership scale "
+                                "(M2: car ownership ~flat NI-vs-RoI)",
         },
         "ni_level": ni_l,
         "roi_level": roi_l,
@@ -218,9 +194,7 @@ def main():
         "sigma_mob": sigma_mob,
         "sigma_mob_components": {
             "between_region_cv": between_cv,
-            "within_region_cv": within_cv,
-            "within_roi_ownership_cv": roi_cv,
-            "within_ni_ownership_cv": ni_cv,
+            "within_region_residual_cv": within_residual_cv,
         },
     }
     with open(OUT_FILE, "w") as f:
@@ -231,8 +205,8 @@ def main():
     print(f"  island level  {island_level:.4f}/cap/day  (RoI/NI ratio {roi_l/ni_l:.3f})")
     print(f"  Σρ NTS        {sigma_nts:.4f}   →   m_island = {m_island:.4f}")
     print(f"\n  sigma_mob = {sigma_mob:.4f}  "
-          f"(between {between_cv:.4f} ⊕ within {within_cv:.4f}; "
-          f"ownership CV RoI {roi_cv:.3f} / NI {ni_cv:.3f})")
+          f"(between-region {between_cv:.4f} ⊕ within-region residual ⊥ ownership "
+          f"{within_residual_cv:.4f}; ownership dispersion now carried by μ, M3)")
     print(f"\nSaved → {OUT_FILE}")
 
 

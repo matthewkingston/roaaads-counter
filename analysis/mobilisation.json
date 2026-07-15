@@ -12,19 +12,17 @@
     },
     "ni_population": 1904591.0,
     "roi_population": 5149139.0,
-    "sigma_nts": 1.0086292408476392,
+    "sigma_nts": 1.0086295914504178,
     "vintage_note": "NI TSNI 2023, RoI CSO 2019 \u2014 deliberate best-available-per-jurisdiction",
-    "sigma_mob_recipe": "hypot(between_region_cv, within_region_ownership_cv); within uses car-ownership CV as a proxy for use-dispersion (RoI household-weighted, NI person-weighted \u2014 approximate)"
+    "sigma_mob_recipe": "hypot(between_region_cv, within_region_residual_cv); the ownership-driven within-region dispersion is now carried by the producer multiplier \u03bc (M3), so the within term is the residual \u22a5 ownership, anchored to the between-region non-ownership scale (M2: car ownership ~flat NI-vs-RoI)"
   },
   "ni_level": 1.2465753424657535,
   "roi_level": 1.6530630146904173,
   "island_level": 1.5433065082562267,
-  "m_island": 1.5301028819660747,
-  "sigma_mob": 0.32431075175981305,
+  "m_island": 1.5301023500975608,
+  "sigma_mob": 0.1653710671970243,
   "sigma_mob_components": {
     "between_region_cv": 0.1169350030270721,
-    "within_region_cv": 0.30249573348077774,
-    "within_roi_ownership_cv": 0.2947421561351944,
-    "within_ni_ownership_cv": 0.3225260230863406
+    "within_region_residual_cv": 0.1169350030270721
   }
 }
