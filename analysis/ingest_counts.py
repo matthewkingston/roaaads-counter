@@ -288,6 +288,26 @@ for sid, data in sessions.items():
         rec = processed["sessions"][sid]
         lw, la = rec.get("matched_link_with"), rec.get("matched_link_against")
         if lw and la:
+            # Single-mode session with zero cars observed, snapped to a one-way link:
+            # attribute the zero to the one direction the link permits (cars flow one
+            # way; the observer's walking direction is irrelevant). This is the only
+            # case where a genuine zero can be recorded — single mode otherwise nulls a
+            # no-car session above because it cannot infer the watched direction. The
+            # link is only known here (after snap), so the count + its uncertainty are
+            # set here rather than in the single-mode block above.
+            if (rec["mode"] == "single"
+                    and rec["with_count"] is None and rec["against_count"] is None
+                    and not data["cars"]):
+                with_ok    = G.has_edge(lw[0], lw[1])
+                against_ok = G.has_edge(la[0], la[1])
+                if with_ok and not against_ok:
+                    rec["with_count"]       = rec["total_count"]       = 0
+                    rec["with_uncertainty"] = rec["total_uncertainty"] = _u(0)
+                elif against_ok and not with_ok:
+                    rec["against_count"]       = rec["total_count"]       = 0
+                    rec["against_uncertainty"] = rec["total_uncertainty"] = _u(0)
+                # both edges exist (two-way) or neither (bad snap) → leave None
+
             if rec.get("with_count") is not None and not G.has_edge(lw[0], lw[1]):
                 raise ValueError(
                     f"\nSession {sid}: with_count={rec['with_count']} assigned to "
